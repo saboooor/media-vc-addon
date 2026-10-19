@@ -4,19 +4,15 @@ import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
-import net.kyori.adventure.text.format.TextDecoration
 import org.bukkit.Bukkit
 import org.bukkit.command.CommandSender
-import org.bukkit.enchantments.Enchantment
 import org.bukkit.entity.Player
-import org.bukkit.inventory.ItemFlag
 import org.bukkit.inventory.ItemStack
 import org.bukkit.persistence.PersistentDataType
 import org.koin.core.component.inject
 import su.plo.slib.api.chat.component.McTextComponent
 import su.plo.slib.api.permission.PermissionDefault
 import su.plo.voice.api.server.player.VoicePlayer
-import su.plo.voice.discs.AddonConfig
 import su.plo.voice.discs.AddonKeys
 import su.plo.voice.discs.GoatHornManager
 import su.plo.voice.discs.api.PlayerBurnEvent
@@ -177,54 +173,13 @@ class BurnCommand : SubCommand() {
 
             val hasIdentifier = item.hasIdentifier()
 
-            item.editMeta { meta ->
-                meta.addItemFlags(*ItemFlag.values())
-
-                meta.persistentDataContainer.set(
-                    AddonKeys.identifierKey,
-                    PersistentDataType.STRING,
-                    identifier
-                )
-
-                if (config.addGlintToCustomDiscs) {
-                    meta.forbidGrindstone()
-                    meta.addEnchant(Enchantment.MENDING, 1, false)
-                }
-
-                if (isGoatHorn && !hasIdentifier) {
-                    hornHelper.getInstrument(item)
-                        .takeIf { it.isNotEmpty() }
-                        ?.let {
-                            meta.persistentDataContainer.set(
-                                AddonKeys.instrumentKey,
-                                PersistentDataType.STRING,
-                                it
-                            )
-                        }
-                }
-
-                val loreName = Component.text(name, NamedTextColor.GRAY)
-                    .decoration(TextDecoration.ITALIC, false)
-
-                when (config.burnLoreMethod) {
-                    AddonConfig.LoreMethod.REPLACE -> {
-                        meta.lore(listOf(loreName))
-                    }
-
-                    AddonConfig.LoreMethod.APPEND -> {
-                        val currentLore = meta.lore()?.let {
-                            if (item.isCustomDisc(discHelper)) {
-                                it.subList(0, it.size - 1)
-                            } else {
-                                it
-                            }
-                        } ?: emptyList()
-                        meta.lore(currentLore + listOf(loreName))
-                    }
-
-                    AddonConfig.LoreMethod.DISABLE -> {} // do nothing
+            if (isGoatHorn && !hasIdentifier) {
+                val instrument = hornHelper.getInstrument(item)
+                if (instrument.isNotEmpty()) item.editMeta { meta ->
+                    meta.persistentDataContainer.set(AddonKeys.instrumentKey, PersistentDataType.STRING, instrument)
                 }
             }
+            item.burnMetadata(identifier, name, config, discHelper)
 
             if (isGoatHorn) {
                 hornHelper.setEmptyInstrument(item)

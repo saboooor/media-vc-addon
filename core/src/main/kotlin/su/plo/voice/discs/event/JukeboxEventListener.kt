@@ -34,6 +34,8 @@ import su.plo.voice.api.server.PlasmoVoiceServer
 import su.plo.voice.api.server.audio.line.ServerSourceLine
 import su.plo.voice.api.server.player.VoicePlayer
 import su.plo.voice.discs.AddonConfig
+import su.plo.voice.discs.audio.YoutubeSourceQuality
+import su.plo.voice.discs.PlaybackControls
 import su.plo.voice.discs.PlasmoAudioPlayerManager
 import su.plo.voice.discs.api.PlayTrackFromDiscEvent
 import su.plo.voice.discs.bridge.VoiceBridgeCompat
@@ -58,6 +60,16 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     private val sourceLine: ServerSourceLine? by getterOrNull()
     private val svcPlugin: SvcDiscsPlugin? by getterOrNull()
     private val discHelper: DiscHelper by inject()
+
+    private val sourceQualityByBlock = ConcurrentHashMap<Block, YoutubeSourceQuality>()
+    fun setSourceQuality(block: Block, quality: YoutubeSourceQuality) {
+        sourceQualityByBlock[block] = quality
+        controlsByBlock[block]?.sourceQuality = quality
+    }
+
+    val controlsByBlock: MutableMap<Block, PlaybackControls> = ConcurrentHashMap()
+
+    fun stopPlayback(block: Block) { jobByBlock.remove(block)?.cancel(DiscEjectCause()) }
 
     private val jobByBlock: MutableMap<Block, Job> = ConcurrentHashMap()
 
@@ -173,178 +185,206 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     fun isPlaying(block: Block): Boolean =
         jobByBlock.containsKey(block)
 
+    fun playStoredDisc(block: Block, player: Player) {
+        val record = block.asJukebox()?.record ?: return
+        val identifier = record.customDiscIdentifier(discHelper) ?: return
+        if (!isPlaying(block)) playChestTrack(identifier, block, record.itemMeta, player, chestQueue = false)
+    }
+
+    fun playChestTrack(identifier: String, block: Block, itemMeta: ItemMeta?, player: Player, chestQueue: Boolean = true,
+                       controls: PlaybackControls = PlaybackControls(), overlap: Boolean = false): Job {
+        check(overlap || !isPlaying(block)) { "Jukebox is already playing" }
+        val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
+        val job = playTrack(identifier, block, itemMeta, voicePlayer, player, chestQueue = chestQueue, controls = controls)
+        jobByBlock[block] = job
+        job.invokeOnCompletion { jobByBlock.remove(block, job) }
+        return job
+    }
+
     private fun playTrack(
         identifier: String,
         block: Block,
         itemMeta: ItemMeta?,
         voicePlayer: VoicePlayer? = null,
         player: Player? = null,
-    ): Job = scope.launch {
+        chestQueue: Boolean = false,
+        controls: PlaybackControls = PlaybackControls(),
+    ): Job {
+        controls.sourceQuality = sourceQualityByBlock[block] ?: controls.sourceQuality
+        val playback = scope.launch(start = CoroutineStart.LAZY) {
 
-        val track = try {
-            audioPlayerManager.getTrack(identifier).await()
-        } catch (e: Exception) {
-            val errorMsg = e.message ?: "Unexpected error"
-            if (voicePlayer != null) {
-                voicePlayer.instance.sendActionBar(
-                    McTextComponent.translatable(
-                        "pv.addon.discs.actionbar.track_not_found",
-                        errorMsg
+            val track = try {
+                audioPlayerManager.getTrack(identifier).await()
+            } catch (e: Exception) {
+                val errorMsg = e.message ?: "Unexpected error"
+                if (voicePlayer != null) {
+                    voicePlayer.instance.sendActionBar(
+                        McTextComponent.translatable(
+                            "pv.addon.discs.actionbar.track_not_found",
+                            errorMsg
+                        )
+                            .withStyle(McTextStyle.RED)
                     )
-                        .withStyle(McTextStyle.RED)
-                )
-            } else {
-                player?.sendActionBar(Component.text("Track not found: $errorMsg", NamedTextColor.RED))
-            }
-
-            if (e is CancellationException) throw e
-            plugin.slF4JLogger.error("Failed to load disc track", e)
-
-            suspendSyncAt(block.location, voiceServer, plugin) { block.asJukebox()?.eject() }
-            return@launch
-        }
-
-        if (voicePlayer != null) {
-            if (!suspendSyncAt(block.location, voiceServer, plugin) {
-                PlayTrackFromDiscEvent(voicePlayer, track, block).callEvent()
-            }) return@launch
-        }
-
-        val trackName = itemMeta
-            ?.lore()
-            ?.getOrNull(0)
-            ?.let { it as? TextComponent }
-            ?.content()
-            ?: track.info.title
-
-        val distance: Short = when (config.distance.enableBeaconLikeDistance) {
-            true -> {
-                val beaconLevel = suspendSyncAt(block.location, voiceServer, plugin) {
-                    getBeaconLevel(block)
-                }
-                config.distance.beaconLikeDistanceList[beaconLevel]
-            }
-
-            false -> config.distance.jukeboxDistance
-        }
-
-        val pvSource = if (sourceLine != null && voiceServer != null) {
-            val world = voiceServer?.minecraftServer?.getWorld(block.world)
-            val pos = ServerPos3d(
-                world,
-                block.x.toDouble() + 0.5,
-                block.y.toDouble() + 1.5,
-                block.z.toDouble() + 0.5
-            )
-            val source = sourceLine?.createStaticSource(pos, !config.monoSources)
-            source?.setName(trackName)
-
-            if (config.distance.visualizeDistance) {
-                voicePlayer?.visualizeDistance(
-                    pos.toPosition(),
-                    distance.toInt(),
-                    0xf1c40f
-                )
-            }
-            source
-        } else null
-
-        val svcLoc = Location(block.world, block.x + 0.5, block.y + 1.5, block.z + 0.5)
-        val svcChannel = svcPlugin?.createLocationalChannel(svcLoc, distance.toFloat())?.apply {
-            setFilter { sp ->
-                svcPlugin?.hasClient(sp.uuid) == true
-            }
-        }
-
-        val actionbarMessage = McTextComponent.translatable(
-            "pv.addon.discs.actionbar.playing", trackName
-        )
-
-        debugLogger.log("Starting track job \"$trackName\" with distance $distance at ${block.location}")
-
-        suspendSyncAt(block.location, voiceServer, plugin) { block.world.getNearbyPlayers(block.location, distance.toDouble()) }
-            .forEach { nearby ->
-                if ((svcPlugin?.hasClient(nearby.uniqueId) != true && VoiceBridgeCompat.isPlayerListeningOnPv(nearby.uniqueId, voiceServer))) {
-                    val vp = voiceServer?.let { nearby.asVoicePlayer(it) }
-                    vp?.sendAnimatedActionBar(actionbarMessage)
                 } else {
-                    nearby.sendActionBar(Component.text("Now playing: $trackName", NamedTextColor.GOLD))
+                    player?.sendActionBar(Component.text("Track not found: $errorMsg", NamedTextColor.RED))
+                }
+
+                if (e is CancellationException) throw e
+                plugin.slF4JLogger.error("Failed to load disc track", e)
+
+                if (!chestQueue) suspendSyncAt(block.location, voiceServer, plugin) { block.asJukebox()?.eject() }
+                return@launch
+            }
+
+            if (voicePlayer != null) {
+                if (!suspendSyncAt(block.location, voiceServer, plugin) {
+                    PlayTrackFromDiscEvent(voicePlayer, track, block).callEvent()
+                }) return@launch
+            }
+
+            val trackName = itemMeta
+                ?.lore()
+                ?.getOrNull(0)
+                ?.let { it as? TextComponent }
+                ?.content()
+                ?: track.info.title
+
+            controls.title = trackName
+
+            val distance: Short = when (config.distance.enableBeaconLikeDistance) {
+                true -> {
+                    val beaconLevel = suspendSyncAt(block.location, voiceServer, plugin) {
+                        getBeaconLevel(block)
+                    }
+                    config.distance.beaconLikeDistanceList[beaconLevel]
+                }
+
+                false -> config.distance.jukeboxDistance
+            }
+
+            val pvSource = if (sourceLine != null && voiceServer != null) {
+                val world = voiceServer?.minecraftServer?.getWorld(block.world)
+                val pos = ServerPos3d(
+                    world,
+                    block.x.toDouble() + 0.5,
+                    block.y.toDouble() + 1.5,
+                    block.z.toDouble() + 0.5
+                )
+                val source = sourceLine?.createStaticSource(pos, !config.monoSources)
+                source?.setName(trackName)
+
+                if (config.distance.visualizeDistance) {
+                    voicePlayer?.visualizeDistance(
+                        pos.toPosition(),
+                        distance.toInt(),
+                        0xf1c40f
+                    )
+                }
+                source
+            } else null
+
+            val svcLoc = Location(block.world, block.x + 0.5, block.y + 1.5, block.z + 0.5)
+            val svcChannel = svcPlugin?.createLocationalChannel(svcLoc, distance.toFloat())?.apply {
+                setFilter { sp ->
+                    svcPlugin?.hasClient(sp.uuid) == true
                 }
             }
 
-        val job = audioPlayerManager.startTrackJob(
-            track = track,
-            pvSource = pvSource,
-            distance = distance,
-            svcChannel = svcChannel
-        )
-        try {
-            var lastExistenceCheck = System.currentTimeMillis()
-            var lastRecordReset = System.currentTimeMillis()
+            val actionbarMessage = McTextComponent.translatable(
+                "pv.addon.discs.actionbar.playing", trackName
+            )
 
-            while (job.isActive) {
-                val currentTime = System.currentTimeMillis()
-                val timeSinceExistenceCheck = currentTime - lastExistenceCheck
-                val timeSinceRecordReset = currentTime - lastRecordReset
+            debugLogger.log("Starting track job \"$trackName\" with distance $distance at ${block.location}")
 
-                // Check if jukebox still exists every 3 seconds
-                if (timeSinceExistenceCheck >= 3_000L) {
-                    val stillExists = suspendSyncAt(block.location, voiceServer, plugin) {
-                        block.type == Material.JUKEBOX
+            suspendSyncAt(block.location, voiceServer, plugin) { block.world.getNearbyPlayers(block.location, distance.toDouble()) }
+                .forEach { nearby ->
+                    if ((svcPlugin?.hasClient(nearby.uniqueId) != true && VoiceBridgeCompat.isPlayerListeningOnPv(nearby.uniqueId, voiceServer))) {
+                        val vp = voiceServer?.let { nearby.asVoicePlayer(it) }
+                        vp?.sendAnimatedActionBar(actionbarMessage)
+                    } else {
+                        nearby.sendActionBar(Component.text("Now playing: $trackName", NamedTextColor.GOLD))
                     }
-
-                    if (!stillExists) {
-                        debugLogger.log("Jukebox at ${block.location} no longer exists, stopping playback")
-                        cancel(DiscEjectCause())
-                        return@launch
-                    }
-
-                    lastExistenceCheck = System.currentTimeMillis()
                 }
 
-                // Reset record state every 30 seconds
-                if (timeSinceRecordReset >= 30_000L) {
+            val job = audioPlayerManager.startTrackJob(
+                track = track,
+                pvSource = pvSource,
+                distance = distance,
+                svcChannel = svcChannel,
+                controls = controls
+            )
+            try {
+                var lastExistenceCheck = System.currentTimeMillis()
+                var lastRecordReset = System.currentTimeMillis()
+
+                while (job.isActive) {
+                    val currentTime = System.currentTimeMillis()
+                    val timeSinceExistenceCheck = currentTime - lastExistenceCheck
+                    val timeSinceRecordReset = currentTime - lastRecordReset
+
+                    // Check if jukebox still exists every 3 seconds
+                    if (timeSinceExistenceCheck >= 3_000L) {
+                        val stillExists = suspendSyncAt(block.location, voiceServer, plugin) {
+                            block.type == Material.JUKEBOX
+                        }
+
+                        if (!stillExists) {
+                            debugLogger.log("Jukebox at ${block.location} no longer exists, stopping playback")
+                            cancel(DiscEjectCause())
+                            return@launch
+                        }
+
+                        lastExistenceCheck = System.currentTimeMillis()
+                    }
+
+                    // Reset record state every 30 seconds
+                    if (!chestQueue && timeSinceRecordReset >= 30_000L) {
+                        suspendSyncAt(block.location, voiceServer, plugin) {
+                            val jukebox = block.asJukebox() ?: return@suspendSyncAt
+                            jukebox.setRecord(jukebox.record)
+                            try {
+                                val startPlayingMethod = jukebox.javaClass.getMethod("startPlaying")
+                                startPlayingMethod.invoke(jukebox)
+                            } catch (_: ReflectiveOperationException) {
+                            }
+                            jukebox.update()
+                        }
+                        lastRecordReset = System.currentTimeMillis()
+                    }
+
+                    delay(100L)
+                }
+            } catch (e: CancellationException) {
+                debugLogger.log("Track \"$trackName\" at ${block.location} cancelled: ${e.message}")
+                throw e
+            } finally {
+                withContext(NonCancellable) {
+                    debugLogger.log("Track \"$trackName\" at ${block.location} ended")
+
+                    job.cancelAndJoin()
+                    pvSource?.remove()
+
+                    if (!scope.isActive) return@withContext
+
                     suspendSyncAt(block.location, voiceServer, plugin) {
                         val jukebox = block.asJukebox() ?: return@suspendSyncAt
-                        jukebox.setRecord(jukebox.record)
-                        try {
-                            val startPlayingMethod = jukebox.javaClass.getMethod("startPlaying")
-                            startPlayingMethod.invoke(jukebox)
-                        } catch (_: ReflectiveOperationException) {
-                        }
-                        jukebox.update()
+                        val currentJob = jobByBlock[block] ?: return@suspendSyncAt
+                        if (currentJob != this@launch) return@suspendSyncAt
+                        jukebox.stopPlayingWithUpdate()
                     }
-                    lastRecordReset = System.currentTimeMillis()
-                }
 
-                delay(100L)
-            }
-        } catch (e: CancellationException) {
-            debugLogger.log("Track \"$trackName\" at ${block.location} cancelled: ${e.message}")
-            throw e
-        } finally {
-            withContext(NonCancellable) {
-                debugLogger.log("Track \"$trackName\" at ${block.location} ended")
-
-                job.cancelAndJoin()
-                pvSource?.remove()
-
-                if (!scope.isActive) return@withContext
-
-                suspendSyncAt(block.location, voiceServer, plugin) {
-                    val jukebox = block.asJukebox() ?: return@suspendSyncAt
-                    val currentJob = jobByBlock[block] ?: return@suspendSyncAt
-                    if (currentJob != this@launch) return@suspendSyncAt
-                    jukebox.stopPlayingWithUpdate()
-                }
-
-                suspendSyncAt(block.location, voiceServer, plugin) {
-                    val currentJob = jobByBlock[block] ?: return@suspendSyncAt
-                    if (currentJob != this@launch) return@suspendSyncAt
-                    jobByBlock.remove(block)
+                    suspendSyncAt(block.location, voiceServer, plugin) {
+                        val currentJob = jobByBlock[block] ?: return@suspendSyncAt
+                        if (currentJob != this@launch) return@suspendSyncAt
+                        jobByBlock.remove(block)
+                    }
                 }
             }
         }
+        controlsByBlock[block] = controls
+        playback.invokeOnCompletion { controlsByBlock.remove(block, controls) }
+        playback.start()
+        return playback
     }
 
     private fun getBeaconLevel(block: Block) =

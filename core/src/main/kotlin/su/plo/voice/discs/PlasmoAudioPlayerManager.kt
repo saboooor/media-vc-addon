@@ -51,6 +51,7 @@ import su.plo.voice.lavaplayer.libs.org.apache.http.auth.AuthScope
 import su.plo.voice.lavaplayer.libs.org.apache.http.auth.UsernamePasswordCredentials
 import su.plo.voice.lavaplayer.libs.org.apache.http.impl.client.BasicCredentialsProvider
 import su.plo.voice.lavaplayer.libs.org.apache.http.impl.client.HttpClientBuilder
+import su.plo.voice.discs.audio.QualityYoutubeSourceManager
 import java.io.File
 import java.net.URI
 import java.nio.file.Path
@@ -77,7 +78,8 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         track: AudioTrack,
         pvSource: ServerProximitySource<*>? = null,
         distance: Short = 0,
-        svcChannel: AudioChannel? = null
+        svcChannel: AudioChannel? = null,
+        controls: PlaybackControls? = null
     ): Job {
         if (pvSource != null && svcChannel != null) {
             // Keep PV's sender lifecycle (including source state) intact. Each backend
@@ -87,8 +89,8 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 var pvJob: Job? = null
                 var svcJob: Job? = null
                 try {
-                    pvJob = startTrackJob(track, pvSource, distance)
-                    svcJob = startTrackJob(svcTrack, svcChannel = svcChannel)
+                    pvJob = startTrackJob(track, pvSource, distance, controls = controls)
+                    svcJob = startTrackJob(svcTrack, svcChannel = svcChannel, controls = controls)
                     svcJob.join()
                 } finally {
                     withContext(NonCancellable) {
@@ -109,7 +111,9 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 plugin.slF4JLogger.warn("Disc audio stream stalled for ${thresholdMs}ms: ${track.info.title}")
             }
         })
+        if (controls != null) track.userData = controls
         player.playTrack(track)
+        controls?.attach(player)
 
         val trackTitle = pvSource?.sourceInfo?.name ?: track.info.title
         debugLogger.log("Starting track \"$trackTitle\" on pvSource=$pvSource svcChannel=$svcChannel")
@@ -138,6 +142,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 .also { it.start() }
             val job = sender.job ?: throw IllegalStateException("AudioSender job is not started")
             sender.onStop {
+            controls?.detach(player)
                 player.destroy()
                 pvSource.remove()
             }
@@ -172,12 +177,14 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                     try {
                         svcChannel.flush()
                     } finally {
+                        controls?.detach(player)
                         player.destroy()
                     }
                 }
             }
             return job
         } else {
+            controls?.detach(player)
             player.destroy()
             throw IllegalStateException("Neither Plasmo Voice nor Simple Voice Chat audio destination provided")
         }
@@ -344,7 +351,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 options.setRemoteCipher(remoteCipher.url, remoteCipher.password, "yt-source")
             }
 
-            YoutubeAudioSourceManager(options, *youtubeClients.map { it.client.get() }.toTypedArray())
+            QualityYoutubeSourceManager(options, { debugLogger.log(it) }, *youtubeClients.map { it.client.get() }.toTypedArray())
                 .also { source ->
                     proxyHttpBuilder?.let { source.httpInterfaceManager.configureBuilder(it) }
 

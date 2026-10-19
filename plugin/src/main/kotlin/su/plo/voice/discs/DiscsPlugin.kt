@@ -29,6 +29,8 @@ import su.plo.voice.api.server.PlasmoVoiceServer
 import su.plo.voice.api.server.audio.line.ServerSourceLine
 import su.plo.voice.api.server.event.config.VoiceServerConfigReloadedEvent
 import su.plo.voice.discs.command.CommandHandler
+import su.plo.voice.discs.command.subcommand.ControlCommand
+import su.plo.voice.discs.command.subcommand.PlaylistCommand
 import su.plo.voice.discs.command.subcommand.BurnCommand
 import su.plo.voice.discs.command.subcommand.CancelCommand
 import su.plo.voice.discs.command.subcommand.EraseCommand
@@ -37,6 +39,7 @@ import su.plo.voice.discs.command.subcommand.ReloadCommand
 import su.plo.voice.discs.crafting.BurnableDiscCraft
 import su.plo.voice.discs.crafting.BurnableHornCraft
 import su.plo.voice.discs.event.ForbidGrindstoneListener
+import su.plo.voice.discs.event.JukeboxProgressDisplay
 import su.plo.voice.discs.event.JukeboxEventListener
 import su.plo.voice.discs.item.DiscHelper
 import su.plo.voice.discs.item.GoatHornHelper
@@ -60,6 +63,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
     private val addonName = "discs"
 
     private val voiceServer: PlasmoVoiceServer by injectPlasmoVoice()
+    private var progressDisplay: JukeboxProgressDisplay? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var sourceLine: ServerSourceLine
     private var svcPlugin: SvcDiscsPlugin? = null
@@ -215,6 +219,14 @@ class DiscsPlugin : JavaPlugin(), Listener {
         loadConfig()
 
         val jukeboxEventListener = JukeboxEventListener()
+        progressDisplay = JukeboxProgressDisplay(jukeboxEventListener).also {
+            server.pluginManager.registerEvents(it, this)
+            it.start()
+        }
+        val playlistCommand = PlaylistCommand(jukeboxEventListener)
+        val controlCommand = ControlCommand(jukeboxEventListener, playlistCommand)
+        server.pluginManager.registerEvents(controlCommand, this)
+        server.pluginManager.registerEvents(playlistCommand, this)
         server.pluginManager.registerEvents(jukeboxEventListener, this)
 
         if (Bukkit.getServer().getMinecraftVersionInt() >= 11904) {
@@ -230,6 +242,8 @@ class DiscsPlugin : JavaPlugin(), Listener {
 
         val handler = CommandHandler()
             .addSubCommand(::BurnCommand)
+            .addSubCommand { playlistCommand }
+            .addSubCommand { controlCommand }
             .addSubCommand(::EraseCommand)
             .addSubCommand(::SearchCommand)
             .addSubCommand { ReloadCommand(::reloadRuntimeConfig) }
@@ -272,6 +286,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
     }
 
     override fun onDisable() {
+        progressDisplay?.shutdown()
         runBlocking {
             withTimeoutOrNull(5_000L) { scope.coroutineContext.job.cancelAndJoin() }
         }
