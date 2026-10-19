@@ -74,7 +74,7 @@ tasks {
 
         downloadPlugins {
             modrinth("plasmo-voice", "spigot-2.1.17")
-            modrinth("pv-addon-lavaplayer-lib", "1.2.3")
+            modrinth("vc-addon-lavaplayer-lib", "1.2.3")
             modrinth("packetevents", "2.14.0+spigot")
         }
     }
@@ -143,7 +143,7 @@ bukkit {
     apiVersion = "1.16"
     authors = listOf("KPidS", "Apehum")
 
-    depend = listOf("packetevents", "pv-addon-lavaplayer-lib")
+    depend = listOf("packetevents", "vc-addon-lavaplayer-lib")
     softDepend = listOf("PlasmoVoice", "voicechat", "voice-bridge")
 
     foliaSupported = true

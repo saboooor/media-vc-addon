@@ -51,7 +51,7 @@ jobs:
           modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
           modrinth-dependencies: |
             plasmo-voice
-            pv-addon-lavaplayer-lib
+            vc-addon-lavaplayer-lib
             packetevents
 
           version-type: ${{ inputs.release-type }}

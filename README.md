@@ -20,7 +20,7 @@ The addon can stream audio from various sources instead of saving audio files on
 
 ## Installation
 
-1. Install [Plasmo Voice](https://modrinth.com/mod/plasmo-voice), [PacketEvents](https://modrinth.com/plugin/packetevents) and [pv-addon-lavaplayer-lib](https://modrinth.com/mod/pv-addon-lavaplayer-lib). You also need to install Plasmo Voice on your client.
+1. Install [Plasmo Voice](https://modrinth.com/mod/plasmo-voice), [PacketEvents](https://modrinth.com/plugin/packetevents) and [vc-addon-lavaplayer-lib](https://modrinth.com/mod/vc-addon-lavaplayer-lib). You also need to install Plasmo Voice on your client.
 2. Download this plugin from Modrinth and drop it into the `~/plugins` folder.
 3. Restart the server
 
@@ -106,7 +106,7 @@ dependencies {
 # Common issues
 
 ## Problematic YouTube player script
-1) Make sure you're using the latest versions of `vc-addon-discs` and `pv-addon-lavaplayer-lib`.
+1) Make sure you're using the latest versions of `vc-addon-discs` and `vc-addon-lavaplayer-lib`.
 2) Open `plugins/vc-addon-discs/discs.toml`, uncomment and configure `youtube_source.remote_cipher`:
     ```toml
     [youtube_source.remote_cipher]
@@ -118,7 +118,7 @@ dependencies {
 4) If this doesn't work, [try oauth2](#sign-in-to-confirm-youre-not-a-bot--please-sign-in-using-youtube).
 
 ## "Sign in to confirm you're not a bot" / "Please sign in" using YouTube
-1) Make sure you're using the latest versions of `vc-addon-discs` and `pv-addon-lavaplayer-lib`.
+1) Make sure you're using the latest versions of `vc-addon-discs` and `vc-addon-lavaplayer-lib`.
 2) Set `youtube_source.use_oauth2` to `true` in `plugins/vc-addon-discs/discs.toml`.
 3) Restart the server (`/vreload` will not work).
 4) When `vc-addon-discs` initializes, you'll see a message in your console like this (code will be different): https://i.imgur.com/r1o5v8v.png. Follow the instructions in the console message.

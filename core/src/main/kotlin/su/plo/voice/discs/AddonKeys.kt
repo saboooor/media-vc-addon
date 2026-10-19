@@ -12,7 +12,7 @@ data object AddonKeys {
     // PersistentDataType.STRING
     val instrumentKey: NamespacedKey = createKeyOrThrow("vc-addon-discs:instrument_key")
     // PersistentDataType.STRING
-    val oldIdentifierKey: NamespacedKey = createKeyOrThrow("pv-addon-disks:identifier")
+    val oldIdentifierKey: NamespacedKey = createKeyOrThrow("vc-addon-disks:identifier")
 }
 
 private fun createKeyOrThrow(path: String): NamespacedKey =
