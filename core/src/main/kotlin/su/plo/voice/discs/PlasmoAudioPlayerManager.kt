@@ -110,6 +110,21 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         player.addListener(object : AudioEventAdapter() {
             override fun onTrackException(player: AudioPlayer, track: AudioTrack, exception: FriendlyException) {
                 plugin.slF4JLogger.error("Disc audio stream failed: ${track.info.title}", exception)
+                val msg = exception.message ?: ""
+                val cause = exception.cause
+                val causeMsg = cause?.message ?: ""
+                val isAuthIssue = msg.contains("login", ignoreCase = true) || causeMsg.contains("login", ignoreCase = true) ||
+                    msg.contains("bot", ignoreCase = true) || causeMsg.contains("bot", ignoreCase = true) ||
+                    cause?.javaClass?.simpleName == "AllClientsFailedException"
+
+                if (isAuthIssue) {
+                    plugin.slF4JLogger.warn("===================================================================")
+                    plugin.slF4JLogger.warn("YouTube blocked stream loading (requires login or bot verification).")
+                    plugin.slF4JLogger.warn("To resolve this, authorize YouTube via OAuth2:")
+                    plugin.slF4JLogger.warn("Run '/disc oauth' or set 'use_oauth2 = true' in discs.toml,")
+                    plugin.slF4JLogger.warn("then visit https://www.google.com/device and enter the code.")
+                    plugin.slF4JLogger.warn("===================================================================")
+                }
             }
 
             override fun onTrackStuck(player: AudioPlayer, track: AudioTrack, thresholdMs: Long) {
@@ -314,6 +329,25 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         }
     }
 
+    fun startOauth2(force: Boolean = false): Boolean {
+        val ytSource = lavaPlayerManager.sourceManagers
+            .filterIsInstance<YoutubeAudioSourceManager>()
+            .firstOrNull() ?: return false
+
+        val tokenFile = File(plugin.dataFolder, ".youtube-token")
+        if (force && tokenFile.exists()) {
+            tokenFile.delete()
+        }
+
+        val refreshToken = if (force) null else {
+            tokenFile.takeIf { it.isFile && it.exists() }?.readText()?.trim()
+        }
+
+        ytSource.useOauth2(refreshToken, false)
+        listenForTokenChange(ytSource)
+        return true
+    }
+
     private fun proxyHttpBuilder(): Consumer<HttpClientBuilder>? {
         val (host, credentials) = httpProxy() ?: return null
 
@@ -361,13 +395,15 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                     proxyHttpBuilder?.let { source.httpInterfaceManager.configureBuilder(it) }
 
                     val poToken = config.youtubeSource.poToken
+                    val refreshTokenFile = File(plugin.dataFolder, ".youtube-token")
+                    val refreshToken = refreshTokenFile
+                        .takeIf { it.isFile && it.exists() }
+                        ?.readText()
+                        ?.trim()
+
                     if (poToken != null) {
                         Web.setPoTokenAndVisitorData(poToken.token, poToken.visitorData)
-                    } else if (config.youtubeSource.useOauth2) {
-                        val refreshToken = File(plugin.dataFolder, ".youtube-token")
-                            .takeIf { it.isFile && it.exists() }
-                            ?.readText()
-                            ?.trim()
+                    } else if (config.youtubeSource.useOauth2 || refreshToken != null) {
                         source.useOauth2(refreshToken, false)
                         if (refreshToken == null) listenForTokenChange(source)
                     }

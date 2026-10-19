@@ -83,6 +83,8 @@ Music video screens:
 
 `/disc hologram [gui|move|offset|reset]` – Adjust the position of the playback hologram for a jukebox. Can be opened interactively from the Jukebox controls dialog ("Move Hologram") or run as a command. Supports `/disc hologram move <up|down|north|south|east|west> [amount]`, `/disc hologram offset <x> <y> <z>`, and `/disc hologram reset`.
 
+`/disc oauth [force|status]` – Authorize YouTube access via Google device OAuth2 to prevent "Sign in to confirm you're not a bot" or "This video requires login" errors. Check server console for the pairing code, visit https://www.google.com/device with a burner account, and authorize. Use `/disc oauth force` to re-authorize and refresh the stored token.
+
 `/disc reload` – Reload runtime options from `discs.toml` without interrupting playback. Works from the console.
 
 Reloadable options: debug logging, disc glint and burn/erase lore, mono audio, goat horn settings, jukebox distance and visualization, HTTP whitelist, screen settings (fps, distance, ffmpeg path), and the burnable-tag requirement. Playback settings apply to newly started tracks; item settings apply to future burns/erases. Registered recipe results keep their original glint and lore until restart.

@@ -37,6 +37,7 @@ import su.plo.voice.discs.command.subcommand.CancelCommand
 import su.plo.voice.discs.command.subcommand.EraseCommand
 import su.plo.voice.discs.command.subcommand.SearchCommand
 import su.plo.voice.discs.command.subcommand.ReloadCommand
+import su.plo.voice.discs.command.subcommand.OauthCommand
 import su.plo.voice.discs.crafting.BurnableDiscCraft
 import su.plo.voice.discs.crafting.BurnableHornCraft
 import su.plo.voice.discs.event.ForbidGrindstoneListener
@@ -265,6 +266,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
             .addSubCommand(::EraseCommand)
             .addSubCommand(::SearchCommand)
             .addSubCommand(::ScreenCommand)
+            .addSubCommand(::OauthCommand)
             .addSubCommand { ReloadCommand(::reloadRuntimeConfig) }
         if (hornsSupported) {
             handler.addSubCommand(::CancelCommand)

@@ -225,7 +225,7 @@ class AddonConfig {
                 You can check available clients here: https://github.com/lavalink-devs/youtube-source?tab=readme-ov-file#available-clients
             """,
             nullComment = """
-                clients = ["MUSIC", "ANDROID_VR", "WEB", "WEBEMBEDDED", "TV", "TVHTML5_SIMPLY"]
+                clients = ["ANDROID", "IOS", "ANDROID_MUSIC", "MWEB", "WEB", "WEBEMBEDDED", "TVHTML5_SIMPLY", "TV", "ANDROID_VR", "MUSIC"]
             """
         )
         val clients: List<String>? = null
