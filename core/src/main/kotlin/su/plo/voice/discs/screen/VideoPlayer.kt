@@ -3,6 +3,8 @@ package su.plo.voice.discs.screen
 import com.github.retrooper.packetevents.PacketEvents
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerMapData
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.bukkit.Bukkit
 import org.bukkit.World
 import org.bukkit.entity.Player
@@ -45,7 +47,8 @@ class VideoPlayer(
     private var isCurrentlyImage = false
 
     private val stopped = AtomicBoolean(false)
-    private var playbackJob: Job? = null
+    @Volatile private var playbackJob: Job? = null
+    private val playbackMutex = Mutex()
 
     private val totalWidth = screen.totalWidthPixels
     private val totalHeight = screen.totalHeightPixels
@@ -57,11 +60,35 @@ class VideoPlayer(
 
     fun start(startPositionMs: Long = 0L) {
         if (stopped.get()) return
-        isPlaying = true
         isPaused = false
+        restartPlayback(startPositionMs)
+    }
 
-        playbackJob = coroutineScope.launch(Dispatchers.IO) {
-            runPlayback(startPositionMs)
+    private fun restartPlayback(positionMs: Long) {
+        coroutineScope.launch(Dispatchers.IO) {
+            playbackMutex.withLock {
+                val previous = playbackJob
+                playbackJob = null
+                previous?.cancel()
+                process?.destroyForcibly() // Unblock a pending raw-frame read before joining.
+                previous?.join()
+                if (stopped.get()) return@withLock
+                isPlaying = true
+                isCurrentlyImage = false
+                val next = coroutineScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+                    try {
+                        runPlayback(positionMs.coerceAtLeast(0))
+                    } finally {
+                        if (playbackJob === currentCoroutineContext()[Job]) {
+                            playbackJob = null
+                            isPlaying = false
+                            if (!stopped.get()) onCompletion?.invoke()
+                        }
+                    }
+                }
+                playbackJob = next
+                if (stopped.get()) next.cancel() else next.start()
+            }
         }
     }
 
@@ -74,7 +101,7 @@ class VideoPlayer(
         val isImage = isImageUrl(sourceUrl)
         val hasFfmpeg = isFFmpegAvailable(ffmpegPath)
 
-        logger.info("Screen '${screen.name}' playback check: sourceUrl='$sourceUrl', isImage=$isImage, hasFfmpeg=$hasFfmpeg, ffmpegPath='$ffmpegPath'")
+        logger.info("Screen '${screen.name}' playback check: source='${describeSource(sourceUrl)}', isImage=$isImage, hasFfmpeg=$hasFfmpeg, ffmpegPath='$ffmpegPath'")
 
         if (isImage || !hasFfmpeg) {
             isCurrentlyImage = true
@@ -100,10 +127,12 @@ class VideoPlayer(
 
         val isNetworkStream = sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://")
 
+        // stdin cannot seek; a loopback range proxy keeps HTTPS handling in Java on seeks.
+        val pipeNetworkStream = isNetworkStream && startPositionMs <= 0
         var httpConn: HttpURLConnection? = null
         var netStream: InputStream? = null
 
-        if (isNetworkStream) {
+        if (pipeNetworkStream) {
             try {
                 val (stream, conn) = openHttpStream(sourceUrl)
                 netStream = stream
@@ -122,6 +151,12 @@ class VideoPlayer(
             }
         }
 
+        val seekProxy = if (isNetworkStream && !pipeNetworkStream) VideoSeekProxy(sourceUrl, when {
+            sourceUrl.contains("c=TVHTML5") -> "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
+            sourceUrl.contains("c=ANDROID") -> "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip"
+            else -> "Mozilla/5.0"
+        }) else null
+
         val frameSizeBytes = totalWidth * totalHeight * 3
         val rawFrameBuffer = ByteArray(frameSizeBytes)
 
@@ -135,12 +170,12 @@ class VideoPlayer(
             command.add("-ss")
             command.add(String.format(Locale.US, "%.3f", sec))
         }
-        if (isNetworkStream) {
+        if (pipeNetworkStream) {
             command.add("-i")
             command.add("pipe:0")
         } else {
             command.add("-i")
-            command.add(sourceUrl)
+            command.add(seekProxy?.url ?: sourceUrl)
         }
         command.add("-vf")
         command.add("scale=${totalWidth}:${totalHeight}:force_original_aspect_ratio=decrease,pad=${totalWidth}:${totalHeight}:(ow-iw)/2:(oh-ih)/2:black,fps=${fps}")
@@ -193,7 +228,7 @@ class VideoPlayer(
 
             val input = proc.inputStream
 
-            while (!stopped.get() && coroutineScope.isActive) {
+            while (!stopped.get() && currentCoroutineContext().isActive) {
                 if (isPaused) {
                     delay(100L)
                     continue
@@ -210,6 +245,7 @@ class VideoPlayer(
                 }
             }
 
+            currentCoroutineContext().ensureActive()
             if (framesRendered == 0L && !stopped.get()) {
                 withTimeoutOrNull(2000L) {
                     stderrJob.join()
@@ -235,6 +271,8 @@ class VideoPlayer(
                 }
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            if (!currentCoroutineContext().isActive || stopped.get()) return
             if (e is java.io.IOException && (e.message?.contains("Cannot run program") == true || e.message?.contains("error: 2") == true || e.message?.contains("error: 13") == true)) {
                 ffmpegCache[ffmpegPath] = false
                 if (!warnedNoFfmpeg.getAndSet(true)) {
@@ -254,20 +292,22 @@ class VideoPlayer(
             }
         } finally {
             stdinJob?.cancel()
+            seekProxy?.close()
             try { netStream?.close() } catch (_: Exception) {}
             try { httpConn?.disconnect() } catch (_: Exception) {}
             val p = proc
             if (p != null) {
+                // Inspect the exit BEFORE cleanup kills a still-running process. A seek cancels
+                // this job before terminating FFmpeg and must not look like an external failure.
+                val exit = if (!p.isAlive) runCatching { p.exitValue() }.getOrNull() else null
                 if (p.isAlive) p.destroyForcibly()
-                if (!stopped.get() && p.isAlive.not()) {
-                    val exit = try { p.exitValue() } catch (_: Exception) { 0 }
-                    if (exit != 0 && framesRendered > 0L && stderrLines.isNotEmpty()) {
-                        logger.warn("FFmpeg exited with code $exit for screen '${screen.name}'. Log:\n${stderrLines.joinToString("\n")}")
-                    }
+                if (shouldReportExit(exit, !currentCoroutineContext().isActive, stopped.get()) &&
+                    framesRendered > 0L && stderrLines.isNotEmpty()) {
+                    val details = stderrLines.joinToString("\n").replace(sourceUrl, describeSource(sourceUrl))
+                    logger.warn("FFmpeg exited with code $exit for screen '${screen.name}'. Log:\n$details")
                 }
             }
-            cleanup()
-            onCompletion?.invoke()
+            if (process === proc) process = null
         }
     }
 
@@ -287,7 +327,7 @@ class VideoPlayer(
             sliceAndSend(rawFrameBuffer, initialPlayers)
         }
 
-        while (!stopped.get() && coroutineScope.isActive) {
+        while (!stopped.get() && currentCoroutineContext().isActive) {
             delay(1000L)
             if (isPaused) continue
             val nearbyPlayers = getNearbyPlayers()
@@ -325,11 +365,11 @@ class VideoPlayer(
             }
             if (code !in 200..299) {
                 conn.disconnect()
-                throw IOException("HTTP request failed with status $code: $urlStr")
+                throw IOException("HTTP request failed with status $code: ${describeSource(urlStr)}")
             }
             return Pair(conn.inputStream, conn)
         }
-        throw IOException("Too many redirects: $urlStr")
+        throw IOException("Too many redirects: ${describeSource(urlStr)}")
     }
 
     private fun loadAndScaleImage(
@@ -483,6 +523,14 @@ class VideoPlayer(
     }
 
     companion object {
+        internal fun shouldReportExit(exit: Int?, cancelled: Boolean, stopped: Boolean): Boolean =
+            exit != null && exit != 0 && !cancelled && !stopped
+
+        internal fun describeSource(url: String): String = runCatching {
+            val uri = URI(url)
+            if (uri.host != null) "${uri.scheme}://${uri.host}${uri.path.orEmpty()}" else File(url).name
+        }.getOrDefault("video source")
+
         private val logger = org.slf4j.LoggerFactory.getLogger("VideoPlayer")
         private val warnedNoFfmpeg = AtomicBoolean(false)
         private val ffmpegCache = ConcurrentHashMap<String, Boolean>()
@@ -499,12 +547,8 @@ class VideoPlayer(
     }
 
     fun seek(positionMs: Long) {
-        if (stopped.get()) return
-        if (isCurrentlyImage) return
-        coroutineScope.launch(Dispatchers.IO) {
-            process?.destroyForcibly()
-            runPlayback(positionMs)
-        }
+        if (stopped.get() || (isCurrentlyImage && isImageUrl(sourceUrl))) return
+        restartPlayback(positionMs)
     }
 
     fun stop() {

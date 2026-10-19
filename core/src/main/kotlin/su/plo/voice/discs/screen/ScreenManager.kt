@@ -255,6 +255,8 @@ class ScreenManager : PluginKoinComponent {
         }
     }
 
+    private val requestedPositions = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     fun onJukeboxPlay(
         block: Block,
         identifier: String,
@@ -278,8 +280,9 @@ class ScreenManager : PluginKoinComponent {
 
     fun onJukeboxSeek(block: Block, positionMs: Long) {
         val screen = getScreenForJukebox(block) ?: return
-        val player = activePlayers[screen.name.lowercase(Locale.ROOT)] ?: return
-        player.seek(positionMs)
+        val lower = screen.name.lowercase(Locale.ROOT)
+        requestedPositions[lower] = positionMs.coerceAtLeast(0)
+        activePlayers[lower]?.seek(positionMs)
     }
 
     fun playVideo(
@@ -291,6 +294,7 @@ class ScreenManager : PluginKoinComponent {
     ) {
         val lower = screen.name.lowercase(Locale.ROOT)
         stopVideo(screen)
+        requestedPositions[lower] = startPositionMs
 
         scope.launch {
             if (!config.screen.enabled) return@launch
@@ -312,7 +316,8 @@ class ScreenManager : PluginKoinComponent {
                 autoInstall = config.screen.autoInstallFfmpeg
             ) ?: config.screen.ffmpegPath
 
-            val videoPlayer = VideoPlayer(
+            lateinit var videoPlayer: VideoPlayer
+            videoPlayer = VideoPlayer(
                 screen = screen,
                 sourceUrl = resolvedUrl,
                 fps = config.screen.fps.coerceIn(5, 30),
@@ -321,21 +326,22 @@ class ScreenManager : PluginKoinComponent {
                 fallbackImageUrl = fallbackImg,
                 coroutineScope = scope,
                 onCompletion = {
-                    activePlayers.remove(lower)
+                    activePlayers.remove(lower, videoPlayer)
                 }
             )
 
             plugin.slF4JLogger.info(
-                "Screen '${screen.name}' playback starting: source='$resolvedUrl', ffmpeg='$resolvedFfmpegPath'"
+                "Screen '${screen.name}' playback starting: source='${VideoPlayer.describeSource(resolvedUrl)}', ffmpeg='$resolvedFfmpegPath'"
             )
 
             activePlayers[lower] = videoPlayer
-            videoPlayer.start(startPositionMs)
+            videoPlayer.start(requestedPositions[lower] ?: startPositionMs)
         }
     }
 
     fun stopVideo(screen: Screen) {
         val lower = screen.name.lowercase(Locale.ROOT)
+        requestedPositions.remove(lower)
         val player = activePlayers.remove(lower)
         player?.stop()
     }

@@ -134,6 +134,33 @@ class PlaybackControlsTest {
         assertFalse(newDecoder.paused)
     }
 
+    @Test fun `video seek callback gets the same clamped position as both audio backends`() {
+        val controls = PlaybackControls()
+        val pv = Decoder()
+        val svc = Decoder()
+        controls.attach(pv.player)
+        controls.attach(svc.player)
+        val videoPositions = mutableListOf<Long>()
+        controls.onSeek = { target ->
+            assertEquals(target, pv.position)
+            assertEquals(target, svc.position)
+            videoPositions += target
+        }
+        controls.seekTo(-300_000)
+        controls.seekTo(60_000)
+        controls.seekTo(300_000)
+        assertEquals(listOf(0L, 60_000L, 89_999L), videoPositions)
+    }
+
+    @Test fun `unseekable tracks do not seek the video`() {
+        val controls = PlaybackControls()
+        controls.attach(Decoder(seekable = false).player)
+        var called = false
+        controls.onSeek = { called = true }
+        controls.seekTo(15_000)
+        assertFalse(called)
+    }
+
     @Test fun `volume stays within zero to one hundred percent`() {
         val controls = PlaybackControls()
         val decoder = Decoder()

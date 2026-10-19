@@ -73,7 +73,7 @@ class ControlCommand(
         show(player, block, hologram = true)
     }
 
-    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false) {
+    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false) {
         val record = block.asJukebox()?.record?.clone() ?: return
         val controls = jukeboxes.controlsByBlock[block]
         val session = Session(UUID.randomUUID(), block, controls, record)
@@ -88,8 +88,7 @@ class ControlCommand(
             if (playlists.isQueued(block)) buttons += "Crossfade settings" to (prefix + "crossfade")
 
             if (controls.seekable) {
-                buttons += "Back 15 seconds" to (prefix + "back")
-                buttons += "Forward 15 seconds" to (prefix + "forward")
+                buttons += "Seek" to (prefix + "seek")
             }
             buttons += "Volume -10%" to (prefix + "quieter")
             buttons += "Volume +10%" to (prefix + "louder")
@@ -178,7 +177,20 @@ class ControlCommand(
             buttons += "Reset Position" to (prefix + "holo_reset")
             buttons += "Back to controls" to (prefix + "refresh")
         }
-        val dialogTitle = if (hologram) "Move Hologram" else if (crossfade) "Crossfade settings" else "Jukebox controls"
+        if (seek) {
+            if (controls?.seekable != true) return show(player, block)
+            buttons.clear()
+            queueLabels.clear()
+            body.clear()
+            body += Component.text(controls.title, NamedTextColor.GOLD)
+            body += Component.text("Seek audio and linked video together.", NamedTextColor.GRAY)
+            for ((seconds, label) in listOf(15 to "15s", 30 to "30s", 60 to "1m", 300 to "5m")) {
+                buttons += "−$label" to (prefix + "seek_minus_$seconds")
+                buttons += "+$label" to (prefix + "seek_plus_$seconds")
+            }
+            buttons += "Back to playback" to (prefix + "refresh")
+        }
+        val dialogTitle = if (seek) "Seek" else if (hologram) "Move Hologram" else if (crossfade) "Crossfade settings" else "Jukebox controls"
         try {
             PaperPlaybackDialog.show(player, body, buttons, queueLabels, dialogTitle, 2)
         } catch (_: ClassNotFoundException) {
@@ -212,8 +224,15 @@ class ControlCommand(
         when (arguments[2]) {
             "play" -> { if (controls == null) jukeboxes.playStoredDisc(session.block, player); return }
             "pause" -> controls?.togglePause()
-            "back" -> controls?.seekTo(controls.position - 15_000)
-            "forward" -> controls?.seekTo(controls.position + 15_000)
+            "seek" -> { show(player, session.block, seek = true); return }
+            "seek_minus_15", "seek_minus_30", "seek_minus_60", "seek_minus_300",
+            "seek_plus_15", "seek_plus_30", "seek_plus_60", "seek_plus_300" -> {
+                val seconds = arguments[2].substringAfterLast('_').toLong()
+                val delta = seconds * 1000 * if (arguments[2].startsWith("seek_minus_")) -1 else 1
+                controls?.seekTo(controls.position + delta)
+                show(player, session.block, seek = true)
+                return
+            }
             "quieter" -> controls?.changeVolume(-10)
             "louder" -> controls?.changeVolume(10)
             "stop", "eject" -> {
@@ -343,7 +362,7 @@ private object PaperPlaybackDialog {
 
     private fun buttonSprite(command: String?): String = when (command?.substringAfterLast(' ')) {
         "play", "pause" -> "item/music_disc_cat"
-        "refresh" -> "item/clock_00"
+        "seek", "refresh" -> "item/clock_00"
         "back" -> "item/ender_pearl"
         "forward", "skip" -> "item/spectral_arrow"
         "quieter" -> "item/echo_shard"
@@ -354,7 +373,11 @@ private object PaperPlaybackDialog {
         "screen_link" -> "item/item_frame"
         "screen_unlink" -> "item/shears"
         "screen_clear" -> "item/water_bucket"
-        else -> "item/barrier"
+        else -> when {
+            command?.substringAfterLast(' ')?.startsWith("seek_minus_") == true -> "item/ender_pearl"
+            command?.substringAfterLast(' ')?.startsWith("seek_plus_") == true -> "item/spectral_arrow"
+            else -> "item/barrier"
+        }
     }
 
     fun show(player: Player, body: List<Component>, buttons: List<Pair<String, String>>, queueLabels: Map<String, Component>, title: String, columns: Int) {

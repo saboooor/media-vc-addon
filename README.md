@@ -212,3 +212,7 @@ This feature is only available starting from 1.1.x.
 YouTube playback always uses the source library's best-available audio selection.
 
 For detailed diagnostics, enable `debug = true` in `discs.toml`, run `/disc reload`, and start or reload a track. Look for `YouTube formats:` and `YouTube selected:` in the server log. These show offered formats and the selection without logging signed stream URLs or credentials. These are source stream bitrates, not the final voice transport bitrate.
+
+### Seeking linked video
+
+Open **Seek** in the playback dialog to jump backward or forward by 15 seconds, 30 seconds, 1 minute, or 5 minutes. The dialog stays open for repeated adjustments and has a Back button. Audio and the linked video receive the same position, clamped to the track's bounds. Static artwork is unchanged; live/unseekable tracks do not offer seeking. Video restarts its FFmpeg stream at the selected position, so network video can take time to catch up.
