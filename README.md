@@ -3,16 +3,16 @@
 <div>
     <a href="https://modrinth.com/mod/plasmo-voice">Plasmo Voice</a>
     <span> | </span>
-    <a href="https://modrinth.com/plugin/pv-addon-discs">Modrinth</a>
+    <a href="https://modrinth.com/plugin/vc-addon-discs">Modrinth</a>
     <span> | </span>
-    <a href="https://github.com/plasmoapp/pv-addon-discs/">GitHub</a>
+    <a href="https://github.com/plasmoapp/vc-addon-discs/">GitHub</a>
     <span> | </span>
     <a href="https://discord.com/invite/uueEqzwCJJ">Discord</a>
      <span> | </span>
     <a href="https://www.patreon.com/plasmomc">Patreon</a>
 </div>
 
-# pv-addon-discs
+# vc-addon-discs
 
 Paper only [Plasmo Voice](https://github.com/plasmoapp/plasmo-voice) addon. Play audio from Youtube and other sources in Minecraft using music discs. Inspired by [SVC](https://github.com/henkelmax/simple-voice-chat)'s [AudioPlayer](https://github.com/henkelmax/audio-player) & [CustomDiscs](https://github.com/Navoei/CustomDiscs).
 
@@ -34,6 +34,12 @@ The addon can stream audio from various sources instead of saving audio files on
 
 `/disc cancel [player]` – Cancel user's goat horn playback. You need `pv.addon.discs.cancel.other` permission to cancel for others.
 
+`/disc reload` – Reload runtime options from `discs.toml` without interrupting playback. Works from the console.
+
+Reloadable options: debug logging, disc glint and burn/erase lore, mono audio, goat horn settings, jukebox distance and visualization, HTTP whitelist, and the burnable-tag requirement. Playback settings apply to newly started tracks; item settings apply to future burns/erases. Registered recipe results keep their original glint and lore until restart.
+
+Source line weight/default volume, HTTP proxy, YouTube settings, local source settings, and default recipe settings require a server restart. Reload leaves their active values unchanged and keeps the edited values in the config file for the next restart.
+
 ## Permissions
 
 Commands are only available to OP by default:
@@ -43,6 +49,8 @@ Commands are only available to OP by default:
 `pv.addon.discs.erase` – Erase command
 
 `pv.addon.discs.search` – Search command
+
+`pv.addon.discs.reload` – Reload runtime configuration (also accepts `vc.addon.discs.reload`)
 
 `pv.addon.discs.cancel` – Command to cancel goat horn playback
 
@@ -82,7 +90,7 @@ If you want to stream audio from direct URLs
 ![Version](https://img.shields.io/badge/dynamic/xml?color=186EF0&label=release&query=/metadata/versioning/versions/version[not(contains(text(),'%2B'))][last()]&url=https://repo.plasmoverse.com/releases/su/plo/voice/addon/discs-paper/maven-metadata.xml)
 ![Version](https://img.shields.io/badge/dynamic/xml?color=186EF0&label=snapshot&query=/metadata/versioning/versions/version[not(contains(text(),'%2B'))][last()]&url=https://repo.plasmoverse.com/snapshots/su/plo/voice/addon/discs-paper/maven-metadata.xml)
 
-Bukkit events list: https://github.com/plasmoapp/pv-addon-discs/tree/v1/core/src/main/kotlin/su/plo/voice/discs/api.
+Bukkit events list: https://github.com/plasmoapp/vc-addon-discs/tree/v1/core/src/main/kotlin/su/plo/voice/discs/api.
 
 ### Kotlin DSL
 ```kotlin
@@ -98,8 +106,8 @@ dependencies {
 # Common issues
 
 ## Problematic YouTube player script
-1) Make sure you're using the latest versions of `pv-addon-discs` and `pv-addon-lavaplayer-lib`.
-2) Open `plugins/pv-addon-discs/discs.toml`, uncomment and configure `youtube_source.remote_cipher`:
+1) Make sure you're using the latest versions of `vc-addon-discs` and `pv-addon-lavaplayer-lib`.
+2) Open `plugins/vc-addon-discs/discs.toml`, uncomment and configure `youtube_source.remote_cipher`:
     ```toml
     [youtube_source.remote_cipher]
     url = "https://cipher.kikkia.dev/"
@@ -110,10 +118,10 @@ dependencies {
 4) If this doesn't work, [try oauth2](#sign-in-to-confirm-youre-not-a-bot--please-sign-in-using-youtube).
 
 ## "Sign in to confirm you're not a bot" / "Please sign in" using YouTube
-1) Make sure you're using the latest versions of `pv-addon-discs` and `pv-addon-lavaplayer-lib`.
-2) Set `youtube_source.use_oauth2` to `true` in `plugins/pv-addon-discs/discs.toml`.
+1) Make sure you're using the latest versions of `vc-addon-discs` and `pv-addon-lavaplayer-lib`.
+2) Set `youtube_source.use_oauth2` to `true` in `plugins/vc-addon-discs/discs.toml`.
 3) Restart the server (`/vreload` will not work).
-4) When `pv-addon-discs` initializes, you'll see a message in your console like this (code will be different): https://i.imgur.com/r1o5v8v.png. Follow the instructions in the console message.
+4) When `vc-addon-discs` initializes, you'll see a message in your console like this (code will be different): https://i.imgur.com/r1o5v8v.png. Follow the instructions in the console message.
 5) After successful authorization, you'll see a message in your console: https://i.imgur.com/BD9jCRe.png. You don't need to save token manually, it will be saved when the server is stopped.
 6) Done! YouTube tracks should now work as expected.
 
@@ -121,5 +129,5 @@ dependencies {
 This usually means that your server can't reach the server hosting the track.
 Check your server's internet connection and contact your hosting provider if the issue persists.
 
-If you have HTTP proxy, you can set it using `http_proxy` config option in `plugins/pv-addon-discs/discs.toml`.
+If you have HTTP proxy, you can set it using `http_proxy` config option in `plugins/vc-addon-discs/discs.toml`.
 This feature is only available starting from 1.1.x.

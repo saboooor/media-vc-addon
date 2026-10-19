@@ -75,7 +75,7 @@ class AddonConfig {
         """,
         nullComment = "http_proxy = \"http://user:password@ip:port\""
     )
-    val httpProxy: String? = null
+    var httpProxy: String? = null
 
     @Config class GoatHornConfig {
 
@@ -188,7 +188,7 @@ class AddonConfig {
                 Follow the instructions in this prompt.
                 If you do everything right, you will see "Token retrieved successfully" in your console.
                 You only need to do this once;
-                the token will be stored in "pv-addon-discs/.youtube-token" after successful authorization.
+                the token will be stored in "vc-addon-discs/.youtube-token" after successful authorization.
             """
         )
         val useOauth2: Boolean = false
@@ -250,10 +250,10 @@ class AddonConfig {
     }
 
     @ConfigField
-    val youtubeSource = YouTubeSourceConfig()
+    var youtubeSource = YouTubeSourceConfig()
 
     @ConfigField
-    val localSource = LocalSourceConfig()
+    var localSource = LocalSourceConfig()
 
     @Config
     class LocalSourceConfig {
@@ -270,7 +270,7 @@ class AddonConfig {
 
         @ConfigField(comment = """
             Path used as a root to resolve audio files.
-            If path is empty, "local" folder inside addon's plugin folder will be used ("plugins/pv-addon-discs/local").
+            If path is empty, "local" folder inside addon's plugin folder will be used ("plugins/vc-addon-discs/local").
         """)
         val path = ""
     }
@@ -309,15 +309,32 @@ class AddonConfig {
     @ConfigField
     val burnableTag = BurnableTag()
 
+    /** Keep settings whose consumers are initialized only during startup. */
+    fun preserveRestartSettings(current: AddonConfig) {
+        sourceLineWeight = current.sourceLineWeight
+        defaultSourceLineVolume = current.defaultSourceLineVolume
+        httpProxy = current.httpProxy
+        youtubeSource = current.youtubeSource
+        localSource = current.localSource
+        burnableTag.enableDefaultRecipe = current.burnableTag.enableDefaultRecipe
+        burnableTag.defaultRecipeItem = current.burnableTag.defaultRecipeItem
+        burnableTag.defaultRecipeCost = current.burnableTag.defaultRecipeCost
+        burnableTag.defaultRecipeLore = current.burnableTag.defaultRecipeLore
+    }
+
     companion object {
-        fun loadConfig(server: PlasmoVoiceServer?, dataFolder: File? = null): AddonConfig {
+        fun loadConfig(
+            server: PlasmoVoiceServer?,
+            dataFolder: File? = null,
+            registerLanguages: Boolean = true,
+        ): AddonConfig {
             val addonFolder = if (server != null) {
                 getAddonFolder(server.minecraftServer)
             } else {
                 dataFolder ?: File("plugins/vc-addon-discs")
             }
 
-            if (server != null) {
+            if (server != null && registerLanguages) {
                 try {
                     server.languages.register(
                         URI.create("https://github.com/plasmoapp/plasmo-voice-crowdin/archive/refs/heads/addons.zip").toURL(),
@@ -345,6 +362,6 @@ class AddonConfig {
         )
 
         private fun getAddonFolder(minecraftServer: McServerLib): File =
-            File(minecraftServer.configsFolder, "pv-addon-discs")
+            File(minecraftServer.configsFolder, "vc-addon-discs")
     }
 }

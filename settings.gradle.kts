@@ -11,7 +11,7 @@ pluginManagement {
     }
 }
 
-rootProject.name = "pv-addon-discs"
+rootProject.name = "vc-addon-discs"
 
 plugins {
     id("dev.kikugie.stonecutter") version "0.7.11"

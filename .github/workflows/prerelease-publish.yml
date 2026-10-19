@@ -47,7 +47,7 @@ jobs:
 
     - uses: actions/upload-artifact@v7.0.1
       with:
-        name: pv-addon-discs
+        name: vc-addon-discs
         archive: false
         path: |
           plugin/build/libs/*.jar
@@ -57,7 +57,7 @@ jobs:
 
     - uses: actions/upload-artifact@v7.0.1
       with:
-        name: pv-addon-discs
+        name: vc-addon-discs
         path: |
           plugin/build/libs/*.jar
           !plugin/build/libs/*-dev.jar

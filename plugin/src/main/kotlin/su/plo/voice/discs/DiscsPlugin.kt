@@ -33,6 +33,7 @@ import su.plo.voice.discs.command.subcommand.BurnCommand
 import su.plo.voice.discs.command.subcommand.CancelCommand
 import su.plo.voice.discs.command.subcommand.EraseCommand
 import su.plo.voice.discs.command.subcommand.SearchCommand
+import su.plo.voice.discs.command.subcommand.ReloadCommand
 import su.plo.voice.discs.crafting.BurnableDiscCraft
 import su.plo.voice.discs.crafting.BurnableHornCraft
 import su.plo.voice.discs.event.ForbidGrindstoneListener
@@ -49,7 +50,7 @@ import su.plo.voice.discs.utils.extend.registerBukkit
 import su.plo.voice.discs.v1_19_4.GoatHornListener
 
 @Addon(
-    id = "pv-addon-discs",
+    id = "vc-addon-discs",
     scope = AddonLoaderScope.SERVER,
     version = BuildConstants.VERSION,
     authors = ["KPidS", "Apehum"]
@@ -167,6 +168,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
 
     private lateinit var audioPlayerManager: PlasmoAudioPlayerManager
 
+    @Volatile
     private lateinit var addonConfig: AddonConfig
     private lateinit var debugLogger: DebugLogger
 
@@ -230,6 +232,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
             .addSubCommand(::BurnCommand)
             .addSubCommand(::EraseCommand)
             .addSubCommand(::SearchCommand)
+            .addSubCommand { ReloadCommand(::reloadRuntimeConfig) }
         if (hornsSupported) {
             handler.addSubCommand(::CancelCommand)
         }
@@ -284,6 +287,15 @@ class DiscsPlugin : JavaPlugin(), Listener {
         }
 
         LavaplayerDebugLogging.setEnabled(false)
+    }
+
+    private fun reloadRuntimeConfig() {
+        val reloaded = AddonConfig.loadConfig(pvServer, dataFolder, registerLanguages = false)
+        reloaded.preserveRestartSettings(addonConfig)
+        addonConfig = reloaded
+        val debug = reloaded.debug || (pvServer?.debug() ?: false)
+        debugLogger.enabled(debug)
+        LavaplayerDebugLogging.setEnabled(debug)
     }
 
     private fun loadConfig() {

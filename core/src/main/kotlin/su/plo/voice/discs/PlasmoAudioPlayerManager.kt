@@ -289,7 +289,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     private fun listenForTokenChange(youtubeSourceManager: YoutubeAudioSourceManager) {
         val currentToken = youtubeSourceManager.oauth2RefreshToken
         fixedRateTimer(
-            "[pv-addon-discs] [youtube-refresh-token-listener]",
+            "[vc-addon-discs] [youtube-refresh-token-listener]",
             true,
             5000L,
             5000L,

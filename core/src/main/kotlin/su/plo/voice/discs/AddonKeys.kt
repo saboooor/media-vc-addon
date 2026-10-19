@@ -4,13 +4,13 @@ import org.bukkit.NamespacedKey
 
 data object AddonKeys {
     // PersistentDataType.STRING
-    val identifierKey: NamespacedKey = createKeyOrThrow("pv-addon-discs:identifier")
+    val identifierKey: NamespacedKey = createKeyOrThrow("vc-addon-discs:identifier")
     // PersistentDataType.BYTE 0 or 1 representing boolean
-    val burnableKey: NamespacedKey = createKeyOrThrow("pv-addon-discs:burnable")
+    val burnableKey: NamespacedKey = createKeyOrThrow("vc-addon-discs:burnable")
     // PersistentDataType.BYTE 0 or 1 representing boolean
-    val forbidGrindstoneKey: NamespacedKey = createKeyOrThrow("pv-addon-discs:forbid_grindstone")
+    val forbidGrindstoneKey: NamespacedKey = createKeyOrThrow("vc-addon-discs:forbid_grindstone")
     // PersistentDataType.STRING
-    val instrumentKey: NamespacedKey = createKeyOrThrow("pv-addon-discs:instrument_key")
+    val instrumentKey: NamespacedKey = createKeyOrThrow("vc-addon-discs:instrument_key")
     // PersistentDataType.STRING
     val oldIdentifierKey: NamespacedKey = createKeyOrThrow("pv-addon-disks:identifier")
 }
