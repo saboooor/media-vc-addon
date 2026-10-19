@@ -1,4 +1,9 @@
+//? if >=26.3
+/*@file:Suppress("UnstableApiUsage")*/
 package su.plo.voice.discs.mcver
+
+//? if >=26.3
+/*import io.papermc.paper.datacomponent.DataComponentTypes*/
 
 import org.bukkit.Material
 import org.bukkit.MusicInstrument
@@ -47,6 +52,11 @@ class GoatHornHelperImpl : GoatHornHelper {
     override fun setEmptyInstrument(item: ItemStack) {
         if (item.type != Material.GOAT_HORN) return
 
+        //? if >=26.3 {
+        /*// PacketEvents 2.14.0 omits durability_damage when encoding inline instruments.
+        // Remove the vanilla instrument instead; the interact listener handles custom playback.
+        item.unsetData(DataComponentTypes.INSTRUMENT)
+        *///?} else {
         val mcItem = ReflectionUtil.getMinecraftItemStack(item)
 
         //? if >=1.20.6 {
@@ -59,6 +69,7 @@ class GoatHornHelperImpl : GoatHornHelper {
         val compoundTag = ReflectionProxies.itemStack.getOrCreateTag(mcItem)
 
         ReflectionProxies.compoundTag.putString(compoundTag, "instrument", "empty")
+        //?}
         //?}
     }
 

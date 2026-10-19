@@ -5,6 +5,23 @@ plugins {
     id("io.papermc.paperweight.userdev") version "2.0.0-beta.17" apply false
 }
 
+// The root project has no sources; expose the complete plugin as its build output.
+tasks.jar {
+    enabled = false
+}
+
+val collectPluginJar by tasks.registering(Sync::class) {
+    dependsOn(":plugin:shadowJar")
+    from(provider {
+        project(":plugin").tasks.named<Jar>("shadowJar").get().archiveFile.get()
+    })
+    into(layout.buildDirectory.dir("libs"))
+}
+
+tasks.assemble {
+    dependsOn(collectPluginJar)
+}
+
 allprojects {
     if (project == project(":nms")) return@allprojects
 

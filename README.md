@@ -24,6 +24,10 @@ The addon can stream audio from various sources instead of saving audio files on
 2. Download this plugin from Modrinth and drop it into the `~/plugins` folder.
 3. Restart the server
 
+For Minecraft 26.3, use PacketEvents 2.14.0 or newer. PacketEvents is a separate server plugin; rebuilding this addon does not update it.
+
+On Minecraft 26.3, burned horns have their vanilla instrument component removed to avoid a custom-instrument encoding bug in PacketEvents 2.14.0. Custom audio and cooldowns still work, but the vanilla horn-use animation is unavailable. Erasing a horn restores its original instrument. Reburning an existing custom horn applies this workaround too.
+
 ## Commands
 
 `/disc burn <url> [name]` – Create a disc with custom audio from the URL. You need to hold a music disc in your hand.

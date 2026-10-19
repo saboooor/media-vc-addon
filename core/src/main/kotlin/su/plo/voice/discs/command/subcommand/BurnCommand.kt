@@ -226,7 +226,7 @@ class BurnCommand : SubCommand() {
                 }
             }
 
-            if (isGoatHorn && !hasIdentifier) {
+            if (isGoatHorn) {
                 hornHelper.setEmptyInstrument(item)
             }
 
