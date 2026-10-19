@@ -212,12 +212,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 if (inventory.getItem(slot) != original) continue
                 val identifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.identifier
                 if (Bukkit.getServer().getMinecraftVersionInt() >= 12103) discHelper.showSongTooltip(item, false)
-                val cleanAuthor = track.info.author.replace(Regex("(?i)\\s*-\\s*topic$"), "").trim()
-                val cleanTitle = track.info.title.replace(Regex("(?i)\\s*-\\s*topic\\b"), "").trim()
-                val label = cleanAuthor
-                    .takeIf { it.isNotBlank() }
-                    ?.let { "$it - $cleanTitle" }
-                    ?: cleanTitle
+                val label = formatTrackDisplay(track.info.title, track.info.author)
                 item.burnMetadata(identifier, label, config, discHelper)
                 inventory.setItem(slot, item)
                 burned++

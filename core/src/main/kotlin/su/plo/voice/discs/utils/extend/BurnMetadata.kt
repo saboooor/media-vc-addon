@@ -52,7 +52,36 @@ fun ItemStack.burnMetadata(identifier: String, name: String, config: AddonConfig
 }
 
 fun String.cleanArtistName(): String =
-    replace(Regex("(?i)\\s*-\\s*topic$"), "").trim()
+    replace(Regex("(?i)\\s*-\\s*topic$"), "")
+        .replace(Regex("(?i)\\s*[-–—]?\\s*official(?:\\s*channel)?$"), "")
+        .replace(Regex("(?i)vevo$"), "")
+        .replace(Regex("(?<=\\p{Ll})(?=\\p{Lu})"), " ")
+        .trim()
 
 fun String.cleanTrackName(): String =
     replace(Regex("(?i)\\s*-\\s*topic\\b"), "").trim()
+
+fun String.containsArtist(artist: String): Boolean {
+    val clean = artist.cleanArtistName()
+    if (clean.isBlank() || this.isBlank()) return false
+    val pattern = Regex("(?<![\\p{L}\\p{N}])${Regex.escape(clean)}(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE)
+    if (pattern.containsMatchIn(this)) return true
+
+    val noSpacesArtist = clean.replace(Regex("\\s+"), "")
+    if (noSpacesArtist.length >= 3) {
+        val patternNoSpaces = Regex("(?<![\\p{L}\\p{N}])${Regex.escape(noSpacesArtist)}(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE)
+        if (patternNoSpaces.containsMatchIn(this)) return true
+    }
+
+    return false
+}
+
+fun formatTrackDisplay(trackTitle: String, artistName: String): String {
+    val cleanTitle = trackTitle.cleanTrackName()
+    val cleanArtist = artistName.cleanArtistName()
+    return if (cleanArtist.isNotBlank() && !cleanTitle.containsArtist(cleanArtist)) {
+        "$cleanArtist - $cleanTitle"
+    } else {
+        cleanTitle
+    }
+}

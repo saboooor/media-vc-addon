@@ -1,5 +1,6 @@
 package su.plo.voice.discs.screen
 
+import kotlinx.coroutines.launch
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.command.CommandSender
@@ -27,7 +28,7 @@ class ScreenCommand : SubCommand() {
         }
 
         if (arguments.size == 2) {
-            val sub = listOf("create", "delete", "link", "unlink", "list", "play", "stop", "clear", "cancel", "finish")
+            val sub = listOf("create", "delete", "link", "unlink", "list", "play", "stop", "clear", "cancel", "finish", "install-ffmpeg")
             return sub.filter { it.startsWith(arguments[1].lowercase(Locale.ROOT)) }
         }
 
@@ -198,6 +199,20 @@ class ScreenCommand : SubCommand() {
                 player.sendMessage(Component.text("Screen '$name' cleared.", NamedTextColor.GREEN))
             }
 
+            "install-ffmpeg" -> {
+                player.sendMessage(Component.text("Checking / installing portable static FFmpeg...", NamedTextColor.YELLOW))
+                scope.launch {
+                    val resolved = FFmpegResolver.installStaticFFmpeg(plugin.dataFolder) { progressMsg ->
+                        player.sendMessage(Component.text(progressMsg, NamedTextColor.GRAY))
+                    }
+                    if (resolved != null) {
+                        player.sendMessage(Component.text("Static portable FFmpeg installed and verified at: $resolved", NamedTextColor.GREEN))
+                    } else {
+                        player.sendMessage(Component.text("Failed to automatically install FFmpeg. You can manually place an ffmpeg binary into plugins/vc-addon-discs/bin/ffmpeg", NamedTextColor.RED))
+                    }
+                }
+            }
+
             else -> sendHelp(player)
         }
     }
@@ -213,6 +228,7 @@ class ScreenCommand : SubCommand() {
         player.sendMessage(Component.text("/disc screen clear [name]", NamedTextColor.AQUA).append(Component.text(" - Clear screen to black", NamedTextColor.GRAY)))
         player.sendMessage(Component.text("/disc screen delete <name>", NamedTextColor.AQUA).append(Component.text(" - Delete a screen", NamedTextColor.GRAY)))
         player.sendMessage(Component.text("/disc screen cancel", NamedTextColor.AQUA).append(Component.text(" - Cancel active selection", NamedTextColor.GRAY)))
+        player.sendMessage(Component.text("/disc screen install-ffmpeg", NamedTextColor.AQUA).append(Component.text(" - Download portable static FFmpeg", NamedTextColor.GRAY)))
     }
 }
 

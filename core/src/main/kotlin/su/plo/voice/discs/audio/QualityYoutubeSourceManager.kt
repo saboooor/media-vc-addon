@@ -12,6 +12,10 @@ import su.plo.voice.lavaplayer.libs.dev.lavalink.youtube.track.YoutubeAudioTrack
 import su.plo.voice.lavaplayer.libs.dev.lavalink.youtube.track.format.StreamFormat
 import su.plo.voice.lavaplayer.libs.dev.lavalink.youtube.track.format.TrackFormats
 
+import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.tools.JsonBrowser
+import su.plo.voice.lavaplayer.libs.dev.lavalink.youtube.clients.ClientOptions
+import java.net.URI
+
 /** Changes selection before YouTube URL deciphering; keeps the normal client and OAuth fallback paths. */
 class QualityYoutubeSourceManager(options: YoutubeSourceOptions, private val logFormats: (String) -> Unit, vararg clients: Client) :
     YoutubeAudioSourceManager(options, *clients) {
@@ -24,6 +28,29 @@ class QualityYoutubeSourceManager(options: YoutubeSourceOptions, private val log
         val quality = YoutubeSourceQuality.BEST
         return super.getClients().map { client ->
             object : Client by client {
+                override fun supportsOAuth(): Boolean = client.supportsOAuth()
+                override fun supportsFormatLoading(): Boolean = client.supportsFormatLoading()
+                override fun isEmbedded(): Boolean = client.isEmbedded
+                override fun requirePlayerScript(): Boolean = client.requirePlayerScript()
+                override fun getOptions(): ClientOptions = client.options
+                override fun getPlayabilityStatus(response: JsonBrowser, isPlayback: Boolean): Client.PlayabilityStatus =
+                    client.getPlayabilityStatus(response, isPlayback)
+                override fun getUnplayableReason(response: JsonBrowser): String? =
+                    client.getUnplayableReason(response)
+                override fun findSelectedTrack(tracks: MutableList<AudioTrack>, trackId: String): AudioTrack? =
+                    client.findSelectedTrack(tracks, trackId)
+                override fun transformPlaybackUri(playbackUri: URI, uri: URI): URI =
+                    client.transformPlaybackUri(playbackUri, uri)
+                override fun buildAudioTrack(
+                    source: YoutubeAudioSourceManager,
+                    json: JsonBrowser,
+                    videoId: String,
+                    title: String,
+                    duration: Long,
+                    uploader: String,
+                    isStream: Boolean
+                ): AudioTrack = client.buildAudioTrack(source, json, videoId, title, duration, uploader, isStream)
+
                 override fun loadFormats(source: YoutubeAudioSourceManager, http: HttpInterface, videoId: String): TrackFormats {
                     val formats = client.loadFormats(source, http, videoId)
                     val offered = formats.formats.filter { it.info?.mimeType?.startsWith("audio/") == true }

@@ -70,6 +70,8 @@ Chest queues:
 
 `/disc screen finish` – Finish screen selection without linking a jukebox.
 
+`/disc screen install-ffmpeg` – Download and install a static portable FFmpeg binary directly into `plugins/vc-addon-discs/bin/ffmpeg` for containerized environments (like Pterodactyl or Docker) without system packages or root access.
+
 Music video screens:
 
 - Form a rectangular wall grid of item frames (e.g. 2x2, 3x2, 4x3) and run `/disc screen create [name]`.

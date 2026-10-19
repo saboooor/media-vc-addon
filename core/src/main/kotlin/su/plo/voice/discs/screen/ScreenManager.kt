@@ -43,6 +43,11 @@ class ScreenManager : PluginKoinComponent {
 
     init {
         loadScreens()
+        scope.launch {
+            if (config.screen.enabled && config.screen.autoInstallFfmpeg) {
+                FFmpegResolver.resolve(plugin.dataFolder, config.screen.ffmpegPath, autoInstall = true)
+            }
+        }
     }
 
     fun shutdown() {
@@ -290,6 +295,9 @@ class ScreenManager : PluginKoinComponent {
         scope.launch {
             if (!config.screen.enabled) return@launch
 
+            val videoId = VideoSourceResolver.extractYouTubeVideoId(identifier)
+            val fallbackImg = artworkUrl ?: videoId?.let { VideoSourceResolver.getYouTubeThumbnailUrl(it) }
+
             val resolvedUrl = VideoSourceResolver.resolveVideoUrl(
                 identifier = identifier,
                 audioPlayerManager = audioPlayerManager,
@@ -298,16 +306,27 @@ class ScreenManager : PluginKoinComponent {
                 isYouTubeMusic = isYouTubeMusic
             )
 
+            val resolvedFfmpegPath = FFmpegResolver.resolve(
+                dataFolder = plugin.dataFolder,
+                configuredPath = config.screen.ffmpegPath,
+                autoInstall = config.screen.autoInstallFfmpeg
+            ) ?: config.screen.ffmpegPath
+
             val videoPlayer = VideoPlayer(
                 screen = screen,
                 sourceUrl = resolvedUrl,
                 fps = config.screen.fps.coerceIn(5, 30),
                 maxDistance = config.screen.maxDistance.coerceIn(8, 128),
-                ffmpegPath = config.screen.ffmpegPath,
+                ffmpegPath = resolvedFfmpegPath,
+                fallbackImageUrl = fallbackImg,
                 coroutineScope = scope,
                 onCompletion = {
                     activePlayers.remove(lower)
                 }
+            )
+
+            plugin.slF4JLogger.info(
+                "Screen '${screen.name}' playback starting: source='$resolvedUrl', ffmpeg='$resolvedFfmpegPath'"
             )
 
             activePlayers[lower] = videoPlayer

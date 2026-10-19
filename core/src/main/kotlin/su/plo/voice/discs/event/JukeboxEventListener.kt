@@ -269,10 +269,16 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
 
             val cleanAuthor = track.info.author.cleanArtistName()
 
-            controls.title = cleanAuthor
-                .takeIf { it.isNotBlank() }
-                ?.let { "$it - $trackName" }
-                ?: trackName
+            val titleHasArtist = cleanAuthor.isNotBlank() &&
+                (trackName.containsArtist(cleanAuthor) || track.info.title.containsArtist(cleanAuthor))
+
+            val displayTitle = if (cleanAuthor.isNotBlank() && !titleHasArtist) {
+                "$cleanAuthor - $trackName"
+            } else {
+                trackName
+            }
+
+            controls.title = displayTitle
 
             val distance: Short = when (config.distance.enableBeaconLikeDistance) {
                 true -> {
@@ -314,10 +320,10 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             }
 
             val actionbarMessage = McTextComponent.translatable(
-                "pv.addon.discs.actionbar.playing", trackName
+                "pv.addon.discs.actionbar.playing", displayTitle
             )
 
-            debugLogger.log("Starting track job \"$trackName\" with distance $distance at ${block.location}")
+            debugLogger.log("Starting track job \"$displayTitle\" with distance $distance at ${block.location}")
 
             suspendSyncAt(block.location, voiceServer, plugin) { block.world.getNearbyPlayers(block.location, distance.toDouble()) }
                 .forEach { nearby ->
@@ -325,7 +331,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                         val vp = voiceServer?.let { nearby.asVoicePlayer(it) }
                         vp?.sendAnimatedActionBar(actionbarMessage)
                     } else {
-                        nearby.sendActionBar(Component.text("Now playing: $trackName", NamedTextColor.GOLD))
+                        nearby.sendActionBar(Component.text("Now playing: $displayTitle", NamedTextColor.GOLD))
                     }
                 }
 

@@ -116,12 +116,12 @@ class GoatHornManager : PluginKoinComponent {
             PlayTrackFromGoatHornEvent(voicePlayer, track).callEvent()
         }) return@launch
 
-        val trackName = item.itemMeta
+        val trackName = (item.itemMeta
             ?.lore()
             ?.getOrNull(0)
             ?.let { it as? TextComponent }
             ?.content()
-            ?: track.info.title
+            ?: track.info.title).cleanTrackName()
 
         val distance = config.goatHorn.distance
 

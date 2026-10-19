@@ -320,8 +320,11 @@ class AddonConfig {
         @ConfigField(comment = "Maximum distance in blocks for players to receive video map updates")
         var maxDistance: Int = 48
 
-        @ConfigField(comment = "Path to ffmpeg executable on server")
+        @ConfigField(comment = "Path to ffmpeg executable on server (can be 'ffmpeg', or a relative path like 'plugins/vc-addon-discs/bin/ffmpeg')")
         var ffmpegPath: String = "ffmpeg"
+
+        @ConfigField(comment = "Automatically download static portable FFmpeg into plugins/vc-addon-discs/bin/ffmpeg if not found on the server")
+        var autoInstallFfmpeg: Boolean = true
 
         @ConfigField(comment = "Path to yt-dlp executable on server (used as YouTube video resolver if present)")
         var ytdlpPath: String = "yt-dlp"

@@ -141,7 +141,7 @@ class BurnCommand : SubCommand() {
 
         val name = arguments.drop(2)
             .joinToString(" ")
-            .ifEmpty { track.info.title }
+            .ifEmpty { formatTrackDisplay(track.info.title, track.info.author) }
 
         val item = suspendSyncFor(player, voiceServer, plugin) { player.inventory.itemInMainHand }
 

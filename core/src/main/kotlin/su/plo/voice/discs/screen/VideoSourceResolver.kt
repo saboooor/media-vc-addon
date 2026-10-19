@@ -32,6 +32,15 @@ object VideoSourceResolver {
         return "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
     }
 
+    private val logger = org.slf4j.LoggerFactory.getLogger("VideoSourceResolver")
+
+    private val VIDEO_ITAGS = setOf(
+        18, 22, 37, 38, // muxed mp4
+        133, 134, 135, 136, 137, 160, 298, 299, // video-only mp4
+        242, 243, 244, 247, 248, 278, // video-only webm
+        394, 395, 396, 397, 398, 399 // video-only AV1
+    )
+
     /**
      * Resolves a media track identifier to a playable video stream URL or input source for FFmpeg.
      */
@@ -47,16 +56,13 @@ object VideoSourceResolver {
         val isYt = videoId != null || isYouTubeUrl(trimmed)
         val targetId = videoId ?: extractYouTubeVideoId(trimmed)
 
-        // For YouTube Music tracks (no music video, only album cover), directly return album art
-        if (isYouTubeMusic || trimmed.contains("music.youtube.com")) {
-            if (!artworkUrl.isNullOrBlank()) return artworkUrl
-            if (targetId != null) return getYouTubeThumbnailUrl(targetId)
-        }
-
         if (isYt) {
             // Option 1: Try yt-dlp if installed on server
             val ytdlpResolved = tryResolveWithYtDlp(trimmed, ytdlpPath)
-            if (ytdlpResolved != null) return ytdlpResolved
+            if (ytdlpResolved != null) {
+                logger.info("Resolved video stream via yt-dlp for '$trimmed'")
+                return ytdlpResolved
+            }
 
             // Option 2: Try resolving via Lavaplayer's YouTube source formats
             if (targetId != null && audioPlayerManager != null) {
@@ -65,6 +71,7 @@ object VideoSourceResolver {
             }
 
             // Fallback for YouTube when no video stream is available: show album cover / thumbnail
+            logger.info("No direct video stream found for YouTube ID '$targetId'; using thumbnail/artwork.")
             if (!artworkUrl.isNullOrBlank()) return artworkUrl
             if (targetId != null) return getYouTubeThumbnailUrl(targetId)
         }
@@ -101,14 +108,15 @@ object VideoSourceResolver {
     }
 
     private fun tryResolveWithLavaPlayer(videoId: String, audioPlayerManager: PlasmoAudioPlayerManager): String? {
+        val ytSource = audioPlayerManager.getYoutubeSourceManager() ?: return null
         return try {
-            val ytSource = audioPlayerManager.getYoutubeSourceManager() ?: return null
             val http = ytSource.`interface`
 
             http.use {
                 for (client in ytSource.clients) {
                     if (!client.supportsFormatLoading()) continue
                     try {
+                        http.context.setAttribute("yt-oauth-enabled-client", client.supportsOAuth())
                         val trackFormats = client.loadFormats(ytSource, http, videoId) ?: continue
                         val formats = trackFormats.formats
                         if (formats.isEmpty()) continue
@@ -116,35 +124,38 @@ object VideoSourceResolver {
                         // Look for a format with video
                         val videoFormats = formats.filter {
                             val mime = it.type?.mimeType ?: it.info?.mimeType ?: ""
-                            mime.startsWith("video/")
+                            mime.startsWith("video/") || it.itag in VIDEO_ITAGS
                         }
+
+                        if (videoFormats.isEmpty()) continue
 
                         val selected = videoFormats.filter { (it.type?.mimeType ?: "").contains("mp4") }
                             .minByOrNull { kotlin.math.abs(it.bitrate - 1_500_000) }
                             ?: videoFormats.minByOrNull { kotlin.math.abs(it.bitrate - 1_500_000) }
                             ?: videoFormats.firstOrNull()
-                            ?: formats.firstOrNull { it.url != null }
                             ?: continue
 
                         var finalUri = selected.url
-                        if (trackFormats.playerScriptUrl != null) {
+                        if (trackFormats.playerScriptUrl != null && client.requirePlayerScript()) {
                             try {
                                 finalUri = ytSource.cipherManager.resolveFormatUrl(http, trackFormats.playerScriptUrl, selected)
-                            } catch (_: Exception) {
-                                // Fallback to selected.url
+                            } catch (e: Exception) {
+                                logger.debug("Cipher resolution failed for video format: ${e.message}")
                             }
                         }
                         if (finalUri != null) {
-                            val transformed = client.transformPlaybackUri(selected.url, finalUri)
+                            val transformed = client.transformPlaybackUri(selected.url ?: finalUri, finalUri)
+                            logger.info("Resolved YouTube video stream for '$videoId' using client '${client.identifier}' (itag ${selected.itag})")
                             return transformed.toString()
                         }
-                    } catch (_: Exception) {
-                        // Continue to next client
+                    } catch (e: Exception) {
+                        logger.debug("Client '${client.identifier}' failed to load formats for video '$videoId': ${e.message}")
                     }
                 }
             }
             null
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.warn("Failed to resolve video stream from Lavaplayer for '$videoId': ${e.message}")
             null
         }
     }
