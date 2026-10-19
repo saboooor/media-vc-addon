@@ -28,7 +28,8 @@ koin-bom = { module = "io.insert-koin:koin-bom", version.ref = "koin-bom" }
 koin-core = { module = "io.insert-koin:koin-core" }
 
 pv = { module = "su.plo.voice.server:paper", version.ref = "pv" }
-pv-lavaplayer = { module = "su.plo:vc-addon-lavaplayer-lib", version.ref = "pv-lavaplayer" }
+# The Maven artifact retains its published name even though the plugin was renamed.
+pv-lavaplayer = { module = "su.plo:pv-addon-lavaplayer-lib", version.ref = "pv-lavaplayer" }
 voicechat-api = { module = "de.maxhenkel.voicechat:voicechat-api", version.ref = "svc" }
 
 paper-v11605 = { module = "com.destroystokyo.paper:paper-api", version.ref = "paper11605" }
