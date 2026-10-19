@@ -2,6 +2,7 @@ package su.plo.voice.discs
 
 import com.github.retrooper.packetevents.PacketEvents
 import com.github.retrooper.packetevents.event.PacketListenerPriority
+import de.maxhenkel.voicechat.api.BukkitVoicechatService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -11,6 +12,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.bukkit.Bukkit
+import org.bukkit.event.EventHandler
+import org.bukkit.event.Listener
+import org.bukkit.event.server.ServiceRegisterEvent
 import org.bukkit.plugin.java.JavaPlugin
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
@@ -36,6 +40,7 @@ import su.plo.voice.discs.event.JukeboxEventListener
 import su.plo.voice.discs.item.DiscHelper
 import su.plo.voice.discs.item.GoatHornHelper
 import su.plo.voice.discs.packet.CancelJukeboxPlayEvent
+import su.plo.voice.discs.svc.SvcDiscsPlugin
 import su.plo.voice.discs.utils.KOIN_INSTANCE
 import su.plo.voice.discs.utils.LavaplayerDebugLogging
 import su.plo.voice.discs.utils.extend.debug
@@ -49,13 +54,74 @@ import su.plo.voice.discs.v1_19_4.GoatHornListener
     version = BuildConstants.VERSION,
     authors = ["KPidS", "Apehum"]
 )
-class DiscsPlugin : JavaPlugin() {
+class DiscsPlugin : JavaPlugin(), Listener {
 
     private val addonName = "discs"
 
     private val voiceServer: PlasmoVoiceServer by injectPlasmoVoice()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var sourceLine: ServerSourceLine
+    private var svcPlugin: SvcDiscsPlugin? = null
+
+    private val pvServer: PlasmoVoiceServer?
+        get() = if (isPvAvailable()) {
+            try {
+                voiceServer
+            } catch (_: Throwable) {
+                null
+            }
+        } else {
+            null
+        }
+
+    private fun isPvAvailable(): Boolean {
+        return try {
+            Class.forName("su.plo.voice.api.server.PlasmoVoiceServer")
+            server.pluginManager.getPlugin("PlasmoVoice") != null
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun isSvcAvailable(): Boolean {
+        return try {
+            Class.forName("de.maxhenkel.voicechat.api.BukkitVoicechatService")
+            server.pluginManager.getPlugin("voicechat") != null
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun registerSvc() {
+        if (svcPlugin != null || !isSvcAvailable()) return
+        try {
+            val service = server.servicesManager.load(BukkitVoicechatService::class.java)
+            if (service != null) {
+                val plugin = SvcDiscsPlugin(this)
+                service.registerPlugin(plugin)
+                svcPlugin = plugin
+                if (isEnabled) bindSvc()
+                slF4JLogger.info("Successfully registered Simple Voice Chat discs integration")
+            }
+        } catch (e: Throwable) {
+            slF4JLogger.warn("Failed to register Simple Voice Chat integration", e)
+        }
+    }
+
+    private fun bindSvc() {
+        svcPlugin?.let { svc ->
+            KOIN_INSTANCE.loadModules(listOf(module {
+                single<SvcDiscsPlugin> { svc }
+            }))
+        }
+    }
+
+    @EventHandler
+    fun onServiceRegistered(event: ServiceRegisterEvent) {
+        if (isSvcAvailable() && event.provider.service == BukkitVoicechatService::class.java) {
+            registerSvc()
+        }
+    }
 
     private val discHelper: DiscHelper by lazy {
         val mcVersion = Bukkit.getServer().getMinecraftVersionInt()
@@ -105,25 +171,32 @@ class DiscsPlugin : JavaPlugin() {
     private lateinit var debugLogger: DebugLogger
 
     override fun onLoad() {
-        PlasmoVoiceServer.getAddonsLoader().load(this)
+        if (isPvAvailable()) {
+            try {
+                PlasmoVoiceServer.getAddonsLoader().load(this)
+            } catch (e: Throwable) {
+                slF4JLogger.warn("Failed to load Plasmo Voice addon: ${e.message}")
+            }
+        }
 
-        KOIN_INSTANCE =
-            koinApplication {
-                modules(
-                    module {
-                        single<PlasmoVoiceServer> { voiceServer }
-                        single<CoroutineScope> { scope }
-                        factory<ServerSourceLine> { sourceLine }
-                        factory<AddonConfig> { addonConfig }
-                        factory<PlasmoAudioPlayerManager> { audioPlayerManager }
-                        single<GoatHornHelper> { goatHornHelper }
-                        single<GoatHornManager> { goatHornManager }
-                        single<JavaPlugin> { this@DiscsPlugin }
-                        factory<DebugLogger> { debugLogger }
-                        single<DiscHelper> { discHelper }
-                    }
-                )
-            }.koin
+        registerSvc()
+
+        val koinModule = module {
+            pvServer?.let { server -> single<PlasmoVoiceServer> { server } }
+            single<CoroutineScope> { scope }
+            factory<AddonConfig> { addonConfig }
+            factory<PlasmoAudioPlayerManager> { audioPlayerManager }
+            single<GoatHornHelper> { goatHornHelper }
+            single<GoatHornManager> { goatHornManager }
+            single<JavaPlugin> { this@DiscsPlugin }
+            factory<DebugLogger> { debugLogger }
+            single<DiscHelper> { discHelper }
+            svcPlugin?.let { svc -> single<SvcDiscsPlugin> { svc } }
+        }
+
+        KOIN_INSTANCE = koinApplication {
+            modules(koinModule)
+        }.koin
     }
 
     @EventSubscribe
@@ -132,6 +205,11 @@ class DiscsPlugin : JavaPlugin() {
     }
 
     override fun onEnable() {
+        // SVC can enable after this STARTUP plugin and publish its service later.
+        server.pluginManager.registerEvents(this, this)
+        registerSvc()
+        bindSvc()
+
         loadConfig()
 
         val jukeboxEventListener = JukeboxEventListener()
@@ -161,8 +239,18 @@ class DiscsPlugin : JavaPlugin() {
         command.setExecutor(handler)
         command.tabCompleter = handler
 
-        val permissions = voiceServer.minecraftServer.permissionManager
-        permissions.registerBukkit("pv.addon.discs.play", PermissionDefault.TRUE)
+        val pvPermissions = pvServer?.minecraftServer?.permissionManager
+        pvPermissions?.registerBukkit("pv.addon.discs.play", PermissionDefault.TRUE)
+
+        listOf("pv.addon.discs.play", "vc.addon.discs.play").forEach { perm ->
+            if (Bukkit.getPluginManager().getPermission(perm) == null) {
+                try {
+                    Bukkit.getPluginManager().addPermission(
+                        org.bukkit.permissions.Permission(perm, org.bukkit.permissions.PermissionDefault.TRUE)
+                    )
+                } catch (_: Throwable) {}
+            }
+        }
 
         PacketEvents.getAPI().eventManager.registerListener(
             CancelJukeboxPlayEvent(jukeboxEventListener),
@@ -185,7 +273,11 @@ class DiscsPlugin : JavaPlugin() {
             withTimeoutOrNull(5_000L) { scope.coroutineContext.job.cancelAndJoin() }
         }
 
-        PlasmoVoiceServer.getAddonsLoader().unload(this)
+        if (isPvAvailable()) {
+            try {
+                PlasmoVoiceServer.getAddonsLoader().unload(this)
+            } catch (_: Throwable) {}
+        }
 
         if (::audioPlayerManager.isInitialized) {
             audioPlayerManager.shutdown()
@@ -195,22 +287,30 @@ class DiscsPlugin : JavaPlugin() {
     }
 
     private fun loadConfig() {
-        addonConfig = AddonConfig.loadConfig(voiceServer)
+        addonConfig = AddonConfig.loadConfig(pvServer, dataFolder)
         debugLogger = DebugLogger(McLoggerFactory.createLogger(slF4JLogger.name))
-        val debug = addonConfig.debug || voiceServer.debug()
+        val debug = addonConfig.debug || (pvServer?.debug() ?: false)
         debugLogger.enabled(debug)
         LavaplayerDebugLogging.setEnabled(debug)
 
-        voiceServer.sourceLineManager.unregister(addonName)
-        sourceLine = voiceServer.sourceLineManager.createBuilder(
-            this,
-            addonName,
-            "pv.activation.$addonName",
-            "plasmovoice:textures/icons/speaker_disc.png",
-            addonConfig.sourceLineWeight
-        ).apply {
-            setDefaultVolume(addonConfig.defaultSourceLineVolume)
-        }.build()
+        pvServer?.let { server ->
+            server.sourceLineManager.unregister(addonName)
+            sourceLine = server.sourceLineManager.createBuilder(
+                this,
+                addonName,
+                "pv.activation.$addonName",
+                "plasmovoice:textures/icons/speaker_disc.png",
+                addonConfig.sourceLineWeight
+            ).apply {
+                setDefaultVolume(addonConfig.defaultSourceLineVolume)
+            }.build()
+
+            try {
+                KOIN_INSTANCE.loadModules(listOf(module {
+                    single<ServerSourceLine> { sourceLine }
+                }))
+            } catch (_: Throwable) {}
+        }
 
         if (::audioPlayerManager.isInitialized) {
             audioPlayerManager.shutdown()

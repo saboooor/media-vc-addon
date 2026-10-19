@@ -15,3 +15,9 @@ inline fun <reified T : Any> KoinComponent.getter(): Getter<T> =
         override val value: T
             get() = get()
     }
+
+inline fun <reified T : Any> KoinComponent.getterOrNull(): Getter<T?> =
+    object : Getter<T?> {
+        override val value: T?
+            get() = getKoin().getOrNull()
+    }

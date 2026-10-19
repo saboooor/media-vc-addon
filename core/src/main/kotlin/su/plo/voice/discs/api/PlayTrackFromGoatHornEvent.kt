@@ -5,7 +5,7 @@ import su.plo.voice.api.server.player.VoicePlayer
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack
 
 class PlayTrackFromGoatHornEvent(
-    player: VoicePlayer,
+    player: VoicePlayer? = null,
     track: AudioTrack,
 ) : PlayTrackEvent(player, track) {
     override fun getHandlers(): HandlerList = handlerList

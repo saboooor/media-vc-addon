@@ -2,13 +2,16 @@ package su.plo.voice.discs.event
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.future.await
+import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.TextComponent
+import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
 import org.bukkit.GameMode
 import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.block.Block
 import org.bukkit.block.Jukebox
+import org.bukkit.entity.Player
 import org.bukkit.entity.minecart.HopperMinecart
 import org.bukkit.event.EventHandler
 import org.bukkit.event.EventPriority
@@ -21,6 +24,7 @@ import org.bukkit.event.player.PlayerInteractEvent
 import org.bukkit.event.world.ChunkLoadEvent
 import org.bukkit.event.world.ChunkUnloadEvent
 import org.bukkit.inventory.meta.ItemMeta
+import org.bukkit.plugin.java.JavaPlugin
 import org.koin.core.component.inject
 import su.plo.slib.api.chat.component.McTextComponent
 import su.plo.slib.api.chat.style.McTextStyle
@@ -32,7 +36,9 @@ import su.plo.voice.api.server.player.VoicePlayer
 import su.plo.voice.discs.AddonConfig
 import su.plo.voice.discs.PlasmoAudioPlayerManager
 import su.plo.voice.discs.api.PlayTrackFromDiscEvent
+import su.plo.voice.discs.bridge.VoiceBridgeCompat
 import su.plo.voice.discs.item.DiscHelper
+import su.plo.voice.discs.svc.SvcDiscsPlugin
 import su.plo.voice.discs.utils.DiscChunkUnloadCause
 import su.plo.voice.discs.utils.DiscEjectCause
 import su.plo.voice.discs.utils.DiscPullCause
@@ -44,11 +50,13 @@ import java.util.concurrent.ConcurrentHashMap
 class JukeboxEventListener : Listener, PluginKoinComponent {
 
     private val config: AddonConfig by getter()
-    private val voiceServer: PlasmoVoiceServer by inject()
+    private val plugin: JavaPlugin by inject()
+    private val voiceServer: PlasmoVoiceServer? by getterOrNull()
     private val scope: CoroutineScope by inject()
     private val audioPlayerManager: PlasmoAudioPlayerManager by getter()
     private val debugLogger: DebugLogger by getter()
-    private val sourceLine: ServerSourceLine by getter()
+    private val sourceLine: ServerSourceLine? by getterOrNull()
+    private val svcPlugin: SvcDiscsPlugin? by getterOrNull()
     private val discHelper: DiscHelper by inject()
 
     private val jobByBlock: MutableMap<Block, Job> = ConcurrentHashMap()
@@ -95,19 +103,36 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 Bukkit.getServer().getMinecraftVersionInt() < 12100 || !it.isSneaking
             } ?: return
 
-        val voicePlayer = player.asVoicePlayer(voiceServer) ?: return
-
-        if (!voicePlayer.instance.hasPermission("pv.addon.discs.play")) return
+        if (!player.hasPermission("pv.addon.discs.play") && !player.hasPermission("vc.addon.discs.play")) return
 
         val identifier = item.customDiscIdentifier(discHelper) ?: return
 
-        voicePlayer.instance.sendActionBar(
-            McTextComponent.translatable("pv.addon.discs.actionbar.loading")
-                .withStyle(McTextStyle.YELLOW)
-        )
+        val isPvPlayer = (svcPlugin?.hasClient(player.uniqueId) != true && VoiceBridgeCompat.isPlayerListeningOnPv(player.uniqueId, voiceServer))
+        val voicePlayer = if (isPvPlayer) voiceServer?.let { player.asVoicePlayer(it) } else null
+
+        if (voicePlayer != null) {
+            voicePlayer.instance.sendActionBar(
+                McTextComponent.translatable("pv.addon.discs.actionbar.loading")
+                    .withStyle(McTextStyle.YELLOW)
+            )
+        } else {
+            player.sendActionBar(Component.text("Loading...", NamedTextColor.YELLOW))
+        }
 
         jobByBlock[block]?.cancel(DiscReplaceCause())
-        jobByBlock[block] = playTrack(identifier, block, item.itemMeta, voicePlayer)
+        val playbackJob = playTrack(identifier, block, item.itemMeta, voicePlayer, player)
+        jobByBlock[block] = playbackJob
+        playbackJob.invokeOnCompletion { failure ->
+            if (failure != null && failure !is CancellationException) {
+                plugin.slF4JLogger.error("Failed to play disc at ${block.location}", failure)
+                scope.launch {
+                    suspendSyncFor(player, voiceServer, plugin) {
+                        player.sendActionBar(Component.text("Disc playback failed. Check the server console.", NamedTextColor.RED))
+                    }
+                }
+            }
+            jobByBlock.remove(block, playbackJob)
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -153,29 +178,37 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         block: Block,
         itemMeta: ItemMeta?,
         voicePlayer: VoicePlayer? = null,
+        player: Player? = null,
     ): Job = scope.launch {
 
         val track = try {
             audioPlayerManager.getTrack(identifier).await()
         } catch (e: Exception) {
-            // todo: send error to who?
-            voicePlayer?.instance?.sendActionBar(
-                McTextComponent.translatable(
-                    "pv.addon.discs.actionbar.track_not_found",
-                    e.message ?: "Unexpected error"
+            val errorMsg = e.message ?: "Unexpected error"
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendActionBar(
+                    McTextComponent.translatable(
+                        "pv.addon.discs.actionbar.track_not_found",
+                        errorMsg
+                    )
+                        .withStyle(McTextStyle.RED)
                 )
-                    .withStyle(McTextStyle.RED)
-            )
+            } else {
+                player?.sendActionBar(Component.text("Track not found: $errorMsg", NamedTextColor.RED))
+            }
 
-            debugLogger.log("Failed to load track", e)
+            if (e is CancellationException) throw e
+            plugin.slF4JLogger.error("Failed to load disc track", e)
 
-            voiceServer.minecraftServer.suspendSync(block.location) { block.asJukebox()?.eject() }
+            suspendSyncAt(block.location, voiceServer, plugin) { block.asJukebox()?.eject() }
             return@launch
         }
 
-        if (!voiceServer.minecraftServer.suspendSync(block.location) {
-            PlayTrackFromDiscEvent(voicePlayer, track, block).callEvent()
-        }) return@launch
+        if (voicePlayer != null) {
+            if (!suspendSyncAt(block.location, voiceServer, plugin) {
+                PlayTrackFromDiscEvent(voicePlayer, track, block).callEvent()
+            }) return@launch
+        }
 
         val trackName = itemMeta
             ?.lore()
@@ -184,21 +217,9 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             ?.content()
             ?: track.info.title
 
-        val world = voiceServer.minecraftServer.getWorld(block.world)
-
-        val pos = ServerPos3d(
-            world,
-            block.x.toDouble() + 0.5,
-            block.y.toDouble() + 1.5,
-            block.z.toDouble() + 0.5
-        )
-
-        val source = sourceLine.createStaticSource(pos, !config.monoSources)
-        source.setName(trackName)
-
-        val distance = when (config.distance.enableBeaconLikeDistance) {
+        val distance: Short = when (config.distance.enableBeaconLikeDistance) {
             true -> {
-                val beaconLevel = voiceServer.minecraftServer.suspendSync(block.location) {
+                val beaconLevel = suspendSyncAt(block.location, voiceServer, plugin) {
                     getBeaconLevel(block)
                 }
                 config.distance.beaconLikeDistanceList[beaconLevel]
@@ -207,25 +228,56 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             false -> config.distance.jukeboxDistance
         }
 
+        val pvSource = if (sourceLine != null && voiceServer != null) {
+            val world = voiceServer?.minecraftServer?.getWorld(block.world)
+            val pos = ServerPos3d(
+                world,
+                block.x.toDouble() + 0.5,
+                block.y.toDouble() + 1.5,
+                block.z.toDouble() + 0.5
+            )
+            val source = sourceLine?.createStaticSource(pos, !config.monoSources)
+            source?.setName(trackName)
+
+            if (config.distance.visualizeDistance) {
+                voicePlayer?.visualizeDistance(
+                    pos.toPosition(),
+                    distance.toInt(),
+                    0xf1c40f
+                )
+            }
+            source
+        } else null
+
+        val svcLoc = Location(block.world, block.x + 0.5, block.y + 1.5, block.z + 0.5)
+        val svcChannel = svcPlugin?.createLocationalChannel(svcLoc, distance.toFloat())?.apply {
+            setFilter { sp ->
+                svcPlugin?.hasClient(sp.uuid) == true
+            }
+        }
+
         val actionbarMessage = McTextComponent.translatable(
             "pv.addon.discs.actionbar.playing", trackName
         )
 
-        // todo: visualize distance to who?
-        if (config.distance.visualizeDistance) {
-            voicePlayer?.visualizeDistance(
-                pos.toPosition(),
-                distance.toInt(),
-                0xf1c40f
-            )
-        }
         debugLogger.log("Starting track job \"$trackName\" with distance $distance at ${block.location}")
 
-        voiceServer.minecraftServer.suspendSync(block.location) { block.world.getNearbyPlayers(block.location, distance.toDouble()) }
-            .map { it.asVoicePlayer(voiceServer) }
-            .forEach { it?.sendAnimatedActionBar(actionbarMessage) }
+        suspendSyncAt(block.location, voiceServer, plugin) { block.world.getNearbyPlayers(block.location, distance.toDouble()) }
+            .forEach { nearby ->
+                if ((svcPlugin?.hasClient(nearby.uniqueId) != true && VoiceBridgeCompat.isPlayerListeningOnPv(nearby.uniqueId, voiceServer))) {
+                    val vp = voiceServer?.let { nearby.asVoicePlayer(it) }
+                    vp?.sendAnimatedActionBar(actionbarMessage)
+                } else {
+                    nearby.sendActionBar(Component.text("Now playing: $trackName", NamedTextColor.GOLD))
+                }
+            }
 
-        val job = audioPlayerManager.startTrackJob(track, source, distance)
+        val job = audioPlayerManager.startTrackJob(
+            track = track,
+            pvSource = pvSource,
+            distance = distance,
+            svcChannel = svcChannel
+        )
         try {
             var lastExistenceCheck = System.currentTimeMillis()
             var lastRecordReset = System.currentTimeMillis()
@@ -237,7 +289,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
 
                 // Check if jukebox still exists every 3 seconds
                 if (timeSinceExistenceCheck >= 3_000L) {
-                    val stillExists = voiceServer.minecraftServer.suspendSync(block.location) {
+                    val stillExists = suspendSyncAt(block.location, voiceServer, plugin) {
                         block.type == Material.JUKEBOX
                     }
 
@@ -252,15 +304,13 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
 
                 // Reset record state every 30 seconds
                 if (timeSinceRecordReset >= 30_000L) {
-                    voiceServer.minecraftServer.suspendSync(block.location) {
-                        val jukebox = block.asJukebox() ?: return@suspendSync
-
+                    suspendSyncAt(block.location, voiceServer, plugin) {
+                        val jukebox = block.asJukebox() ?: return@suspendSyncAt
                         jukebox.setRecord(jukebox.record)
                         try {
                             val startPlayingMethod = jukebox.javaClass.getMethod("startPlaying")
                             startPlayingMethod.invoke(jukebox)
                         } catch (_: ReflectiveOperationException) {
-                            // ignore on old mc versions
                         }
                         jukebox.update()
                     }
@@ -270,27 +320,27 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 delay(100L)
             }
         } catch (e: CancellationException) {
-            debugLogger.log("Track \"${source.sourceInfo.name}\" at ${block.location} cancelled: ${e.message}")
+            debugLogger.log("Track \"$trackName\" at ${block.location} cancelled: ${e.message}")
             throw e
         } finally {
             withContext(NonCancellable) {
-                debugLogger.log("Track \"${source.sourceInfo.name}\" at ${block.location} ended")
+                debugLogger.log("Track \"$trackName\" at ${block.location} ended")
 
                 job.cancelAndJoin()
-                source.remove()
+                pvSource?.remove()
 
                 if (!scope.isActive) return@withContext
 
-                voiceServer.minecraftServer.suspendSync(block.location) {
-                    val jukebox = block.asJukebox() ?: return@suspendSync
-                    val currentJob = jobByBlock[block] ?: return@suspendSync
-                    if (currentJob != this@launch) return@suspendSync
+                suspendSyncAt(block.location, voiceServer, plugin) {
+                    val jukebox = block.asJukebox() ?: return@suspendSyncAt
+                    val currentJob = jobByBlock[block] ?: return@suspendSyncAt
+                    if (currentJob != this@launch) return@suspendSyncAt
                     jukebox.stopPlayingWithUpdate()
                 }
 
-                voiceServer.minecraftServer.suspendSync(block.location) {
-                    val currentJob = jobByBlock[block] ?: return@suspendSync
-                    if (currentJob != this@launch) return@suspendSync
+                suspendSyncAt(block.location, voiceServer, plugin) {
+                    val currentJob = jobByBlock[block] ?: return@suspendSyncAt
+                    if (currentJob != this@launch) return@suspendSyncAt
                     jobByBlock.remove(block)
                 }
             }

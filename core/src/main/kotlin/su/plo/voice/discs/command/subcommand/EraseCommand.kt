@@ -1,5 +1,7 @@
 package su.plo.voice.discs.command.subcommand
 
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
 import org.bukkit.command.CommandSender
 import org.bukkit.enchantments.Enchantment
@@ -13,11 +15,7 @@ import su.plo.voice.discs.api.PlayerEraseEvent
 import su.plo.voice.discs.command.SubCommand
 import su.plo.voice.discs.item.DiscHelper
 import su.plo.voice.discs.item.GoatHornHelper
-import su.plo.voice.discs.utils.extend.allowGrindstone
-import su.plo.voice.discs.utils.extend.asPlayer
-import su.plo.voice.discs.utils.extend.asVoicePlayer
-import su.plo.voice.discs.utils.extend.getMinecraftVersionInt
-import su.plo.voice.discs.utils.extend.sendTranslatable
+import su.plo.voice.discs.utils.extend.*
 
 class EraseCommand : SubCommand() {
 
@@ -32,26 +30,35 @@ class EraseCommand : SubCommand() {
 
     override fun execute(sender: CommandSender, arguments: Array<out String>) {
 
-        val voicePlayer = sender.asPlayer()?.asVoicePlayer(voiceServer) ?: return
-
-        if (!voicePlayer.instance.hasPermission("pv.addon.discs.erase")) {
-            voicePlayer.instance.sendTranslatable("pv.addon.discs.error.no_permission")
+        val player = sender.asPlayer() ?: run {
+            sender.sendMessage("Player only command")
             return
         }
+        val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
 
-        val player = sender.asPlayer() ?: run {
-            voicePlayer.instance.sendTranslatable("pv.error.player_only_command")
+        if (!player.hasPermission("pv.addon.discs.erase") && !player.hasPermission("vc.addon.discs.erase")) {
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable("pv.addon.discs.error.no_permission")
+            } else {
+                player.sendMessage(Component.text("No permission", NamedTextColor.RED))
+            }
             return
         }
 
         val item = player.inventory.itemInMainHand
             .takeIf { (discHelper.isRecord(it) || (config.goatHorn.enabled && it.type.name == "GOAT_HORN")) && it.hasItemMeta() }
             ?: run {
-                voicePlayer.instance.sendTranslatable("pv.addon.discs.error.erase_wrong_item")
+                if (voicePlayer != null) {
+                    voicePlayer.instance.sendTranslatable("pv.addon.discs.error.erase_wrong_item")
+                } else {
+                    player.sendMessage(Component.text("Can't erase this item", NamedTextColor.RED))
+                }
                 return
             }
 
-        if (!PlayerEraseEvent(voicePlayer, item).callEvent()) return
+        if (voicePlayer != null) {
+            if (!PlayerEraseEvent(voicePlayer, item).callEvent()) return
+        }
 
         item.editMeta { meta ->
             meta.removeItemFlags(*ItemFlag.values())
@@ -95,9 +102,13 @@ class EraseCommand : SubCommand() {
             pdc.remove(AddonKeys.instrumentKey)
         }
 
-        voicePlayer.instance.sendTranslatable("pv.addon.discs.success.erase")
+        if (voicePlayer != null) {
+            voicePlayer.instance.sendTranslatable("pv.addon.discs.success.erase")
+        } else {
+            player.sendMessage(Component.text("Custom audio erased", NamedTextColor.GREEN))
+        }
     }
 
     override fun checkCanExecute(sender: CommandSender): Boolean =
-        sender.hasPermission("pv.addon.discs.erase")
+        sender.hasPermission("pv.addon.discs.erase") || sender.hasPermission("vc.addon.discs.erase")
 }

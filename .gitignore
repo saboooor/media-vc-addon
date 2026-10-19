@@ -12,8 +12,7 @@ out/
 .classpath
 .project
 .settings/
-plugin/bin/
-api/bin/
+bin/
 
 # Compiled class file
 *.class
@@ -120,3 +119,6 @@ run*/
 build
 .gradle
 /*.jar
+
+# JVM heap dumps
+*.hprof

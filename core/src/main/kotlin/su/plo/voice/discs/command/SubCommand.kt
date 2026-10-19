@@ -2,6 +2,7 @@ package su.plo.voice.discs.command
 
 import kotlinx.coroutines.CoroutineScope
 import org.bukkit.command.CommandSender
+import org.bukkit.plugin.java.JavaPlugin
 import org.koin.core.component.inject
 import su.plo.slib.api.permission.PermissionDefault
 import su.plo.voice.api.logging.DebugLogger
@@ -11,10 +12,12 @@ import su.plo.voice.discs.PlasmoAudioPlayerManager
 import su.plo.voice.discs.utils.PluginKoinComponent
 import su.plo.voice.discs.utils.extend.getValue
 import su.plo.voice.discs.utils.extend.getter
+import su.plo.voice.discs.utils.extend.getterOrNull
 
 abstract class SubCommand : PluginKoinComponent {
 
-    protected val voiceServer: PlasmoVoiceServer by inject()
+    protected val plugin: JavaPlugin by inject()
+    protected val voiceServer: PlasmoVoiceServer? by getterOrNull()
     protected val config: AddonConfig by getter()
     protected val audioPlayerManager: PlasmoAudioPlayerManager by getter()
     protected val debugLogger: DebugLogger by getter()

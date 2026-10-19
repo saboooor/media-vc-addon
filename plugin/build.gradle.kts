@@ -143,7 +143,8 @@ bukkit {
     apiVersion = "1.16"
     authors = listOf("KPidS", "Apehum")
 
-    depend = listOf("PlasmoVoice", "packetevents", "pv-addon-lavaplayer-lib")
+    depend = listOf("packetevents", "pv-addon-lavaplayer-lib")
+    softDepend = listOf("PlasmoVoice", "voicechat", "voice-bridge")
 
     foliaSupported = true
 

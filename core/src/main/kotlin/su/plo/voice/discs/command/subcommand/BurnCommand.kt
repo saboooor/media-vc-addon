@@ -8,6 +8,7 @@ import net.kyori.adventure.text.format.TextDecoration
 import org.bukkit.Bukkit
 import org.bukkit.command.CommandSender
 import org.bukkit.enchantments.Enchantment
+import org.bukkit.entity.Player
 import org.bukkit.inventory.ItemFlag
 import org.bukkit.inventory.ItemStack
 import org.bukkit.persistence.PersistentDataType
@@ -23,16 +24,7 @@ import su.plo.voice.discs.api.PrePlayerBurnEvent
 import su.plo.voice.discs.command.SubCommand
 import su.plo.voice.discs.item.DiscHelper
 import su.plo.voice.discs.item.GoatHornHelper
-import su.plo.voice.discs.utils.extend.asPlayer
-import su.plo.voice.discs.utils.extend.asVoicePlayer
-import su.plo.voice.discs.utils.extend.forbidGrindstone
-import su.plo.voice.discs.utils.extend.getMinecraftVersionInt
-import su.plo.voice.discs.utils.extend.hasIdentifier
-import su.plo.voice.discs.utils.extend.isCustomDisc
-import su.plo.voice.discs.utils.extend.render
-import su.plo.voice.discs.utils.extend.sendTranslatable
-import su.plo.voice.discs.utils.extend.suspendSync
-import su.plo.voice.discs.utils.extend.toPlainText
+import su.plo.voice.discs.utils.extend.*
 
 class BurnCommand : SubCommand() {
 
@@ -48,27 +40,42 @@ class BurnCommand : SubCommand() {
     )
 
     override fun suggest(source: CommandSender, arguments: Array<out String>): List<String> {
-        val voicePlayer = source.asPlayer()?.asVoicePlayer(voiceServer) ?: return listOf()
+        val player = source.asPlayer() ?: return listOf()
+        val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
 
-        if (!voicePlayer.instance.hasPermission("pv.addon.discs.burn")) return listOf()
+        if (!player.hasPermission("pv.addon.discs.burn") && !player.hasPermission("vc.addon.discs.burn")) return listOf()
 
         if (arguments.size < 2) return listOf()
-        if (arguments.size == 2) return listOf(
-            McTextComponent.translatable("pv.addon.discs.arg.url")
-                .render(voicePlayer, voiceServer)
-                .toPlainText()
-        )
-        return listOf(
-            McTextComponent.translatable("pv.addon.discs.arg.label")
-                .render(voicePlayer, voiceServer)
-                .toPlainText()
-        )
+        if (arguments.size == 2) {
+            return if (voicePlayer != null && voiceServer != null) {
+                listOf(
+                    McTextComponent.translatable("pv.addon.discs.arg.url")
+                        .render(voicePlayer, voiceServer!!)
+                        .toPlainText()
+                )
+            } else {
+                listOf("<url>")
+            }
+        }
+        return if (voicePlayer != null && voiceServer != null) {
+            listOf(
+                McTextComponent.translatable("pv.addon.discs.arg.label")
+                    .render(voicePlayer, voiceServer!!)
+                    .toPlainText()
+            )
+        } else {
+            listOf("[label]")
+        }
     }
 
-    private fun checkBurnable(voicePlayer: VoicePlayer, item: ItemStack): Boolean {
+    private fun checkBurnable(player: Player, voicePlayer: VoicePlayer?, item: ItemStack): Boolean {
 
         if (!discHelper.isRecord(item) && !(config.goatHorn.enabled && item.type.name == "GOAT_HORN")) {
-            voicePlayer.instance.sendTranslatable("pv.addon.discs.error.not_a_record")
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable("pv.addon.discs.error.not_a_record")
+            } else {
+                player.sendMessage(Component.text("You need to have a record in your hand to burn it", NamedTextColor.RED))
+            }
             return false
         }
 
@@ -76,10 +83,15 @@ class BurnCommand : SubCommand() {
             config.burnableTag.requireBurnableTag &&
             (
                 !item.itemMeta.persistentDataContainer.has(AddonKeys.burnableKey, PersistentDataType.BYTE) &&
-                !voicePlayer.instance.hasPermission("pv.addon.discs.burn.burnable_check_bypass")
+                !player.hasPermission("pv.addon.discs.burn.burnable_check_bypass") &&
+                !player.hasPermission("vc.addon.discs.burn.burnable_check_bypass")
             )
         ) {
-            voicePlayer.instance.sendTranslatable("pv.addon.discs.error.not_burnable")
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable("pv.addon.discs.error.not_burnable")
+            } else {
+                player.sendMessage(Component.text("This record is not burnable", NamedTextColor.RED))
+            }
             return false
         }
 
@@ -88,31 +100,45 @@ class BurnCommand : SubCommand() {
 
     override fun execute(sender: CommandSender, arguments: Array<out String>) { scope.launch {
 
-        val voicePlayer = sender.asPlayer()?.asVoicePlayer(voiceServer) ?: return@launch
+        val player = sender.asPlayer() ?: run {
+            sender.sendMessage("Player only command")
+            return@launch
+        }
+        val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
 
-        if (!voicePlayer.instance.hasPermission("pv.addon.discs.burn")) {
-            voicePlayer.instance.sendTranslatable("pv.addon.discs.error.no_permission")
+        if (!player.hasPermission("pv.addon.discs.burn") && !player.hasPermission("vc.addon.discs.burn")) {
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable("pv.addon.discs.error.no_permission")
+            } else {
+                player.sendMessage(Component.text("No permission", NamedTextColor.RED))
+            }
             return@launch
         }
 
         val identifier = arguments.getOrNull(1) ?: run {
-            voicePlayer.instance.sendTranslatable("pv.addon.discs.usage.burn")
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable("pv.addon.discs.usage.burn")
+            } else {
+                player.sendMessage(Component.text("Usage: /disc burn <url> [label]", NamedTextColor.RED))
+            }
             return@launch
         }
 
-        val player = sender.asPlayer() ?: run {
-            voicePlayer.instance.sendTranslatable("pv.error.player_only_command")
-            return@launch
+        if (voicePlayer != null) {
+            if (!suspendSyncFor(player, voiceServer, plugin) {
+                PrePlayerBurnEvent(voicePlayer, identifier).callEvent()
+            }) return@launch
         }
-
-        if (!voiceServer.minecraftServer.suspendSync(player) {
-            PrePlayerBurnEvent(voicePlayer, identifier).callEvent()
-        }) return@launch
 
         val track = try {
             audioPlayerManager.getTrack(identifier).await()
         } catch (e: Exception) {
-            voicePlayer.instance.sendTranslatable("pv.addon.discs.error.get_track_fail", e.message ?: "Unexpected error")
+            val errorMsg = e.message ?: "Unexpected error"
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable("pv.addon.discs.error.get_track_fail", errorMsg)
+            } else {
+                player.sendMessage(Component.text("Failed to get track: $errorMsg", NamedTextColor.RED))
+            }
             debugLogger.log("Failed to load track", e)
             return@launch
         }
@@ -121,24 +147,30 @@ class BurnCommand : SubCommand() {
             .joinToString(" ")
             .ifEmpty { track.info.title }
 
-        val item = voiceServer.minecraftServer.suspendSync(player) { player.inventory.itemInMainHand }
+        val item = suspendSyncFor(player, voiceServer, plugin) { player.inventory.itemInMainHand }
 
-        if (!checkBurnable(voicePlayer, item)) return@launch
+        if (!checkBurnable(player, voicePlayer, item)) return@launch
 
         val isGoatHorn = item.type.name == "GOAT_HORN"
 
         if (isGoatHorn && !hornManager.canPlay(track)) {
-            voicePlayer.instance.sendTranslatable(
-                "pv.addon.discs.error.horn_too_long", config.goatHorn.maxDurationSeconds
-            )
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable(
+                    "pv.addon.discs.error.horn_too_long", config.goatHorn.maxDurationSeconds
+                )
+            } else {
+                player.sendMessage(Component.text("Track is too long. Maximum duration in seconds: ${config.goatHorn.maxDurationSeconds}", NamedTextColor.RED))
+            }
             return@launch
         }
 
-        if (!voiceServer.minecraftServer.suspendSync(player) {
+        if (voicePlayer != null) {
+            if (!suspendSyncFor(player, voiceServer, plugin) {
                 PlayerBurnEvent(voicePlayer, track, item).callEvent()
             }) return@launch
+        }
 
-        voiceServer.minecraftServer.suspendSync(player.location) {
+        suspendSyncAt(player.location, voiceServer, plugin) {
             if (Bukkit.getServer().getMinecraftVersionInt() >= 12103) {
                 discHelper.showSongTooltip(item, false)
             }
@@ -198,9 +230,14 @@ class BurnCommand : SubCommand() {
                 hornHelper.setEmptyInstrument(item)
             }
 
-            voicePlayer.instance.sendTranslatable("pv.addon.discs.success.burn", name)
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable("pv.addon.discs.success.burn", name)
+            } else {
+                player.sendMessage(Component.text("Disc burned. Label: $name", NamedTextColor.GREEN))
+            }
         }
     }}
 
-    override fun checkCanExecute(sender: CommandSender): Boolean = sender.hasPermission("pv.addon.discs.burn")
+    override fun checkCanExecute(sender: CommandSender): Boolean =
+        sender.hasPermission("pv.addon.discs.burn") || sender.hasPermission("vc.addon.discs.burn")
 }

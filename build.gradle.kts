@@ -28,6 +28,8 @@ allprojects {
         maven("https://repo.dmulloy2.net/repository/public/")
 
         maven("https://jitpack.io/")
+
+        maven("https://maven.maxhenkel.de/repository/public")
     }
 
     dependencies {
@@ -38,5 +40,6 @@ allprojects {
         compileOnly(rootProject.libs.packetevents)
         compileOnly(rootProject.libs.pv)
         compileOnly(rootProject.libs.pv.lavaplayer)
+        compileOnly(rootProject.libs.voicechat.api)
     }
 }

@@ -1,6 +1,15 @@
 package su.plo.voice.discs
 
+import de.maxhenkel.voicechat.api.audiochannel.AudioChannel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import org.bukkit.plugin.java.JavaPlugin
 import org.koin.core.component.inject
 import su.plo.slib.api.logging.McLoggerFactory
@@ -13,9 +22,12 @@ import su.plo.voice.discs.config.YoutubeClient
 import su.plo.voice.discs.utils.PluginKoinComponent
 import su.plo.voice.discs.utils.extend.getValue
 import su.plo.voice.discs.utils.extend.getter
+import su.plo.voice.discs.utils.extend.getterOrNull
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.AudioLoadResultHandler
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.DefaultAudioPlayerManager
+import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.AudioPlayer
+import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.event.AudioEventAdapter
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.source.AudioSourceManager
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.source.bandcamp.BandcampAudioSourceManager
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.source.beam.BeamAudioSourceManager
@@ -49,48 +61,126 @@ import kotlin.concurrent.fixedRateTimer
 class PlasmoAudioPlayerManager : PluginKoinComponent {
 
     private val plugin: JavaPlugin by inject()
-    private val voiceServer: PlasmoVoiceServer by inject()
+    private val scope: CoroutineScope by inject()
+    private val voiceServer: PlasmoVoiceServer? by getterOrNull()
     private val debugLogger: DebugLogger by getter()
     private val config: AddonConfig by getter()
 
     private val lavaPlayerManager: AudioPlayerManager = DefaultAudioPlayerManager()
-    private val encryption = voiceServer.defaultEncryption
+    private val encryption get() = voiceServer?.defaultEncryption
 
     fun shutdown() {
         lavaPlayerManager.shutdown()
     }
 
-    fun startTrackJob(track: AudioTrack, source: ServerProximitySource<*>, distance: Short): Job {
+    fun startTrackJob(
+        track: AudioTrack,
+        pvSource: ServerProximitySource<*>? = null,
+        distance: Short = 0,
+        svcChannel: AudioChannel? = null
+    ): Job {
+        if (pvSource != null && svcChannel != null) {
+            // Keep PV's sender lifecycle (including source state) intact. Each backend
+            // consumes its own track so neither can steal frames from the other.
+            val svcTrack = track.makeClone().apply { position = track.position }
+            return scope.launch {
+                var pvJob: Job? = null
+                var svcJob: Job? = null
+                try {
+                    pvJob = startTrackJob(track, pvSource, distance)
+                    svcJob = startTrackJob(svcTrack, svcChannel = svcChannel)
+                    svcJob.join()
+                } finally {
+                    withContext(NonCancellable) {
+                        svcJob?.cancelAndJoin()
+                        pvJob?.cancelAndJoin()
+                    }
+                }
+            }
+        }
+
         val player = lavaPlayerManager.createPlayer()
+        player.addListener(object : AudioEventAdapter() {
+            override fun onTrackException(player: AudioPlayer, track: AudioTrack, exception: FriendlyException) {
+                plugin.slF4JLogger.error("Disc audio stream failed: ${track.info.title}", exception)
+            }
+
+            override fun onTrackStuck(player: AudioPlayer, track: AudioTrack, thresholdMs: Long) {
+                plugin.slF4JLogger.warn("Disc audio stream stalled for ${thresholdMs}ms: ${track.info.title}")
+            }
+        })
         player.playTrack(track)
 
-        debugLogger.log("Starting track \"${source.sourceInfo.name}\" on $source")
+        val trackTitle = pvSource?.sourceInfo?.name ?: track.info.title
+        debugLogger.log("Starting track \"$trackTitle\" on pvSource=$pvSource svcChannel=$svcChannel")
 
-        val frameProvider = object : AudioFrameProvider {
-            override fun provide20ms(): AudioFrameResult =
-                if (
-                    track.state == AudioTrackState.FINISHED ||
-                    (track.state == AudioTrackState.INACTIVE && track.position > 0)
-                ) {
-                    AudioFrameResult.Finished
-                } else {
-                    val frame = player.provide()?.data?.let {
-                        encryption.encrypt(it)
+        if (pvSource != null) {
+            val enc = encryption
+            val frameProvider = object : AudioFrameProvider {
+                override fun provide20ms(): AudioFrameResult =
+                    if (
+                        track.state == AudioTrackState.FINISHED ||
+                        (track.state == AudioTrackState.INACTIVE && track.position > 0)
+                    ) {
+                        AudioFrameResult.Finished
+                    } else {
+                        val audioFrame = player.provide()
+                        val rawData = audioFrame?.data
+                        val frame = rawData?.let {
+                            enc?.encrypt(it) ?: it
+                        }
+
+                        AudioFrameResult.Provided(frame)
                     }
+            }
 
-                    AudioFrameResult.Provided(frame)
+            val sender = pvSource.createAudioSender(frameProvider, distance)
+                .also { it.start() }
+            val job = sender.job ?: throw IllegalStateException("AudioSender job is not started")
+            sender.onStop {
+                player.destroy()
+                pvSource.remove()
+            }
+
+            return job
+        } else if (svcChannel != null) {
+            val job = scope.launch(Dispatchers.Default) {
+                try {
+                    var nextTime = System.nanoTime()
+                    while (isActive) {
+                        if (
+                            track.state == AudioTrackState.FINISHED ||
+                            (track.state == AudioTrackState.INACTIVE && track.position > 0)
+                        ) {
+                            break
+                        }
+
+                        val audioFrame = player.provide(20, java.util.concurrent.TimeUnit.MILLISECONDS)
+                        if (audioFrame != null) {
+                            svcChannel.send(audioFrame.data)
+                        }
+
+                        nextTime += 20_000_000L
+                        val sleepTime = (nextTime - System.nanoTime()) / 1_000_000L
+                        if (sleepTime > 0) {
+                            delay(sleepTime)
+                        } else if (sleepTime < -100L) {
+                            nextTime = System.nanoTime()
+                        }
+                    }
+                } finally {
+                    try {
+                        svcChannel.flush()
+                    } finally {
+                        player.destroy()
+                    }
                 }
-        }
-
-        val sender = source.createAudioSender(frameProvider, distance)
-            .also { it.start() }
-        val job = sender.job ?: throw IllegalStateException("AudioSender job is not started")
-        sender.onStop {
+            }
+            return job
+        } else {
             player.destroy()
-            source.remove()
+            throw IllegalStateException("Neither Plasmo Voice nor Simple Voice Chat audio destination provided")
         }
-
-        return job
     }
 
     val noMatchesException = FriendlyException(

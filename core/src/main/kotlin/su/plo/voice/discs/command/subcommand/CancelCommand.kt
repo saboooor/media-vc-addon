@@ -1,5 +1,7 @@
 package su.plo.voice.discs.command.subcommand
 
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
 import org.bukkit.command.CommandSender
 import org.koin.core.component.inject
@@ -8,12 +10,7 @@ import su.plo.slib.api.permission.PermissionDefault
 import su.plo.voice.discs.GoatHornManager
 import su.plo.voice.discs.command.SubCommand
 import su.plo.voice.discs.utils.HornCancelCommandCause
-import su.plo.voice.discs.utils.extend.asPlayer
-import su.plo.voice.discs.utils.extend.asVoicePlayer
-import su.plo.voice.discs.utils.extend.launchAndForget
-import su.plo.voice.discs.utils.extend.render
-import su.plo.voice.discs.utils.extend.sendTranslatable
-import su.plo.voice.discs.utils.extend.toPlainText
+import su.plo.voice.discs.utils.extend.*
 
 class CancelCommand : SubCommand() {
 
@@ -28,41 +25,64 @@ class CancelCommand : SubCommand() {
 
     override fun execute(sender: CommandSender, arguments: Array<out String>) = scope.launchAndForget {
         val player = sender.asPlayer() ?: return@launchAndForget
-        val voicePlayer = player.asVoicePlayer(voiceServer) ?: return@launchAndForget
+        val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
 
-        if (!voicePlayer.instance.hasPermission("pv.addon.discs.cancel")) {
-            voicePlayer.instance.sendTranslatable("pv.addon.discs.error.no_permission")
+        if (!player.hasPermission("pv.addon.discs.cancel") && !player.hasPermission("vc.addon.discs.cancel")) {
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable("pv.addon.discs.error.no_permission")
+            } else {
+                player.sendMessage(Component.text("You don't have permission to do this.", NamedTextColor.RED))
+            }
             return@launchAndForget
         }
 
+        val hasOtherPerm = player.hasPermission("pv.addon.discs.cancel.other") || player.hasPermission("vc.addon.discs.cancel.other")
+
         val target = arguments.getOrNull(1)
-            ?.takeIf { sender.hasPermission("pv.addon.discs.cancel.other") }
+            ?.takeIf { hasOtherPerm }
             ?.let {
                 Bukkit.getPlayer(it) ?: run {
-                    voicePlayer.instance.sendTranslatable("pv.addon.discs.error.player_not_found")
+                    if (voicePlayer != null) {
+                        voicePlayer.instance.sendTranslatable("pv.addon.discs.error.player_not_found")
+                    } else {
+                        player.sendMessage(Component.text("Player not found.", NamedTextColor.RED))
+                    }
                     return@launchAndForget
                 }
             }
             ?: player
 
         if (hornManager.cancelTrack(target, HornCancelCommandCause()) != null) {
-            voicePlayer.instance.sendTranslatable("pv.addon.discs.success.canceled")
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable("pv.addon.discs.success.canceled")
+            } else {
+                player.sendMessage(Component.text("Playback cancelled.", NamedTextColor.GREEN))
+            }
         } else {
-            voicePlayer.instance.sendTranslatable("pv.addon.discs.error.nothing_to_cancel")
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable("pv.addon.discs.error.nothing_to_cancel")
+            } else {
+                player.sendMessage(Component.text("Nothing to cancel.", NamedTextColor.RED))
+            }
         }
     }
 
     override fun suggest(source: CommandSender, arguments: Array<out String>): List<String> {
-        val voicePlayer = source.asVoicePlayer(voiceServer) ?: return emptyList()
-        val otherPermission = source.hasPermission("pv.addon.discs.cancel.other")
+        val player = source.asPlayer() ?: return emptyList()
+        val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
+        val otherPermission = source.hasPermission("pv.addon.discs.cancel.other") || source.hasPermission("vc.addon.discs.cancel.other")
 
         val nick = arguments.getOrNull(1) ?: run {
             return if (otherPermission) {
-                listOf(
-                    McTextComponent.translatable("pv.addon.discs.arg.nick")
-                        .render(voicePlayer, voiceServer)
-                        .toPlainText()
-                )
+                if (voicePlayer != null && voiceServer != null) {
+                    listOf(
+                        McTextComponent.translatable("pv.addon.discs.arg.nick")
+                            .render(voicePlayer, voiceServer!!)
+                            .toPlainText()
+                    )
+                } else {
+                    listOf("<player>")
+                }
             } else {
                 emptyList()
             }
@@ -75,5 +95,5 @@ class CancelCommand : SubCommand() {
     }
 
     override fun checkCanExecute(sender: CommandSender): Boolean =
-        sender.hasPermission("pv.addon.discs.cancel")
+        sender.hasPermission("pv.addon.discs.cancel") || sender.hasPermission("vc.addon.discs.cancel")
 }

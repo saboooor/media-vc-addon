@@ -310,17 +310,24 @@ class AddonConfig {
     val burnableTag = BurnableTag()
 
     companion object {
-        fun loadConfig(server: PlasmoVoiceServer): AddonConfig {
+        fun loadConfig(server: PlasmoVoiceServer?, dataFolder: File? = null): AddonConfig {
+            val addonFolder = if (server != null) {
+                getAddonFolder(server.minecraftServer)
+            } else {
+                dataFolder ?: File("plugins/vc-addon-discs")
+            }
 
-            val addonFolder = getAddonFolder(server.minecraftServer)
-
-            server.languages.register(
-                URI.create("https://github.com/plasmoapp/plasmo-voice-crowdin/archive/refs/heads/addons.zip").toURL(),
-                "server/discs.toml",
-                { resourcePath: String -> getLanguageResource(resourcePath)
-                    ?: throw Exception("Can't load language resource") },
-                File(addonFolder, "languages")
-            )
+            if (server != null) {
+                try {
+                    server.languages.register(
+                        URI.create("https://github.com/plasmoapp/plasmo-voice-crowdin/archive/refs/heads/addons.zip").toURL(),
+                        "server/discs.toml",
+                        { resourcePath: String -> getLanguageResource(resourcePath)
+                            ?: throw Exception("Can't load language resource") },
+                        File(addonFolder, "languages")
+                    )
+                } catch (_: Throwable) {}
+            }
 
             val configFile = File(addonFolder, "discs.toml")
 
@@ -330,7 +337,7 @@ class AddonConfig {
 
         @Throws(IOException::class)
         private fun getLanguageResource(resourcePath: String): InputStream? {
-            return javaClass.classLoader.getResourceAsStream(String.format("discs/%s", resourcePath))
+            return AddonConfig::class.java.classLoader.getResourceAsStream(String.format("discs/%s", resourcePath))
         }
 
         private val toml = ConfigurationProvider.getProvider<ConfigurationProvider>(
