@@ -2,11 +2,9 @@ package su.plo.voice.discs
 
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.AudioPlayer
 import java.util.concurrent.CopyOnWriteArrayList
-import su.plo.voice.discs.audio.YoutubeSourceQuality
 
 /** One logical playback, shared by the PV and SVC decoders. */
-class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0, initialSourceQuality: YoutubeSourceQuality = YoutubeSourceQuality.BEST) {
-    @Volatile var sourceQuality = initialSourceQuality
+class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
     @Volatile var sourceFormatDescription: String? = null
     @Volatile var sourceAvailableFormats: String? = null
     @Volatile private var gain = initialGain.coerceIn(0.0, 1.0)

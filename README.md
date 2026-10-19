@@ -34,14 +34,14 @@ On Minecraft 26.3, burned horns have their vanilla instrument component removed 
 
 `/disc erase` – Return a custom disc to a normal one.
 
-`/disc playlist <playlisturl> [shuffle|reverse]` – Load a playlist, then right-click a chest directly above an empty jukebox within two minutes. Each eligible blank music disc is burned with the next playlist track, in chest slot order, and the chest queue starts playing. Requires both `pv.addon.discs.playlist` and `pv.addon.discs.burn`, plus `pv.addon.discs.play` to start playback.
+`/disc playlist <playlisturl> [shuffle|reverse]` – Load a playlist, then right-click a chest directly above an empty jukebox within two minutes. Each eligible unstacked music disc is overwritten with the next playlist track, in chest slot order, and the chest queue starts playing. Requires both `pv.addon.discs.playlist` and `pv.addon.discs.burn`, plus `pv.addon.discs.play` to start playback.
 
-Use `shuffle` to select random songs from the full playlist without repeating entries, or `reverse` to burn from the last track toward the first. Without an option, tracks follow the original playlist order. The chest's available blank discs determine how many tracks are burned.
+Use `shuffle` to select random songs from the full playlist without repeating entries, or `reverse` to burn from the last track toward the first. Without an option, tracks follow the original playlist order. The chest's available music discs determine how many tracks are burned.
 
 Chest queues:
 
 - Place a chest (single or double) directly above a jukebox and put music discs inside. Sneak-right-click the chest to open it.
-- Playlist burning skips already burned discs, non-disc items, stacks, and discs that fail the configured burnable-tag requirement. One disc receives one track; extra tracks are left unburned when discs run out. Existing burned discs are preserved.
+- Playlist burning skips non-disc items, stacks, and discs that fail the configured burnable-tag requirement. One disc receives one track; extra tracks are left unburned when discs run out. Existing burned discs are overwritten.
 - Right-click the chest to play all its burned discs in slot order, including any existing burned discs. Discs remain in the chest and are never consumed or moved into the jukebox.
 - Tracks crossfade over three seconds by default. Open Crossfade settings from the jukebox dialog and use its -1s/+1s buttons to adjust it from 0–30 seconds, or Enable/Disable crossfade to toggle it. The dialog shows the current setting. Changes apply to upcoming transitions in that queue; an ongoing fade finishes at its original duration. Each new queue starts at three seconds. Live streams use normal transitions. Pause and volume affect both tracks during a fade; skipping or stopping cancels the transition. Network loading delays can shorten the overlap.
 - Playback uses a snapshot of the discs when the queue starts. Chest edits take effect on the next queue. The queue plays once; click the chest again to replay it.
@@ -62,14 +62,14 @@ Source line weight/default volume, HTTP proxy, YouTube settings, local source se
 
 Right-click a jukebox with a custom disc or an active chest queue to open a native Paper dialog, following Lumistones' multi-action dialog pattern. The click opens controls instead of ejecting the disc.
 
-- Use a four-column button menu to pause/resume, select queue tracks, seek backward/forward 15 seconds, and adjust volume from 0–100%.
-- Click a queue track to jump to it, or stop playback entirely. Play/Pause, Refresh, Stop playback, and Audio quality share the first row, with Crossfade settings immediately after them.
+- Use a two-column button menu to pause/resume, select queue tracks, seek backward/forward 15 seconds, and adjust volume from 0–100%.
+- Click a queue track to jump to it, or stop playback entirely. Play/Pause, Refresh, and Stop playback share the first row, with Crossfade settings immediately after them.
 - Eject the disc explicitly, or play a stopped disc again.
 - View the complete chest queue as clickable track buttons with disc icons, numbered tracks, and the current track highlighted. Click a track to jump to it immediately (clicking the current track restarts it). Playback continues from the selected track in slot order.
 - A floating text display above the jukebox updates progress automatically four times per second, with percentage and elapsed/total time. Live streams show a LIVE indicator and elapsed time. Displays are removed when playback stops, the chunk unloads, or the plugin disables. Text displays require Minecraft 1.19.4 or newer.
 - Buttons use Minecraft item icons, following Lumistones' sprite labels.
 - Crossfade settings open in their own dialog, with a button to return to playback.
-- Audio quality selects the actual YouTube source stream: Best available (default), Balanced (up to 128 kbps), or Data saver (up to 64 kbps). It does not add an output re-encoding stage. The dialog displays the currently loaded source's bitrate and codec. Choices apply on the next track load and remain associated with that jukebox until server restart. Click the current queue track to reload it, or stop and replay a single disc. If no stream meets a limit, the lowest available audio stream is used. Available qualities depend on the video and YouTube client; other audio sources are unchanged.
+- YouTube playback always selects the best available audio source. Other audio sources are unchanged.
 - Close or Escape dismisses the dialog without stopping playback. Use Refresh to update the queue display; progress updates automatically above the jukebox.
 
 Seeking is available only for seekable tracks. Controls affect both Plasmo Voice and Simple Voice Chat playback. Control menus expire after two minutes, require you to stay within eight blocks, and stop working when their track or disc changes. Servers predating Paper's dialog API use clickable chat controls instead.
@@ -172,6 +172,6 @@ This feature is only available starting from 1.1.x.
 
 ## Diagnosing YouTube source quality
 
-The Audio quality dialog shows the selected bitrate, codec, YouTube client, format ID (itag), and audio formats offered by that client. Best available follows the source library's codec preference, then chooses the highest bitrate within that codec; it does not compare bitrate numbers alone across codecs.
+YouTube playback always uses the source library's best-available audio selection.
 
 For detailed diagnostics, enable `debug = true` in `discs.toml`, run `/disc reload`, and start or reload a track. Look for `YouTube formats:` and `YouTube selected:` in the server log. These show offered formats and the selection without logging signed stream URLs or credentials. These are source stream bitrates, not the final voice transport bitrate.

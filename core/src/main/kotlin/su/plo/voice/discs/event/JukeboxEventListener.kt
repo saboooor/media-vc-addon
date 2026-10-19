@@ -34,7 +34,6 @@ import su.plo.voice.api.server.PlasmoVoiceServer
 import su.plo.voice.api.server.audio.line.ServerSourceLine
 import su.plo.voice.api.server.player.VoicePlayer
 import su.plo.voice.discs.AddonConfig
-import su.plo.voice.discs.audio.YoutubeSourceQuality
 import su.plo.voice.discs.PlaybackControls
 import su.plo.voice.discs.PlasmoAudioPlayerManager
 import su.plo.voice.discs.api.PlayTrackFromDiscEvent
@@ -60,12 +59,6 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     private val sourceLine: ServerSourceLine? by getterOrNull()
     private val svcPlugin: SvcDiscsPlugin? by getterOrNull()
     private val discHelper: DiscHelper by inject()
-
-    private val sourceQualityByBlock = ConcurrentHashMap<Block, YoutubeSourceQuality>()
-    fun setSourceQuality(block: Block, quality: YoutubeSourceQuality) {
-        sourceQualityByBlock[block] = quality
-        controlsByBlock[block]?.sourceQuality = quality
-    }
 
     val controlsByBlock: MutableMap<Block, PlaybackControls> = ConcurrentHashMap()
 
@@ -210,7 +203,6 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         chestQueue: Boolean = false,
         controls: PlaybackControls = PlaybackControls(),
     ): Job {
-        controls.sourceQuality = sourceQualityByBlock[block] ?: controls.sourceQuality
         val playback = scope.launch(start = CoroutineStart.LAZY) {
 
             val track = try {
@@ -249,7 +241,10 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 ?.content()
                 ?: track.info.title
 
-            controls.title = trackName
+            controls.title = track.info.author
+                .takeIf { it.isNotBlank() }
+                ?.let { "$it - $trackName" }
+                ?: trackName
 
             val distance: Short = when (config.distance.enableBeaconLikeDistance) {
                 true -> {

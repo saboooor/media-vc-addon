@@ -21,7 +21,6 @@ import org.bukkit.inventory.EquipmentSlot
 import org.bukkit.inventory.ItemStack
 import su.plo.slib.api.permission.PermissionDefault
 import su.plo.voice.discs.PlaybackDialogView
-import su.plo.voice.discs.audio.YoutubeSourceQuality
 import su.plo.voice.discs.PlaybackControls
 import su.plo.voice.discs.command.SubCommand
 import su.plo.voice.discs.event.JukeboxEventListener
@@ -61,7 +60,7 @@ class ControlCommand(
         show(event.player, block)
     }
 
-    private fun show(player: Player, block: Block, crossfade: Boolean = false, quality: Boolean = false) {
+    private fun show(player: Player, block: Block, crossfade: Boolean = false) {
         val record = block.asJukebox()?.record?.clone() ?: return
         val controls = jukeboxes.controlsByBlock[block]
         val session = Session(UUID.randomUUID(), block, controls, record)
@@ -73,7 +72,6 @@ class ControlCommand(
             buttons += (if (controls.paused) "Resume" else "Pause") to (prefix + "pause")
             buttons += "Refresh" to (prefix + "refresh")
             buttons += "Stop playback" to (prefix + "stop")
-            buttons += "Audio quality" to (prefix + "quality")
             if (playlists.isQueued(block)) buttons += "Crossfade settings" to (prefix + "crossfade")
 
             if (controls.seekable) {
@@ -94,7 +92,6 @@ class ControlCommand(
         if (record.type != Material.AIR) buttons += "Eject disc" to (prefix + "eject")
         val body = mutableListOf<Component>()
         if (controls != null) {
-            body += PaperPlaybackDialog.icon("item/music_disc_cat", Component.text(controls.title, NamedTextColor.GOLD))
             body += Component.text("${if (controls.paused) "Paused" else "Playing"} · Volume ${controls.volume}%", NamedTextColor.GRAY)
         } else body += Component.text("Playback stopped. You can play or eject the disc.")
         playlists.queueView(block)?.let { queue ->
@@ -127,23 +124,8 @@ class ControlCommand(
             buttons += (if (queue.crossfadeSeconds > 0) "Disable crossfade" else "Enable crossfade") to (prefix + "fadetoggle")
             buttons += "Back to playback" to (prefix + "refresh")
         }
-        if (quality && controls != null) {
-            buttons.clear()
-            queueLabels.clear()
-            body.clear()
-            body += Component.text("YouTube source: ${controls.sourceQuality.label}", NamedTextColor.GOLD)
-            controls.sourceFormatDescription?.let { body += Component.text("Current stream: $it", NamedTextColor.GRAY) }
-            controls.sourceAvailableFormats?.takeIf { it.isNotBlank() }?.let {
-                body += Component.text("Offered by this client: $it", NamedTextColor.GRAY)
-            }
-            body += Component.text("Selects the audio stream downloaded from YouTube on the next track load. Click a queue track to reload it, or stop and play a single disc again. Availability depends on the video and YouTube client; the lowest available stream is used if none meet the limit. Other sources are unchanged.", NamedTextColor.GRAY)
-            buttons += "Best available" to (prefix + "sourcebest")
-            buttons += "Balanced · up to 128 kbps" to (prefix + "sourcebalanced")
-            buttons += "Data saver · up to 64 kbps" to (prefix + "sourcelow")
-            buttons += "Back to playback" to (prefix + "refresh")
-        }
         try {
-            PaperPlaybackDialog.show(player, body, buttons, queueLabels, if (crossfade) "Crossfade settings" else if (quality) "Audio quality" else "Jukebox controls", if (crossfade || quality) 2 else 4)
+            PaperPlaybackDialog.show(player, body, buttons, queueLabels, if (crossfade) "Crossfade settings" else "Jukebox controls", 2)
         } catch (_: ClassNotFoundException) {
             // Preserve older supported Minecraft releases which predate native dialogs.
             body.forEach { player.sendMessage(it) }
@@ -185,10 +167,6 @@ class ControlCommand(
                 if (arguments[2] == "eject") session.block.asJukebox()?.eject()
                 return
             }
-            "quality" -> { show(player, session.block, quality = true); return }
-            "sourcebest" -> jukeboxes.setSourceQuality(session.block, YoutubeSourceQuality.BEST)
-            "sourcebalanced" -> jukeboxes.setSourceQuality(session.block, YoutubeSourceQuality.BALANCED)
-            "sourcelow" -> jukeboxes.setSourceQuality(session.block, YoutubeSourceQuality.LOW)
             "crossfade" -> { show(player, session.block, crossfade = true); return }
             "fadeless" -> playlists.changeCrossfade(session.block, -1)
             "fademore" -> playlists.changeCrossfade(session.block, 1)
@@ -200,7 +178,7 @@ class ControlCommand(
                 return
             }
         }
-        show(player, session.block, crossfade = arguments[2] in setOf("fadeless", "fademore", "fadetoggle"), quality = arguments[2] in setOf("sourcebest", "sourcebalanced", "sourcelow"))
+        show(player, session.block, crossfade = arguments[2] in setOf("fadeless", "fademore", "fadetoggle"))
     }
 
     @EventHandler
@@ -246,7 +224,6 @@ private object PaperPlaybackDialog {
         "forward", "skip" -> "item/spectral_arrow"
         "quieter" -> "item/echo_shard"
         "louder" -> "item/goat_horn"
-        "quality", "sourcebest", "sourcebalanced", "sourcelow" -> "item/diamond"
         "crossfade", "fadeless", "fademore", "fadetoggle" -> "item/repeater"
         "stop" -> "item/redstone"
         "eject" -> "item/iron_pickaxe"

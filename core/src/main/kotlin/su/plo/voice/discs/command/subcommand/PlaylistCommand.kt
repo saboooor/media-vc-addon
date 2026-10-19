@@ -192,7 +192,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             for (slot in 0 until inventory.size) {
                 if (burned >= tracks.size) break
                 val item = inventory.getItem(slot)?.clone() ?: continue
-                if (!discHelper.isRecord(item) || item.hasIdentifier() || item.amount != 1) continue
+                if (!discHelper.isRecord(item) || item.amount != 1) continue
                 if (config.burnableTag.requireBurnableTag &&
                     !item.itemMeta.persistentDataContainer.has(AddonKeys.burnableKey, PersistentDataType.BYTE) &&
                     !player.allowed("burn.burnable_check_bypass")) continue
@@ -202,20 +202,27 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 if (inventory.getItem(slot) != original) continue
                 val identifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.identifier
                 if (Bukkit.getServer().getMinecraftVersionInt() >= 12103) discHelper.showSongTooltip(item, false)
-                item.burnMetadata(identifier, track.info.title, config, discHelper)
+                val label = track.info.author
+                    .takeIf { it.isNotBlank() }
+                    ?.let { "$it - ${track.info.title}" }
+                    ?: track.info.title
+                item.burnMetadata(identifier, label, config, discHelper)
                 inventory.setItem(slot, item)
                 burned++
             }
-            if (burned == 0) {
-                message(player, "No eligible blank discs. Put unburned, unstacked music discs in the chest first.", true)
-                return
-            }
             pending.remove(player.uniqueId, request)
-            message(player, "Burned $burned of ${tracks.size} playlist tracks in chest slot order.")
+            if (burned > 0) {
+                message(player, "Burned $burned of ${tracks.size} playlist tracks in chest slot order.")
+            } else {
+                message(player, "No eligible music discs found.", true)
+            }
         }
         val discs = chest.inventory.contents.filterNotNull()
             .filter { it.isCustomDisc(discHelper) }.map { it.clone() }
-        if (discs.isEmpty()) return
+        if (discs.isEmpty()) {
+            if (request != null) message(player, "No playable discs found in the chest.", true)
+            return
+        }
         event.setUseInteractedBlock(Event.Result.DENY)
         event.setUseItemInHand(Event.Result.DENY)
         val state = QueueState(discs.map { disc ->
@@ -269,7 +276,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         if (playing.isCancelled && !skipping.remove(block)) break
                         index = jumpTargets.remove(block) ?: (index + 1)
                         if (index >= discs.size) break
-                        controls = PlaybackControls(initialVolume = controls.volume, initialSourceQuality = controls.sourceQuality)
+                        controls = PlaybackControls(initialVolume = controls.volume)
                         current = start(index, controls, false) ?: break
                         continue
                     }
@@ -278,7 +285,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     if (outgoing == null && index + 1 < discs.size && fadeMs > 0 &&
                         controls.seekable && !controls.isStream && !controls.paused &&
                         controls.duration > 0 && remaining in 1..fadeMs) {
-                        val nextControls = PlaybackControls(initialVolume = controls.volume, initialGain = 0.0, initialSourceQuality = controls.sourceQuality)
+                        val nextControls = PlaybackControls(initialVolume = controls.volume, initialGain = 0.0)
                         val next = start(index + 1, nextControls, true) ?: break
                         transitionMs = remaining.coerceAtLeast(1)
                         outgoing = playing

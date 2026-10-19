@@ -21,7 +21,7 @@ class QualityYoutubeSourceManager(options: YoutubeSourceOptions, private val log
 
     override fun getClients(): Array<Client> {
         val controls = playbackContext.get() ?: return super.getClients()
-        val quality = controls.sourceQuality
+        val quality = YoutubeSourceQuality.BEST
         return super.getClients().map { client ->
             object : Client by client {
                 override fun loadFormats(source: YoutubeAudioSourceManager, http: HttpInterface, videoId: String): TrackFormats {
