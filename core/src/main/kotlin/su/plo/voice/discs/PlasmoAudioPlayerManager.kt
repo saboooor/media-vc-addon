@@ -74,6 +74,11 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         lavaPlayerManager.shutdown()
     }
 
+    fun getYoutubeSourceManager(): YoutubeAudioSourceManager? {
+        return lavaPlayerManager.source(QualityYoutubeSourceManager::class.java)
+            ?: lavaPlayerManager.source(YoutubeAudioSourceManager::class.java)
+    }
+
     fun startTrackJob(
         track: AudioTrack,
         pvSource: ServerProximitySource<*>? = null,

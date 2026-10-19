@@ -30,6 +30,7 @@ import su.plo.voice.api.server.audio.line.ServerSourceLine
 import su.plo.voice.api.server.event.config.VoiceServerConfigReloadedEvent
 import su.plo.voice.discs.command.CommandHandler
 import su.plo.voice.discs.command.subcommand.ControlCommand
+import su.plo.voice.discs.command.subcommand.HologramCommand
 import su.plo.voice.discs.command.subcommand.PlaylistCommand
 import su.plo.voice.discs.command.subcommand.BurnCommand
 import su.plo.voice.discs.command.subcommand.CancelCommand
@@ -41,6 +42,9 @@ import su.plo.voice.discs.crafting.BurnableHornCraft
 import su.plo.voice.discs.event.ForbidGrindstoneListener
 import su.plo.voice.discs.event.JukeboxProgressDisplay
 import su.plo.voice.discs.event.JukeboxEventListener
+import su.plo.voice.discs.screen.ScreenCommand
+import su.plo.voice.discs.screen.ScreenEventListener
+import su.plo.voice.discs.screen.ScreenManager
 import su.plo.voice.discs.item.DiscHelper
 import su.plo.voice.discs.item.GoatHornHelper
 import su.plo.voice.discs.packet.CancelJukeboxPlayEvent
@@ -67,6 +71,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var sourceLine: ServerSourceLine
     private var svcPlugin: SvcDiscsPlugin? = null
+    private var screenManager: ScreenManager? = null
 
     private val pvServer: PlasmoVoiceServer?
         get() = if (isPvAvailable()) {
@@ -218,13 +223,25 @@ class DiscsPlugin : JavaPlugin(), Listener {
 
         loadConfig()
 
+        val screenManagerInstance = ScreenManager()
+        screenManager = screenManagerInstance
+
         val jukeboxEventListener = JukeboxEventListener()
-        progressDisplay = JukeboxProgressDisplay(jukeboxEventListener).also {
+        val progressDisplayInstance = JukeboxProgressDisplay(jukeboxEventListener).also {
             server.pluginManager.registerEvents(it, this)
             it.start()
         }
+        progressDisplay = progressDisplayInstance
+
+        KOIN_INSTANCE.loadModules(listOf(module {
+            single<ScreenManager> { screenManagerInstance }
+            single<JukeboxProgressDisplay> { progressDisplayInstance }
+        }))
+        server.pluginManager.registerEvents(ScreenEventListener(), this)
+
         val playlistCommand = PlaylistCommand(jukeboxEventListener)
         val controlCommand = ControlCommand(jukeboxEventListener, playlistCommand)
+        val hologramCommand = HologramCommand(jukeboxEventListener, controlCommand)
         server.pluginManager.registerEvents(controlCommand, this)
         server.pluginManager.registerEvents(playlistCommand, this)
         server.pluginManager.registerEvents(jukeboxEventListener, this)
@@ -244,8 +261,10 @@ class DiscsPlugin : JavaPlugin(), Listener {
             .addSubCommand(::BurnCommand)
             .addSubCommand { playlistCommand }
             .addSubCommand { controlCommand }
+            .addSubCommand { hologramCommand }
             .addSubCommand(::EraseCommand)
             .addSubCommand(::SearchCommand)
+            .addSubCommand(::ScreenCommand)
             .addSubCommand { ReloadCommand(::reloadRuntimeConfig) }
         if (hornsSupported) {
             handler.addSubCommand(::CancelCommand)
@@ -258,12 +277,23 @@ class DiscsPlugin : JavaPlugin(), Listener {
 
         val pvPermissions = pvServer?.minecraftServer?.permissionManager
         pvPermissions?.registerBukkit("pv.addon.discs.play", PermissionDefault.TRUE)
+        pvPermissions?.registerBukkit("pv.addon.discs.screen", PermissionDefault.OP)
 
         listOf("pv.addon.discs.play", "vc.addon.discs.play").forEach { perm ->
             if (Bukkit.getPluginManager().getPermission(perm) == null) {
                 try {
                     Bukkit.getPluginManager().addPermission(
                         org.bukkit.permissions.Permission(perm, org.bukkit.permissions.PermissionDefault.TRUE)
+                    )
+                } catch (_: Throwable) {}
+            }
+        }
+
+        listOf("pv.addon.discs.screen", "vc.addon.discs.screen").forEach { perm ->
+            if (Bukkit.getPluginManager().getPermission(perm) == null) {
+                try {
+                    Bukkit.getPluginManager().addPermission(
+                        org.bukkit.permissions.Permission(perm, org.bukkit.permissions.PermissionDefault.OP)
                     )
                 } catch (_: Throwable) {}
             }
@@ -287,6 +317,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
 
     override fun onDisable() {
         progressDisplay?.shutdown()
+        screenManager?.shutdown()
         runBlocking {
             withTimeoutOrNull(5_000L) { scope.coroutineContext.job.cancelAndJoin() }
         }

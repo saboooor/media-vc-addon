@@ -50,3 +50,9 @@ fun ItemStack.burnMetadata(identifier: String, name: String, config: AddonConfig
         }
     }
 }
+
+fun String.cleanArtistName(): String =
+    replace(Regex("(?i)\\s*-\\s*topic$"), "").trim()
+
+fun String.cleanTrackName(): String =
+    replace(Regex("(?i)\\s*-\\s*topic\\b"), "").trim()

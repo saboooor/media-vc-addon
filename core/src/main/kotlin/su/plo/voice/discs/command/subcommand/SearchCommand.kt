@@ -85,13 +85,14 @@ class SearchCommand : SubCommand() {
 
         tracks.take(5).forEach {
             val command = "/disc burn ${it.identifier}"
+            val cleanAuthor = it.info.author.replace(Regex("(?i)\\s*-\\s*topic$"), "").trim()
             if (voicePlayer != null) {
-                val component = McTextComponent.translatable("pv.addon.discs.format.search_entry", it.info.title, it.info.author)
+                val component = McTextComponent.translatable("pv.addon.discs.format.search_entry", it.info.title, cleanAuthor)
                     .hoverEvent(McTextHoverEvent.showText(McTextComponent.literal(command)))
                     .clickEvent(McTextClickEvent.suggestCommand(command))
                 voicePlayer.instance.sendMessage(component)
             } else {
-                val component = Component.text("${it.info.title} by ${it.info.author}", NamedTextColor.YELLOW)
+                val component = Component.text("${it.info.title} by $cleanAuthor", NamedTextColor.YELLOW)
                     .hoverEvent(net.kyori.adventure.text.event.HoverEvent.showText(Component.text(command)))
                     .clickEvent(net.kyori.adventure.text.event.ClickEvent.suggestCommand(command))
                 player.sendMessage(component)

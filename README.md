@@ -50,11 +50,42 @@ Chest queues:
 
 `/disc search <query>` – Search tracks on YouTube.
 
+`/disc screen create [name]` – Start interactive screen creation. Click two diagonally opposite corner item frames on a wall to define the screen grid, then click a jukebox to link it.
+
+`/disc screen list` – View all registered item frame screens and their linked jukeboxes.
+
+`/disc screen link <name>` – Link an existing screen to the jukebox you are looking at.
+
+`/disc screen unlink <name>` – Unlink a screen from its jukebox.
+
+`/disc screen play <name> <url>` – Manually stream a video URL to a screen using server-side FFmpeg.
+
+`/disc screen stop [name]` – Stop video playback on a screen.
+
+`/disc screen clear [name]` – Clear an item frame screen to black.
+
+`/disc screen delete <name>` – Delete a screen configuration.
+
+`/disc screen cancel` – Cancel an active screen selection.
+
+`/disc screen finish` – Finish screen selection without linking a jukebox.
+
+Music video screens:
+
+- Form a rectangular wall grid of item frames (e.g. 2x2, 3x2, 4x3) and run `/disc screen create [name]`.
+- Right-click the first corner item frame, then right-click the opposite corner item frame. The plugin automatically detects the grid dimensions, facing direction, and orders the tiles.
+- Right-click a nearby jukebox to link the screen to it.
+- Whenever a custom music disc or chest queue track plays in that jukebox, the music video streams to the item frames in real time with aspect ratio preservation and black letterboxing.
+- Pausing, resuming, or seeking using the jukebox controls automatically keeps the music video in sync.
+- Item frames belonging to screens are automatically fixed and protected from rotation or removal.
+
 `/disc cancel [player]` – Cancel user's goat horn playback. You need `pv.addon.discs.cancel.other` permission to cancel for others.
+
+`/disc hologram [gui|move|offset|reset]` – Adjust the position of the playback hologram for a jukebox. Can be opened interactively from the Jukebox controls dialog ("Move Hologram") or run as a command. Supports `/disc hologram move <up|down|north|south|east|west> [amount]`, `/disc hologram offset <x> <y> <z>`, and `/disc hologram reset`.
 
 `/disc reload` – Reload runtime options from `discs.toml` without interrupting playback. Works from the console.
 
-Reloadable options: debug logging, disc glint and burn/erase lore, mono audio, goat horn settings, jukebox distance and visualization, HTTP whitelist, and the burnable-tag requirement. Playback settings apply to newly started tracks; item settings apply to future burns/erases. Registered recipe results keep their original glint and lore until restart.
+Reloadable options: debug logging, disc glint and burn/erase lore, mono audio, goat horn settings, jukebox distance and visualization, HTTP whitelist, screen settings (fps, distance, ffmpeg path), and the burnable-tag requirement. Playback settings apply to newly started tracks; item settings apply to future burns/erases. Registered recipe results keep their original glint and lore until restart.
 
 Source line weight/default volume, HTTP proxy, YouTube settings, local source settings, and default recipe settings require a server restart. Reload leaves their active values unchanged and keeps the edited values in the config file for the next restart.
 
@@ -85,6 +116,8 @@ Commands are only available to OP by default:
 `pv.addon.discs.erase` – Erase command
 
 `pv.addon.discs.search` – Search command
+
+`pv.addon.discs.screen` – Manage item frame music video screens (create, delete, link, clear, play)
 
 `pv.addon.discs.reload` – Reload runtime configuration (also accepts `vc.addon.discs.reload`)
 

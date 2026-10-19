@@ -10,6 +10,7 @@ import org.bukkit.Material
 import org.bukkit.block.Block
 import org.bukkit.block.BlockFace
 import org.bukkit.block.Chest
+import org.bukkit.block.DoubleChest
 import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
 import org.bukkit.event.Event
@@ -169,8 +170,17 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         if (event.action != Action.RIGHT_CLICK_BLOCK || event.hand != EquipmentSlot.HAND ||
             event.useInteractedBlock() == Event.Result.DENY || event.player.isSneaking) return
         val chest = event.clickedBlock?.state as? Chest ?: return
-        val block = chest.block.getRelative(BlockFace.DOWN)
-        if (block.type != Material.JUKEBOX) return
+        var block = chest.block.getRelative(BlockFace.DOWN)
+        if (block.type != Material.JUKEBOX) {
+            val doubleChest = chest.inventory.holder as? DoubleChest
+            val leftJukebox = (doubleChest?.leftSide as? Chest)?.block?.getRelative(BlockFace.DOWN)
+            val rightJukebox = (doubleChest?.rightSide as? Chest)?.block?.getRelative(BlockFace.DOWN)
+            block = when {
+                leftJukebox?.type == Material.JUKEBOX -> leftJukebox
+                rightJukebox?.type == Material.JUKEBOX -> rightJukebox
+                else -> return
+            }
+        }
         val player = event.player
         val request = pending[player.uniqueId]
         if (request != null && System.currentTimeMillis() - request.created > 120_000) {
@@ -202,10 +212,12 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 if (inventory.getItem(slot) != original) continue
                 val identifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.identifier
                 if (Bukkit.getServer().getMinecraftVersionInt() >= 12103) discHelper.showSongTooltip(item, false)
-                val label = track.info.author
+                val cleanAuthor = track.info.author.replace(Regex("(?i)\\s*-\\s*topic$"), "").trim()
+                val cleanTitle = track.info.title.replace(Regex("(?i)\\s*-\\s*topic\\b"), "").trim()
+                val label = cleanAuthor
                     .takeIf { it.isNotBlank() }
-                    ?.let { "$it - ${track.info.title}" }
-                    ?: track.info.title
+                    ?.let { "$it - $cleanTitle" }
+                    ?: cleanTitle
                 item.burnMetadata(identifier, label, config, discHelper)
                 inventory.setItem(slot, item)
                 burned++

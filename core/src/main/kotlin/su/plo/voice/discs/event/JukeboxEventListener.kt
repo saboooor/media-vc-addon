@@ -18,6 +18,7 @@ import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
 import org.bukkit.event.block.Action
 import org.bukkit.event.block.BlockBreakEvent
+import org.bukkit.event.block.BlockExplodeEvent
 import org.bukkit.event.entity.EntityExplodeEvent
 import org.bukkit.event.inventory.InventoryMoveItemEvent
 import org.bukkit.event.player.PlayerInteractEvent
@@ -39,6 +40,7 @@ import su.plo.voice.discs.PlasmoAudioPlayerManager
 import su.plo.voice.discs.api.PlayTrackFromDiscEvent
 import su.plo.voice.discs.bridge.VoiceBridgeCompat
 import su.plo.voice.discs.item.DiscHelper
+import su.plo.voice.discs.screen.ScreenManager
 import su.plo.voice.discs.svc.SvcDiscsPlugin
 import su.plo.voice.discs.utils.DiscChunkUnloadCause
 import su.plo.voice.discs.utils.DiscEjectCause
@@ -55,6 +57,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     private val voiceServer: PlasmoVoiceServer? by getterOrNull()
     private val scope: CoroutineScope by inject()
     private val audioPlayerManager: PlasmoAudioPlayerManager by getter()
+    private val screenManager: ScreenManager? by getterOrNull<ScreenManager>()
     private val debugLogger: DebugLogger by getter()
     private val sourceLine: ServerSourceLine? by getterOrNull()
     private val svcPlugin: SvcDiscsPlugin? by getterOrNull()
@@ -161,8 +164,12 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     fun onJukeboxBreak(event: BlockBreakEvent) {
         event.block
             .takeIf { it.isJukebox() }
-            ?.also {
-                it.asJukebox()?.stopPlaying()
+            ?.also { block ->
+                block.asJukebox()?.stopPlaying()
+                val sm = screenManager ?: return@also
+                sm.getScreenForJukebox(block)?.let { screen ->
+                    sm.unlinkJukebox(screen.name)
+                }
             }
             ?.let { jobByBlock.remove(it) }
             ?.cancel(DiscEjectCause())
@@ -170,9 +177,28 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
 
     @EventHandler
     fun onJukeboxExplode(event: EntityExplodeEvent) {
+        val sm = screenManager
         event.blockList()
             .filter { it.isJukebox() }
-            .forEach { jobByBlock.remove(it)?.cancel(DiscEjectCause()) }
+            .forEach { block ->
+                sm?.getScreenForJukebox(block)?.let { screen ->
+                    sm.unlinkJukebox(screen.name)
+                }
+                jobByBlock.remove(block)?.cancel(DiscEjectCause())
+            }
+    }
+
+    @EventHandler
+    fun onBlockExplode(event: BlockExplodeEvent) {
+        val sm = screenManager
+        event.blockList()
+            .filter { it.isJukebox() }
+            .forEach { block ->
+                sm?.getScreenForJukebox(block)?.let { screen ->
+                    sm.unlinkJukebox(screen.name)
+                }
+                jobByBlock.remove(block)?.cancel(DiscEjectCause())
+            }
     }
 
     fun isPlaying(block: Block): Boolean =
@@ -234,14 +260,16 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 }) return@launch
             }
 
-            val trackName = itemMeta
+            val trackName = (itemMeta
                 ?.lore()
                 ?.getOrNull(0)
                 ?.let { it as? TextComponent }
                 ?.content()
-                ?: track.info.title
+                ?: track.info.title).cleanTrackName()
 
-            controls.title = track.info.author
+            val cleanAuthor = track.info.author.cleanArtistName()
+
+            controls.title = cleanAuthor
                 .takeIf { it.isNotBlank() }
                 ?.let { "$it - $trackName" }
                 ?: trackName
@@ -308,6 +336,16 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 svcChannel = svcChannel,
                 controls = controls
             )
+            controls.onPauseChanged = { isPaused ->
+                screenManager?.onJukeboxPause(block, isPaused)
+            }
+            controls.onSeek = { targetMs ->
+                screenManager?.onJukeboxSeek(block, targetMs)
+            }
+            val videoIdentifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.info.identifier?.takeIf { it.isNotBlank() } ?: identifier
+            val isYouTubeMusic = track.info.author.contains("- Topic", ignoreCase = true) ||
+                identifier.contains("music.youtube.com") || (track.info.uri ?: "").contains("music.youtube.com")
+            screenManager?.onJukeboxPlay(block, videoIdentifier, artworkUrl = track.info.artworkUrl, isYouTubeMusic = isYouTubeMusic)
             try {
                 var lastExistenceCheck = System.currentTimeMillis()
                 var lastRecordReset = System.currentTimeMillis()
@@ -358,6 +396,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
 
                     job.cancelAndJoin()
                     pvSource?.remove()
+                    screenManager?.onJukeboxStop(block)
 
                     if (!scope.isActive) return@withContext
 

@@ -9,6 +9,8 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
     @Volatile var sourceAvailableFormats: String? = null
     @Volatile private var gain = initialGain.coerceIn(0.0, 1.0)
     @Volatile var transitionPartner: PlaybackControls? = null
+    var onPauseChanged: ((Boolean) -> Unit)? = null
+    var onSeek: ((Long) -> Unit)? = null
     private fun effectiveVolume() = (volume * gain).toInt().coerceIn(0, 100)
     @Synchronized fun setGain(value: Double) {
         gain = value.coerceIn(0.0, 1.0)
@@ -17,6 +19,7 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
     @Synchronized private fun applyPaused(value: Boolean) {
         paused = value
         players.forEach { it.isPaused = paused }
+        onPauseChanged?.invoke(paused)
     }
     @Synchronized private fun applyVolume(value: Int) {
         volume = value.coerceIn(0, 100)
@@ -59,5 +62,6 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
         if (!seekable) return
         val target = positionMs.coerceIn(0, (duration - 1).coerceAtLeast(0))
         players.forEach { it.playingTrack?.takeIf { track -> track.isSeekable }?.position = target }
+        onSeek?.invoke(target)
     }
 }

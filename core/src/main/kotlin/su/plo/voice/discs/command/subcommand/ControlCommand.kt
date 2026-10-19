@@ -24,8 +24,12 @@ import su.plo.voice.discs.PlaybackDialogView
 import su.plo.voice.discs.PlaybackControls
 import su.plo.voice.discs.command.SubCommand
 import su.plo.voice.discs.event.JukeboxEventListener
+import su.plo.voice.discs.event.JukeboxProgressDisplay
+import su.plo.voice.discs.screen.ScreenManager
 import su.plo.voice.discs.utils.extend.hasIdentifier
 import su.plo.voice.discs.utils.extend.asJukebox
+import su.plo.voice.discs.utils.extend.getterOrNull
+import su.plo.voice.discs.utils.extend.getValue
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.Consumer
@@ -34,6 +38,8 @@ class ControlCommand(
     private val jukeboxes: JukeboxEventListener,
     private val playlists: PlaylistCommand,
 ) : SubCommand(), Listener {
+    private val screenManager: ScreenManager? by getterOrNull<ScreenManager>()
+    private val progressDisplay: JukeboxProgressDisplay? by getterOrNull<JukeboxProgressDisplay>()
     private data class Session(val token: UUID, val block: Block, val controls: PlaybackControls?,
                                val record: ItemStack, val expires: Long = System.currentTimeMillis() + 120_000)
     private val sessions = ConcurrentHashMap<UUID, Session>()
@@ -50,7 +56,10 @@ class ControlCommand(
             event.useInteractedBlock() == Event.Result.DENY) return
         val block = event.clickedBlock ?: return
         val jukebox = block.asJukebox() ?: return
-        if (!jukeboxes.isPlaying(block) && !playlists.isQueued(block) && !jukebox.record.hasIdentifier()) return
+        val hasCustomDisc = jukebox.record.hasIdentifier()
+        val isLinked = screenManager?.getScreenForJukebox(block) != null
+        val isEmptyHand = event.item == null || event.item?.type == Material.AIR
+        if (!jukeboxes.isPlaying(block) && !playlists.isQueued(block) && !hasCustomDisc && !isLinked && !event.player.isSneaking && !isEmptyHand) return
         event.setUseInteractedBlock(Event.Result.DENY)
         event.setUseItemInHand(Event.Result.DENY)
         if (!checkCanExecute(event.player) || event.player.gameMode == GameMode.SPECTATOR) {
@@ -60,7 +69,11 @@ class ControlCommand(
         show(event.player, block)
     }
 
-    private fun show(player: Player, block: Block, crossfade: Boolean = false) {
+    fun showHologramDialog(player: Player, block: Block) {
+        show(player, block, hologram = true)
+    }
+
+    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false) {
         val record = block.asJukebox()?.record?.clone() ?: return
         val controls = jukeboxes.controlsByBlock[block]
         val session = Session(UUID.randomUUID(), block, controls, record)
@@ -90,10 +103,34 @@ class ControlCommand(
             }
         }
         if (record.type != Material.AIR) buttons += "Eject disc" to (prefix + "eject")
+
+        val canManageScreens = player.hasPermission("pv.addon.discs.screen") ||
+            player.hasPermission("vc.addon.discs.screen") || player.isOp
+        if (screenManager != null && canManageScreens) {
+            val linkedScreen = screenManager?.getScreenForJukebox(block)
+            if (linkedScreen != null) {
+                buttons += "Unlink Screen" to (prefix + "screen_unlink")
+                buttons += "Clear Screen" to (prefix + "screen_clear")
+            } else {
+                buttons += "Link Screen" to (prefix + "screen_link")
+            }
+        }
+
+        if (progressDisplay != null) {
+            buttons += "Move Hologram" to (prefix + "holo_menu")
+        }
+
         val body = mutableListOf<Component>()
+        screenManager?.getScreenForJukebox(block)?.let { s ->
+            body += Component.text("Linked screen: ${s.name} (${s.columns}x${s.rows} frames)", NamedTextColor.AQUA)
+        }
         if (controls != null) {
             body += Component.text("${if (controls.paused) "Paused" else "Playing"} · Volume ${controls.volume}%", NamedTextColor.GRAY)
-        } else body += Component.text("Playback stopped. You can play or eject the disc.")
+        } else if (record.type != Material.AIR) {
+            body += Component.text("Playback stopped. You can play or eject the disc.")
+        } else {
+            body += Component.text("Jukebox is idle.")
+        }
         playlists.queueView(block)?.let { queue ->
             body += PaperPlaybackDialog.icon("item/book", Component.text("Queue · ${queue.currentIndex + 1} of ${queue.items.size}", NamedTextColor.GOLD))
             queue.items.forEachIndexed { index, item ->
@@ -124,8 +161,26 @@ class ControlCommand(
             buttons += (if (queue.crossfadeSeconds > 0) "Disable crossfade" else "Enable crossfade") to (prefix + "fadetoggle")
             buttons += "Back to playback" to (prefix + "refresh")
         }
+        if (hologram) {
+            val pd = progressDisplay ?: return show(player, block)
+            buttons.clear()
+            queueLabels.clear()
+            body.clear()
+            val offset = pd.getOffset(block)
+            body += Component.text("Hologram Offset: X: ${offset.x}, Y: ${offset.y}, Z: ${offset.z}", NamedTextColor.GOLD)
+            body += Component.text("Click to move the hologram position relative to the jukebox:", NamedTextColor.GRAY)
+            buttons += "Up (+0.25)" to (prefix + "holo_up")
+            buttons += "Down (-0.25)" to (prefix + "holo_down")
+            buttons += "North (-Z)" to (prefix + "holo_north")
+            buttons += "South (+Z)" to (prefix + "holo_south")
+            buttons += "East (+X)" to (prefix + "holo_east")
+            buttons += "West (-X)" to (prefix + "holo_west")
+            buttons += "Reset Position" to (prefix + "holo_reset")
+            buttons += "Back to controls" to (prefix + "refresh")
+        }
+        val dialogTitle = if (hologram) "Move Hologram" else if (crossfade) "Crossfade settings" else "Jukebox controls"
         try {
-            PaperPlaybackDialog.show(player, body, buttons, queueLabels, if (crossfade) "Crossfade settings" else "Jukebox controls", 2)
+            PaperPlaybackDialog.show(player, body, buttons, queueLabels, dialogTitle, 2)
         } catch (_: ClassNotFoundException) {
             // Preserve older supported Minecraft releases which predate native dialogs.
             body.forEach { player.sendMessage(it) }
@@ -171,6 +226,75 @@ class ControlCommand(
             "fadeless" -> playlists.changeCrossfade(session.block, -1)
             "fademore" -> playlists.changeCrossfade(session.block, 1)
             "fadetoggle" -> playlists.toggleCrossfade(session.block)
+            "holo_menu" -> { show(player, session.block, hologram = true); return }
+            "holo_up" -> {
+                progressDisplay?.adjustOffset(session.block, 0.0, 0.25, 0.0)
+                show(player, session.block, hologram = true)
+                return
+            }
+            "holo_down" -> {
+                progressDisplay?.adjustOffset(session.block, 0.0, -0.25, 0.0)
+                show(player, session.block, hologram = true)
+                return
+            }
+            "holo_north" -> {
+                progressDisplay?.adjustOffset(session.block, 0.0, 0.0, -0.25)
+                show(player, session.block, hologram = true)
+                return
+            }
+            "holo_south" -> {
+                progressDisplay?.adjustOffset(session.block, 0.0, 0.0, 0.25)
+                show(player, session.block, hologram = true)
+                return
+            }
+            "holo_east" -> {
+                progressDisplay?.adjustOffset(session.block, 0.25, 0.0, 0.0)
+                show(player, session.block, hologram = true)
+                return
+            }
+            "holo_west" -> {
+                progressDisplay?.adjustOffset(session.block, -0.25, 0.0, 0.0)
+                show(player, session.block, hologram = true)
+                return
+            }
+            "holo_reset" -> {
+                progressDisplay?.resetOffset(session.block)
+                show(player, session.block, hologram = true)
+                return
+            }
+            "screen_link" -> {
+                val sm = screenManager ?: run {
+                    player.sendMessage(Component.text("Screens are not enabled on this server.", NamedTextColor.RED))
+                    return
+                }
+                var counter = 1
+                while (sm.getScreen("screen-$counter") != null) {
+                    counter++
+                }
+                val screenName = "screen-$counter"
+                sm.startSelection(player, screenName, preLinkedJukebox = session.block)
+                return
+            }
+            "screen_unlink" -> {
+                val sm = screenManager
+                val screen = sm?.getScreenForJukebox(session.block)
+                if (screen != null) {
+                    sm.unlinkJukebox(screen.name)
+                    player.sendMessage(Component.text("Screen '${screen.name}' unlinked and deleted.", NamedTextColor.YELLOW))
+                }
+                show(player, session.block)
+                return
+            }
+            "screen_clear" -> {
+                val sm = screenManager
+                val screen = sm?.getScreenForJukebox(session.block)
+                if (screen != null) {
+                    sm.clearScreen(screen)
+                    player.sendMessage(Component.text("Screen '${screen.name}' cleared.", NamedTextColor.YELLOW))
+                }
+                show(player, session.block)
+                return
+            }
             "refresh" -> {}
             else -> {
                 val index = arguments[2].takeIf { it.startsWith("queue") }?.removePrefix("queue")?.toIntOrNull() ?: return
@@ -227,6 +351,9 @@ private object PaperPlaybackDialog {
         "crossfade", "fadeless", "fademore", "fadetoggle" -> "item/repeater"
         "stop" -> "item/redstone"
         "eject" -> "item/iron_pickaxe"
+        "screen_link" -> "item/item_frame"
+        "screen_unlink" -> "item/shears"
+        "screen_clear" -> "item/water_bucket"
         else -> "item/barrier"
     }
 

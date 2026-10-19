@@ -309,6 +309,27 @@ class AddonConfig {
     @ConfigField
     val burnableTag = BurnableTag()
 
+    @Config
+    class ScreenConfig {
+        @ConfigField(comment = "Enable item frame music video screens")
+        var enabled: Boolean = true
+
+        @ConfigField(comment = "Framerate for video playback on item frame screens (e.g. 10-20 FPS)")
+        var fps: Int = 15
+
+        @ConfigField(comment = "Maximum distance in blocks for players to receive video map updates")
+        var maxDistance: Int = 48
+
+        @ConfigField(comment = "Path to ffmpeg executable on server")
+        var ffmpegPath: String = "ffmpeg"
+
+        @ConfigField(comment = "Path to yt-dlp executable on server (used as YouTube video resolver if present)")
+        var ytdlpPath: String = "yt-dlp"
+    }
+
+    @ConfigField
+    var screen = ScreenConfig()
+
     /** Keep settings whose consumers are initialized only during startup. */
     fun preserveRestartSettings(current: AddonConfig) {
         sourceLineWeight = current.sourceLineWeight
