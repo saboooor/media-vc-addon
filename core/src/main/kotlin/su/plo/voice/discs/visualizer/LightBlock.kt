@@ -35,7 +35,7 @@ object LightBlock {
         if (original.material == Material.BEACON) return
         if (original is Lightable) {
             val data = block.blockData as? Lightable ?: return
-            val lit = on || block.isBlockPowered || block.isBlockIndirecyPowered
+            val lit = on || block.isBlockPowered || block.isBlockIndirectlyPowered
             if (data.isLit != lit) block.setBlockData(data.apply { isLit = lit }, false)
         } else {
             val target = if (on) original else Bukkit.createBlockData(Material.BLACK_CONCRETE)
@@ -59,4 +59,3 @@ object LightBlock {
         }
     }
 }
-tl

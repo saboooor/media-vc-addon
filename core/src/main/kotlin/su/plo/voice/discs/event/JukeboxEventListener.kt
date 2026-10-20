@@ -461,7 +461,8 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     rightSvcChannel = noteSvcChannel,
                     controls = controls
                 )
-            }            try {
+            }
+            try {
                 controls.onPauseChanged = { isPaused ->
                     screenManager?.onJukeboxPause(block, isPaused)
                 }
