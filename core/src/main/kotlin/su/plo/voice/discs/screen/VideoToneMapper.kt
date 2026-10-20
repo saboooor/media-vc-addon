@@ -36,6 +36,8 @@ internal class VideoToneMapper(private val info: VideoColorInfo) {
             return
         }
         val inverse = if (info.transfer == VideoTransfer.PQ) pq else hlg
+        val displayLut = srgb
+        val gainLut = if (info.transfer == VideoTransfer.HLG) hlgGain else null
         var src = 0
         var dst = 0
         while (dst < output.size) {
@@ -45,7 +47,7 @@ internal class VideoToneMapper(private val info: VideoColorInfo) {
             if (info.transfer == VideoTransfer.HLG) {
                 val sceneY = (0.2627 * r + 0.6780 * g + 0.0593 * b).coerceIn(0.0, 1.0)
                 // BT.2100 reference 1000-nit HLG display, system gamma 1.2.
-                val gain = 10.0 * hlgGain[(sceneY * 65535).roundToInt()]
+                val gain = 10.0 * gainLut!![(sceneY * 65535).roundToInt()]
                 r *= gain; g *= gain; b *= gain
             }
             if (info.bt2020) {
@@ -59,9 +61,9 @@ internal class VideoToneMapper(private val info: VideoColorInfo) {
             // Extended Reinhard shoulder: 100-nit exposure, 1000-nit reference peak.
             // Scale by luminance rather than mapping channels independently to retain hue.
             val scale = (1.0 + luminance / 100.0) / (1.0 + luminance)
-            output[dst] = display(r * scale)
-            output[dst + 1] = display(g * scale)
-            output[dst + 2] = display(b * scale)
+            output[dst] = display(r * scale, displayLut)
+            output[dst + 1] = display(g * scale, displayLut)
+            output[dst + 2] = display(b * scale, displayLut)
             src += 6; dst += 3
         }
     }
@@ -69,7 +71,7 @@ internal class VideoToneMapper(private val info: VideoColorInfo) {
     private fun sample(input: ByteArray, offset: Int) =
         (input[offset].toInt() and 255) or ((input[offset + 1].toInt() and 255) shl 8)
 
-    private fun display(linear: Double) = srgb[(linear.coerceIn(0.0, 1.0) * 65535).roundToInt()]
+    private fun display(linear: Double, lut: ByteArray) = lut[(linear.coerceIn(0.0, 1.0) * 65535).roundToInt()]
 
     companion object {
         private val pq by lazy {

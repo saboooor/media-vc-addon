@@ -4,6 +4,7 @@ import com.google.gson.GsonBuilder
 import kotlinx.coroutines.*
 import net.kyori.adventure.text.Component
 import org.bukkit.Bukkit
+import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.block.Block
 import org.bukkit.block.data.Lightable
@@ -23,6 +24,8 @@ import su.plo.voice.discs.utils.PluginKoinComponent
 import su.plo.voice.discs.utils.extend.*
 import su.plo.voice.discs.visualizer.BassLampEnvelope
 import java.io.File
+import su.plo.voice.discs.utils.PlayerAudience
+import java.util.concurrent.atomic.AtomicLong
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -47,25 +50,38 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     private val gson = GsonBuilder().setPrettyPrinting().create()
     private val file get() = File(plugin.dataFolder, "bass_lamp_links.json")
     private var updater: Job? = null
+    private data class ChunkKey(val world: String, val x: Int, val z: Int)
+    private data class Index(val version: Long, val sources: Map<Position, List<Link>>, val chunks: Map<ChunkKey, List<Link>>)
+    private val linksVersion = AtomicLong()
+    @Volatile private var index = Index(-1, emptyMap(), emptyMap())
+    private fun linkedIndex(): Index {
+        val version = linksVersion.get()
+        if (index.version == version) return index
+        val snapshot = links.values.toList()
+        return Index(version, snapshot.groupBy { it.jukebox }, snapshot.groupBy {
+            ChunkKey(it.lamp.world, it.lamp.x shr 4, it.lamp.z shr 4)
+        }).also { index = it }
+    }
 
     fun beginLink(player: Player, jukebox: Block, unlink: Boolean = false) {
         pending[player.uniqueId] = Pending(jukebox, unlink)
         player.sendMessage(Component.text("Right-click a placed redstone lamp within 32 blocks of this jukebox to ${if (unlink) "unlink" else "link"} it (2 minutes)."))
     }
-    fun linkedPositions(jukebox: Block) = links.values.filter { it.jukebox == Position.of(jukebox) }.map { it.lamp }
+    fun linkedPositions(jukebox: Block) = linkedIndex().sources[Position.of(jukebox)].orEmpty().map { it.lamp }
     fun restoreLinks(jukebox: Block, lamps: List<Position>) {
         val source = Position.of(jukebox)
+        var changed = false
         for (lamp in lamps) {
             if (lamp.world != source.world) continue
             val distance = (lamp.x.toLong() - source.x).let { it * it } + (lamp.y.toLong() - source.y).let { it * it } + (lamp.z.toLong() - source.z).let { it * it }
             if (distance > 1024) continue
             if (links[lamp]?.jukebox?.let { it != source } == true) continue
-            if (lamp.loadedBlock()?.type?.let { it != Material.REDSTONE_LAMP } == true) continue
-            links[lamp] = Link(lamp, source)
+            val link = Link(lamp, source)
+            if (links.put(lamp, link) != link) changed = true
         }
-        save()
+        if (changed) save()
     }
-    fun count(jukebox: Block) = links.values.count { it.jukebox == Position.of(jukebox) }
+    fun count(jukebox: Block) = linkedIndex().sources[Position.of(jukebox)]?.size ?: 0
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     fun onClick(event: PlayerInteractEvent) {
@@ -103,27 +119,69 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         if (file.exists()) runCatching {
             gson.fromJson(file.readText(), Array<Link>::class.java)?.forEach { links[it.lamp] = it }
         }.onFailure { plugin.slF4JLogger.error("Could not load bass lamp links", it) }
+        linksVersion.incrementAndGet()
         updater = scope.launch {
+            var nextMaintenance = 0L
+            var validSources: Map<Position, Boolean> = emptyMap()
             while (isActive) {
-                val active = mutableSetOf<PlaybackControls>()
-                for (link in links.values.toList()) {
-                    val lamp = link.lamp.loadedBlock() ?: continue
-                    suspendSyncAt(lamp.location, voiceServer, plugin) {
-                        val source = link.jukebox.loadedBlock()
-                        if (lamp.type != Material.REDSTONE_LAMP || (source != null && source.type != Material.JUKEBOX)) {
-                            links.remove(link.lamp, link); envelopes.remove(link.lamp); setLit(lamp, false); save()
-                            return@suspendSyncAt
+                val snapshot = linkedIndex()
+                val maintenance = System.nanoTime() >= nextMaintenance
+                if (maintenance) {
+                    val valid = mutableMapOf<Position, Boolean>()
+                    // Validate each source once on its owning region, never from a lamp region.
+                    for ((chunk, sources) in snapshot.sources.keys.groupBy { ChunkKey(it.world, it.x shr 4, it.z shr 4) }) {
+                        val world = runCatching { Bukkit.getWorld(UUID.fromString(chunk.world)) }.getOrNull() ?: continue
+                        if (!world.isChunkLoaded(chunk.x, chunk.z)) continue
+                        val first = sources.first()
+                        suspendSyncAt(Location(world, first.x.toDouble(), first.y.toDouble(), first.z.toDouble()), voiceServer, plugin) {
+                            for (source in sources) source.loadedBlock()?.let { valid[source] = it.type == Material.JUKEBOX }
                         }
-                        val controls = source?.let { jukeboxes.controlsByBlock[it] }
-                        val listening = controls != null && lamp.world.getNearbyPlayers(lamp.location, 32.0).isNotEmpty()
-                        if (listening) { controls!!.setVisualizing(true, "bass_lamps"); active += controls }
-                        val bass = if (listening && controls?.paused == false) controls.spectrum.levels.take(5).max() else 0f
-                        val lit = if (listening && controls?.paused == false)
-                            envelopes.computeIfAbsent(link.lamp) { BassLampEnvelope() }.update(bass)
-                        else { envelopes.remove(link.lamp); false }
-                        setLit(lamp, lit)
+                    }
+                    validSources = valid
+                    nextMaintenance = System.nanoTime() + 3_000_000_000L
+                }
+                val sourceControls = jukeboxes.controlsByBlock.entries.associate { Position.of(it.key) to it.value }
+                val bass = sourceControls.mapValues { (_, controls) ->
+                    if (controls.paused) 0f else controls.spectrum.levels.let { levels ->
+                        var peak = 0f
+                        for (i in 0 until minOf(5, levels.size)) peak = maxOf(peak, levels[i])
+                        peak
                     }
                 }
+                // One coarse audience query per playing jukebox; lamps test immutable positions.
+                val audiences = snapshot.sources.keys.filter { sourceControls.containsKey(it) }.associateWith {
+                    PlayerAudience.positions(it.world, it.x.toDouble(), it.y.toDouble(), it.z.toDouble(), 64.0)
+                }
+                val active = mutableSetOf<PlaybackControls>()
+                var dirty = false
+                for ((chunk, chunkLinks) in snapshot.chunks) {
+                    if (!maintenance && chunkLinks.none { sourceControls.containsKey(it.jukebox) || envelopes.containsKey(it.lamp) }) continue
+                    val world = runCatching { Bukkit.getWorld(UUID.fromString(chunk.world)) }.getOrNull() ?: continue
+                    if (!world.isChunkLoaded(chunk.x, chunk.z)) continue
+                    val first = chunkLinks.first().lamp
+                    suspendSyncAt(Location(world, first.x.toDouble(), first.y.toDouble(), first.z.toDouble()), voiceServer, plugin) {
+                        for (link in chunkLinks) {
+                            if (links[link.lamp] != link) continue
+                            val lamp = link.lamp.loadedBlock() ?: continue
+                            if (lamp.type != Material.REDSTONE_LAMP || (maintenance && validSources[link.jukebox] == false)) {
+                                if (links.remove(link.lamp, link)) { envelopes.remove(link.lamp); dirty = true }
+                                setLit(lamp, false)
+                                continue
+                            }
+                            val controls = sourceControls[link.jukebox]
+                            val listening = controls != null && audiences[link.jukebox].orEmpty().any {
+                                it.within(link.lamp.x.toDouble(), link.lamp.y.toDouble(), link.lamp.z.toDouble(), 32.0)
+                            }
+                            if (listening) active += controls!!
+                            val lit = if (listening && controls?.paused == false)
+                                envelopes.computeIfAbsent(link.lamp) { BassLampEnvelope() }.update(bass[link.jukebox] ?: 0f)
+                            else { envelopes.remove(link.lamp); false }
+                            setLit(lamp, lit)
+                        }
+                    }
+                }
+                if (dirty) save()
+                active.filterNot { it in consumers }.forEach { it.setVisualizing(true, "bass_lamps") }
                 consumers.filterNot { it in active }.forEach { it.setVisualizing(false, "bass_lamps") }
                 consumers.clear(); consumers.addAll(active)
                 delay(100)
@@ -138,8 +196,11 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         if (data.isLit != lit) block.setBlockData(data.apply { isLit = lit }, false)
     }
     private fun save() {
-        runCatching { file.parentFile.mkdirs(); file.writeText(gson.toJson(links.values.toList())) }
-            .onFailure { plugin.slF4JLogger.error("Could not save bass lamp links", it) }
+        linksVersion.incrementAndGet()
+        val snapshot = links.values.toList()
+        su.plo.voice.discs.utils.SettingsFileWriter.shared.submit(file, { gson.toJson(snapshot) }) {
+            plugin.slF4JLogger.error("Could not save bass lamp links", it)
+        }
     }
     private fun unlinkBroken(blocks: Collection<Block>) {
         val broken = blocks.map(Position::of).toSet()
@@ -152,19 +213,23 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         if (changed) save()
     }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    fun onBreak(event: BlockBreakEvent) { unlinkBroken(listOf(event.block)) }
+    fun onBreak(event: BlockBreakEvent) {
+        if (event.block.type == Material.JUKEBOX || event.block.type == Material.REDSTONE_LAMP)
+            unlinkBroken(listOf(event.block))
+    }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onExplode(event: EntityExplodeEvent) { unlinkBroken(event.blockList()) }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onBlockExplode(event: BlockExplodeEvent) { unlinkBroken(event.blockList()) }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onUnload(event: ChunkUnloadEvent) {
-        links.keys.filter { it.world == event.world.uid.toString() && it.x shr 4 == event.chunk.x && it.z shr 4 == event.chunk.z }
-            .forEach { it.loadedBlock()?.let { block -> setLit(block, false) }; envelopes.remove(it) }
+        linkedIndex().chunks[ChunkKey(event.world.uid.toString(), event.chunk.x, event.chunk.z)].orEmpty()
+            .forEach { it.lamp.loadedBlock()?.let { block -> setLit(block, false) }; envelopes.remove(it.lamp) }
     }
     @EventHandler fun onQuit(event: PlayerQuitEvent) { pending.remove(event.player.uniqueId) }
     fun shutdown() {
         updater?.cancel()
+        save()
         consumers.forEach { it.setVisualizing(false, "bass_lamps") }; consumers.clear()
         links.keys.forEach { it.loadedBlock()?.let { block -> setLit(block, false) } }
         pending.clear(); envelopes.clear()

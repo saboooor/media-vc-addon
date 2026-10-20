@@ -238,6 +238,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
 
         loadConfig()
 
+        su.plo.voice.discs.utils.PlayerAudience.start(this, scope, pvServer)
         su.plo.voice.discs.screen.CompanionScreens.start(this)
         val screenManagerInstance = ScreenManager()
         screenManager = screenManagerInstance
@@ -375,6 +376,9 @@ class DiscsPlugin : JavaPlugin(), Listener {
         runBlocking {
             withTimeoutOrNull(5_000L) { scope.coroutineContext.job.cancelAndJoin() }
         }
+
+        su.plo.voice.discs.utils.PlayerAudience.shutdown()
+        su.plo.voice.discs.utils.SettingsFileWriter.shared.close()
 
         if (isPvAvailable()) {
             try {

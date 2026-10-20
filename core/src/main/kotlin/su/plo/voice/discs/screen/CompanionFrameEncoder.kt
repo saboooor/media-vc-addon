@@ -10,10 +10,14 @@ import javax.imageio.ImageWriteParam
 internal class CompanionFrameEncoder {
     private var pixels = IntArray(0)
     private var cached: ByteArray? = null
+    private var cachedWidth = 0
+    private var cachedHeight = 0
+    private var cachedQuality = 0
     fun encode(rgb: ByteArray, screenWidth: Int, screenHeight: Int, quality: Int): ByteArray {
         require(screenWidth > 0 && screenHeight > 0 && screenWidth.toLong() * screenHeight <= 256L * 128 * 128)
         if (pixels.size != screenWidth * screenHeight) { pixels = IntArray(screenWidth * screenHeight); cached = null }
-        var changed = cached == null
+        val jpegQuality = quality.coerceIn(40, 95)
+        var changed = cached == null || cachedWidth != screenWidth || cachedHeight != screenHeight || cachedQuality != jpegQuality
         for (y in 0 until screenHeight) for (x in 0 until screenWidth) {
             val offset = (y * screenWidth + x) * 3
             val color = ((rgb[offset].toInt() and 255) shl 16) or
@@ -32,10 +36,13 @@ internal class CompanionFrameEncoder {
                 writer.output = output
                 val parameters = writer.defaultWriteParam
                 parameters.compressionMode = ImageWriteParam.MODE_EXPLICIT
-                parameters.compressionQuality = quality.coerceIn(40, 95) / 100f
+                parameters.compressionQuality = jpegQuality / 100f
                 writer.write(null, IIOImage(image, null, null), parameters)
             }
         } finally { writer.dispose() }
-        return bytes.toByteArray().also { require(it.size <= 4 * 1024 * 1024); cached = it }
+        return bytes.toByteArray().also {
+            require(it.size <= 4 * 1024 * 1024)
+            cached = it; cachedWidth = screenWidth; cachedHeight = screenHeight; cachedQuality = jpegQuality
+        }
     }
 }

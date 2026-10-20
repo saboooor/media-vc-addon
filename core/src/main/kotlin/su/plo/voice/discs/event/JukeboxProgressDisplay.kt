@@ -43,6 +43,10 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
     private val displayType = runCatching { EntityType.valueOf("TEXT_DISPLAY") }.getOrNull()
     private var updater: Job? = null
     private val editing = ConcurrentHashMap.newKeySet<Block>()
+    private data class TextState(val title: String?, val paused: Boolean, val seconds: Long,
+        val durationSeconds: Long, val live: Boolean, val loading: Boolean, val percent: Int, val filled: Int)
+    private val textStates = ConcurrentHashMap<Block, Pair<Entity, TextState>>()
+    private val textMethod by lazy { Class.forName("org.bukkit.entity.TextDisplay").getMethod("text", Component::class.java) }
     val supported get() = displayType != null
 
     fun setEditing(block: Block, active: Boolean) {
@@ -53,16 +57,20 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
         if (displayType == null) return
         updater = scope.launch {
             while (isActive) {
-                val blocks = displays.keys.toSet() + jukeboxes.controlsByBlock.keys.toSet() + editing
+                val blocks = HashSet(displays.keys)
+                blocks.addAll(jukeboxes.controlsByBlock.keys)
+                blocks.addAll(editing)
                 for (block in blocks) {
                     suspendSyncAt(block.location, voiceServer, plugin) {
                         if (!block.world.isChunkLoaded(block.x shr 4, block.z shr 4)) {
                             displays.remove(block)
+                            textStates.remove(block)
                             return@suspendSyncAt
                         }
                         val controls = jukeboxes.controlsByBlock[block]
                         if ((controls == null && block !in editing) || block.type != Material.JUKEBOX) {
                             displays.remove(block)?.remove()
+                            textStates.remove(block)
                             return@suspendSyncAt
                         }
                         val targetLoc = getDisplayLocation(block)
@@ -70,11 +78,22 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
                         if (display.location.distanceSquared(targetLoc) > 0.001) {
                             display.teleport(targetLoc)
                         }
-                        val text = if (controls == null) Component.text("Playback hologram\nPreview", NamedTextColor.AQUA)
-                            else Component.text(controls.title.take(80), NamedTextColor.GOLD)
-                            .append(Component.text(if (controls.paused) "\nPaused\n" else "\n", NamedTextColor.GRAY))
-                            .append(PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream))
-                        display.javaClass.getMethod("text", Component::class.java).invoke(display, text)
+                        val position = controls?.position ?: 0
+                        val duration = controls?.duration ?: 0
+                        val live = controls?.isStream == true
+                        val state = TextState(controls?.title?.take(80), controls?.paused == true,
+                            position / 1000, duration / 1000, live, duration <= 0,
+                            if (!live && duration > 0) (position.toDouble() / duration * 100).toInt().coerceIn(0, 100) else 0,
+                            if (!live && duration > 0) PlaybackDialogView.filledSegments(position, duration) else 0)
+                        val previous = textStates[block]
+                        if (previous?.first !== display || previous.second != state) {
+                            val text = if (controls == null) Component.text("Playback hologram\nPreview", NamedTextColor.AQUA)
+                                else Component.text(state.title!!, NamedTextColor.GOLD)
+                                    .append(Component.text(if (state.paused) "\nPaused\n" else "\n", NamedTextColor.GRAY))
+                                    .append(PlaybackDialogView.progress(position, duration, live))
+                            textMethod.invoke(display, text)
+                            textStates[block] = display to state
+                        }
                     }
                 }
                 delay(250)
@@ -112,15 +131,9 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
     }
 
     fun saveOffsets() {
-        try {
-            val file = offsetsFile
-            if (!file.parentFile.exists()) {
-                file.parentFile.mkdirs()
-            }
-            val json = gson.toJson(offsets)
-            file.writeText(json)
-        } catch (e: Exception) {
-            plugin.slF4JLogger.error("Failed to save hologram offsets to $offsetsFile", e)
+        val snapshot = offsets.mapValues { (_, offset) -> offset.copy() }
+        su.plo.voice.discs.utils.SettingsFileWriter.shared.submit(offsetsFile, { gson.toJson(snapshot) }) {
+            plugin.slF4JLogger.error("Failed to save hologram offsets to $offsetsFile", it)
         }
     }
 
@@ -271,13 +284,15 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onUnload(event: ChunkUnloadEvent) {
-        displays.keys.filter { it.inChunk(event.chunk) }.forEach { displays.remove(it)?.remove() }
+        displays.keys.filter { it.inChunk(event.chunk) }.forEach { displays.remove(it)?.remove(); textStates.remove(it) }
     }
 
     fun shutdown() {
         updater?.cancel()
+        saveOffsets()
         displays.values.forEach { it.remove() }
         displays.clear()
+        textStates.clear()
         editing.clear()
     }
 }

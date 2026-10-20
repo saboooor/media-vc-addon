@@ -7,9 +7,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -18,8 +15,6 @@ import org.koin.core.component.inject
 import su.plo.slib.api.logging.McLoggerFactory
 import su.plo.voice.api.logging.DebugLogger
 import su.plo.voice.api.server.PlasmoVoiceServer
-import su.plo.voice.api.server.audio.provider.AudioFrameProvider
-import su.plo.voice.api.server.audio.provider.AudioFrameResult
 import su.plo.voice.api.server.audio.source.ServerProximitySource
 import su.plo.voice.discs.config.YoutubeClient
 import su.plo.voice.discs.utils.PluginKoinComponent
@@ -45,7 +40,6 @@ import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.Audio
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioPlaylist
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioReference
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack
-import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrackState
 import su.plo.voice.lavaplayer.libs.dev.lavalink.youtube.YoutubeAudioSourceManager
 import su.plo.voice.lavaplayer.libs.dev.lavalink.youtube.YoutubeSourceOptions
 import su.plo.voice.lavaplayer.libs.dev.lavalink.youtube.clients.Web
@@ -105,102 +99,9 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         controls: PlaybackControls? = null,
         pcmChannel: Int? = null
     ): Job {
-        if (pvSource != null && svcChannel != null) {
-            // Keep PV's sender lifecycle (including source state) intact. Each backend
-            // consumes its own track so neither can steal frames from the other.
-            val svcTrack = track.makeClone().apply { position = track.position }
-            return scope.launch {
-                var pvJob: Job? = null
-                var svcJob: Job? = null
-                try {
-                    pvJob = startTrackJob(track, pvSource, distance, controls = controls, pcmChannel = pcmChannel)
-                    svcJob = startTrackJob(svcTrack, svcChannel = svcChannel, controls = controls, pcmChannel = pcmChannel)
-                    svcJob.join()
-                } finally {
-                    withContext(NonCancellable) {
-                        svcJob?.cancelAndJoin()
-                        pvJob?.cancelAndJoin()
-                    }
-                }
-            }
-        }
-
-        val player = createPlaybackPlayer(lavaPlayerManager, track, controls, pcmChannel)
-
-        val trackTitle = pvSource?.sourceInfo?.name ?: track.info.title
-        debugLogger.log("Starting track \"$trackTitle\" on pvSource=$pvSource svcChannel=$svcChannel")
-
-        fun playbackFinished(): Boolean = controls?.failure != null ||
-            player.playingTrack?.let { it.state == AudioTrackState.FINISHED } != false
-
-        if (pvSource != null) {
-            val enc = encryption
-            val frameProvider = object : AudioFrameProvider {
-                override fun provide20ms(): AudioFrameResult =
-                    if (
-                        playbackFinished()
-                    ) {
-                        AudioFrameResult.Finished
-                    } else {
-                        val audioFrame = player.provide()
-                        val rawData = audioFrame?.data
-                        val frame = rawData?.let {
-                            enc?.encrypt(it) ?: it
-                        }
-
-                        AudioFrameResult.Provided(frame)
-                    }
-            }
-
-            val sender = pvSource.createAudioSender(frameProvider, distance)
-                .also { it.start() }
-            val job = sender.job ?: throw IllegalStateException("AudioSender job is not started")
-            sender.onStop {
-            controls?.detach(player)
-                player.destroy()
-                pvSource.remove()
-            }
-
-            return job
-        } else if (svcChannel != null) {
-            val job = scope.launch(Dispatchers.Default) {
-                try {
-                    var nextTime = System.nanoTime()
-                    while (isActive) {
-                        if (
-                            playbackFinished()
-                        ) {
-                            break
-                        }
-
-                        val audioFrame = player.provide(20, java.util.concurrent.TimeUnit.MILLISECONDS)
-                        if (audioFrame != null) {
-                            svcChannel.send(audioFrame.data)
-                        }
-
-                        nextTime += 20_000_000L
-                        val sleepTime = (nextTime - System.nanoTime()) / 1_000_000L
-                        if (sleepTime > 0) {
-                            delay(sleepTime)
-                        } else if (sleepTime < -100L) {
-                            nextTime = System.nanoTime()
-                        }
-                    }
-                } finally {
-                    try {
-                        svcChannel.flush()
-                    } finally {
-                        controls?.detach(player)
-                        player.destroy()
-                    }
-                }
-            }
-            return job
-        } else {
-            controls?.detach(player)
-            player.destroy()
-            throw IllegalStateException("Neither Plasmo Voice nor Simple Voice Chat audio destination provided")
-        }
+        require(pvSource != null || svcChannel != null) { "No audio destination provided" }
+        return startSharedTrackJob(track, pvSource, null, distance, svcChannel, null,
+            controls ?: PlaybackControls(), false, pcmChannel)
     }
 
     private fun createPlaybackPlayer(
@@ -260,86 +161,96 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     ): Job {
         require((leftPvSource != null && rightPvSource != null) ||
             (leftSvcChannel != null && rightSvcChannel != null)) { "Both stereo destinations are required" }
-        return scope.launch(Dispatchers.Default) {
-            var player: AudioPlayer? = null
-            var leftEncoder: AudioChunkEncoder? = null
-            var rightEncoder: AudioChunkEncoder? = null
-            val pvSources = listOfNotNull(leftPvSource, rightPvSource)
-            val svcChannels = listOfNotNull(leftSvcChannel, rightSvcChannel)
-            val enc = encryption
-            var sequence = 0L
-            var streaming = false
-            fun endStream() {
-                if (!streaming) return
-                pvSources.forEach { it.sendAudioEnd(sequence, distance) }
-                svcChannels.forEach { it.flush() }
-                sequence++
-                streaming = false
-            }
-            try {
+        return startSharedTrackJob(track, leftPvSource, rightPvSource, distance,
+            leftSvcChannel, rightSvcChannel, controls, true)
+    }
+
+    private fun startSharedTrackJob(
+        track: AudioTrack,
+        primaryPv: ServerProximitySource<*>?,
+        secondaryPv: ServerProximitySource<*>?,
+        distance: Short,
+        primarySvc: AudioChannel?,
+        secondarySvc: AudioChannel?,
+        controls: PlaybackControls,
+        splitStereo: Boolean,
+        pcmChannel: Int? = null,
+    ): Job = scope.launch(Dispatchers.Default) {
+        var player: AudioPlayer? = null
+        var leftEncoder: AudioChunkEncoder? = null
+        var rightEncoder: AudioChunkEncoder? = null
+        val pvSources = listOfNotNull(primaryPv, secondaryPv)
+        val svcChannels = listOfNotNull(primarySvc, secondarySvc)
+        val enc = encryption
+        var sequence = 0L
+        var streaming = false
+        fun endStream() {
+            if (!streaming) return
+            pvSources.forEach { it.sendAudioEnd(sequence, distance) }
+            svcChannels.forEach { it.flush() }
+            sequence++
+            streaming = false
+        }
+        try {
+            val manager = if (splitStereo) stereoPlayerManager else lavaPlayerManager
+            val encoder = if (splitStereo) {
                 val format = OpusAudioDataFormat(1, 48_000, 960)
-                val left = format.createEncoder(stereoPlayerManager.configuration).also { leftEncoder = it }
-                val right = format.createEncoder(stereoPlayerManager.configuration).also { rightEncoder = it }
-                val encoder = StereoPcmFrameEncoder(left, right)
-                val playbackPlayer = createPlaybackPlayer(stereoPlayerManager, track, controls).also { player = it }
-                var nextFrameTime = System.nanoTime()
-                while (isActive && controls.failure == null) {
-                    if (controls.paused) {
-                        endStream()
-                        delay(5)
-                        nextFrameTime = System.nanoTime()
-                        continue
-                    }
-                    val remaining = nextFrameTime - System.nanoTime()
-                    if (remaining > 0) delay(remaining.nanoseconds)
-                    // Pause/seek use this same monitor. Never hold a fetched frame over a
-                    // suspension, or send a pre-seek frame after a control change.
-                    val sent = synchronized(controls) {
-                        if (controls.paused || controls.failure != null) false
-                        else playbackPlayer.provide()?.let { frame ->
-                            val pair = encoder.encode(frame.data)
-                            // Encode both before sending either; neither channel advances alone.
-                            val leftEncrypted = if (leftPvSource != null) enc?.encrypt(pair.first) ?: pair.first else null
-                            val rightEncrypted = if (rightPvSource != null) enc?.encrypt(pair.second) ?: pair.second else null
-                            streaming = true
-                            leftPvSource?.sendAudioFrame(leftEncrypted!!, sequence, distance)
-                            rightPvSource?.sendAudioFrame(rightEncrypted!!, sequence, distance)
-                            leftSvcChannel?.send(pair.first)
-                            rightSvcChannel?.send(pair.second)
-                            sequence++
-                            true
-                        } ?: false
-                    }
-                    if (!sent) {
-                        if (playbackPlayer.playingTrack == null) break
-                        // Shared underflow stalls both channels. Rebase instead of catching up
-                        // with a burst of packets after a pause, seek, or network stall.
-                        delay(5)
-                        nextFrameTime = System.nanoTime()
-                        continue
-                    }
-                    nextFrameTime = maxOf(nextFrameTime + 20_000_000L, System.nanoTime())
+                val left = format.createEncoder(manager.configuration).also { leftEncoder = it }
+                val right = format.createEncoder(manager.configuration).also { rightEncoder = it }
+                StereoPcmFrameEncoder(left, right)
+            } else null
+            val playbackPlayer = createPlaybackPlayer(manager, track, controls, pcmChannel).also { player = it }
+            var nextFrameTime = System.nanoTime()
+            while (isActive && controls.failure == null) {
+                if (controls.paused) {
+                    endStream()
+                    delay(5)
+                    nextFrameTime = System.nanoTime()
+                    continue
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                controls.fail(e.message ?: "Stereo playback failed")
-                plugin.slF4JLogger.error("Stereo disc playback failed: ${track.info.title}", e)
-            } finally {
-                // Each resource must be released even if another backend fails during shutdown.
-                fun cleanup(action: () -> Unit) {
-                    runCatching(action).onFailure { plugin.slF4JLogger.warn("Stereo playback cleanup failed", it) }
+                val remaining = nextFrameTime - System.nanoTime()
+                if (remaining > 0) delay(remaining.nanoseconds)
+                // Controls and transmission share a monitor; no fetched frame survives a suspension.
+                val sent = synchronized(controls) {
+                    if (controls.paused || controls.failure != null) false
+                    else playbackPlayer.provide()?.let { frame ->
+                        val pair = encoder?.encode(frame.data)
+                        val primary = pair?.first ?: frame.data
+                        val secondary = pair?.second
+                        val primaryEncrypted = if (primaryPv != null) enc?.encrypt(primary) ?: primary else null
+                        val secondaryEncrypted = if (secondaryPv != null && secondary != null) enc?.encrypt(secondary) ?: secondary else null
+                        streaming = true
+                        primaryPv?.sendAudioFrame(primaryEncrypted!!, sequence, distance)
+                        secondaryPv?.sendAudioFrame(secondaryEncrypted!!, sequence, distance)
+                        primarySvc?.send(primary)
+                        if (secondary != null) secondarySvc?.send(secondary)
+                        sequence++
+                        true
+                    } ?: false
                 }
-                pvSources.forEach { source -> cleanup { source.sendAudioEnd(sequence, distance) } }
-                svcChannels.forEach { channel -> cleanup { channel.flush() } }
-                player?.let { playbackPlayer ->
-                    controls.detach(playbackPlayer)
-                    cleanup { playbackPlayer.destroy() }
+                if (!sent) {
+                    if (playbackPlayer.playingTrack == null) break
+                    delay(5)
+                    nextFrameTime = System.nanoTime()
+                    continue
                 }
-                leftEncoder?.let { cleanup { it.close() } }
-                rightEncoder?.let { cleanup { it.close() } }
-                pvSources.forEach { source -> cleanup { source.remove() } }
+                nextFrameTime = maxOf(nextFrameTime + 20_000_000L, System.nanoTime())
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            controls.fail(e.message ?: "Audio playback failed")
+            plugin.slF4JLogger.error("Disc playback failed: ${track.info.title}", e)
+        } finally {
+            fun cleanup(action: () -> Unit) {
+                runCatching(action).onFailure { plugin.slF4JLogger.warn("Playback cleanup failed", it) }
+            }
+            pvSources.forEach { source -> cleanup { source.sendAudioEnd(sequence, distance) } }
+            svcChannels.forEach { channel -> cleanup { channel.flush() } }
+            player?.let { playbackPlayer -> controls.detach(playbackPlayer); cleanup { playbackPlayer.destroy() } }
+            leftEncoder?.let { cleanup { it.close() } }
+            rightEncoder?.let { cleanup { it.close() } }
+            pvSources.forEach { source -> cleanup { source.remove() } }
         }
     }
 

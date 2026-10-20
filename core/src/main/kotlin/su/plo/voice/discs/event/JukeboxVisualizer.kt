@@ -36,8 +36,15 @@ class JukeboxVisualizer(private val jukeboxes: JukeboxEventListener) : Listener,
     private val scope: CoroutineScope by inject()
     private val voiceServer: PlasmoVoiceServer? by getterOrNull()
     private class Display(val entities: List<Entity>, val kind: VisualizerKind,
-        val heights: FloatArray = FloatArray(16), val speaker: SpeakerEnvelope = SpeakerEnvelope(), var spec: VisualizerInstance? = null)
-    private class Group(val displays: MutableMap<Int, Display> = mutableMapOf(), var controls: PlaybackControls? = null)
+        val heights: FloatArray = FloatArray(16), val speaker: SpeakerEnvelope = SpeakerEnvelope(), var spec: VisualizerInstance? = null, var glowing: Boolean = false)
+    private class Group(val displays: MutableMap<Int, Display> = mutableMapOf(), var controls: PlaybackControls? = null) {
+        var snapshot: List<VisualizerInstance>? = null
+        var editingId: Int? = null
+        var specs: List<VisualizerInstance> = emptyList()
+        var visible = false
+        var visibilityChecked = Long.MIN_VALUE
+    }
+    private val emptyLevels = FloatArray(16)
     private val groups = ConcurrentHashMap<Block, Group>()
     private val settings = ConcurrentHashMap<Block, VisualizerInstances>()
     private val editing = ConcurrentHashMap<Block, Int>()
@@ -65,24 +72,42 @@ class JukeboxVisualizer(private val jukeboxes: JukeboxEventListener) : Listener,
         if (!supported) return
         updater = scope.launch {
             while (isActive) {
-                val blocks = groups.keys.toSet() + editing.keys + jukeboxes.controlsByBlock.keys.filter { settings[it]?.snapshot?.any { spec -> spec.enabled } == true }
+                val blocks = HashSet(groups.keys)
+                blocks.addAll(editing.keys)
+                for (block in jukeboxes.controlsByBlock.keys)
+                    if (settings[block]?.snapshot?.any { it.enabled } == true) blocks.add(block)
                 for (block in blocks) suspendSyncAt(block.location, voiceServer, plugin) {
                     if (!block.world.isChunkLoaded(block.x shr 4, block.z shr 4)) return@suspendSyncAt
                     val controls = jukeboxes.controlsByBlock[block]
-                    val specs = settings[block]?.snapshot.orEmpty().filter { it.enabled || editing.containsKey(block) }
+                    val group = groups.computeIfAbsent(block) { Group() }
+                    val snapshot = settings[block]?.snapshot.orEmpty()
+                    val editingId = editing[block]
+                    if (group.snapshot !== snapshot || group.editingId != editingId) {
+                        group.snapshot = snapshot
+                        group.editingId = editingId
+                        group.specs = snapshot.filter { it.enabled || editingId != null }
+                        val activeIds = group.specs.map { it.id }.toSet()
+                        val obsolete = group.displays.keys.filterNot { it in activeIds }
+                        obsolete.forEach { group.displays.remove(it)?.entities?.forEach(Entity::remove) }
+                    }
+                    val specs = group.specs
                     if (specs.isEmpty() || (controls == null && !editing.containsKey(block)) || block.type != Material.JUKEBOX) {
                         remove(block)
                         return@suspendSyncAt
                     }
-                    val group = groups.computeIfAbsent(block) { Group() }
                     if (group.controls !== controls) group.controls?.setVisualizing(false)
                     group.controls = controls
-                    val visible = block.world.getNearbyPlayers(block.location, 32.0).isNotEmpty()
-                    controls?.setVisualizing(visible)
-                    val activeIds = specs.map { it.id }.toSet()
-                    group.displays.keys.filterNot { it in activeIds }.forEach { group.displays.remove(it)?.entities?.forEach(Entity::remove) }
-                    if (!visible) return@suspendSyncAt
-                    val levels = controls?.spectrum?.levels ?: FloatArray(16)
+                    val now = System.nanoTime()
+                    if (group.visibilityChecked == Long.MIN_VALUE || now - group.visibilityChecked >= 250_000_000L) {
+                        group.visible = su.plo.voice.discs.utils.PlayerAudience.hasNearby(
+                            block.world.name, block.x.toDouble(), block.y.toDouble(), block.z.toDouble(), 32.0)
+                        group.visibilityChecked = now
+                    }
+                    controls?.setVisualizing(group.visible)
+                    if (!group.visible) return@suspendSyncAt
+                    val levels = controls?.spectrum?.levels ?: emptyLevels
+                    var bass = 0f
+                    for (i in 0 until minOf(5, levels.size)) bass = maxOf(bass, levels[i])
                     for (spec in specs) {
                         var display = group.displays[spec.id]
                         if (display?.kind != spec.kind || display.entities.any { !it.isValid }) {
@@ -91,7 +116,7 @@ class JukeboxVisualizer(private val jukeboxes: JukeboxEventListener) : Listener,
                             group.displays[spec.id] = display
                         }
                         if (spec.kind == VisualizerKind.SPEAKER) {
-                            val pulse = display.speaker.update(if (controls?.paused != false) 0f else levels.take(5).max())
+                            val pulse = display.speaker.update(if (controls?.paused != false) 0f else bass)
                             val size = 0.65f + pulse * 0.8f
                             if (display.spec != spec || abs(display.heights[0] - size) > 0.01f) {
                                 transform(display.entities[0], spec, 0, size, pulse)
@@ -105,7 +130,11 @@ class JukeboxVisualizer(private val jukeboxes: JukeboxEventListener) : Listener,
                                 display.heights[index] = height
                             }
                         }
-                        display.entities.forEach { it.isGlowing = editing[block] == spec.id }
+                        val glowing = editingId == spec.id
+                        if (display.glowing != glowing) {
+                            display.entities.forEach { it.isGlowing = glowing }
+                            display.glowing = glowing
+                        }
                         display.spec = spec
                     }
                 }
@@ -152,10 +181,12 @@ class JukeboxVisualizer(private val jukeboxes: JukeboxEventListener) : Listener,
         val y = if (speaker) 0.65f - tall / 2 else 0f
         val z = 0.4f - depth / 2
         val angle = spec.facing.degrees * PI.toFloat() / 180f
+        val cosine = when (spec.facing) { VisualizerFacing.SOUTH -> 1f; VisualizerFacing.NORTH -> -1f; else -> 0f }
+        val sine = when (spec.facing) { VisualizerFacing.EAST -> 1f; VisualizerFacing.WEST -> -1f; else -> 0f }
         val rotation = identity.newInstance().also { rotateY.invoke(it, angle) }
         val value = transformationConstructor.newInstance(
-            vectorConstructor.newInstance(layout.x + x * cos(angle) + z * sin(angle), layout.y + y,
-                layout.z - x * sin(angle) + z * cos(angle)), rotation,
+            vectorConstructor.newInstance(layout.x + x * cosine + z * sine, layout.y + y,
+                layout.z - x * sine + z * cosine), rotation,
             vectorConstructor.newInstance(width, tall, depth), identity.newInstance())
         setDelay.invoke(entity, 0)
         setTransformation.invoke(entity, value)

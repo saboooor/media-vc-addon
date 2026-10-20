@@ -38,4 +38,18 @@ class CompanionFrameEncoderTest {
         assertEquals(512, decoded.width)
         assertEquals(256, decoded.height)
     }
+
+    @Test fun `cache invalidates when JPEG quality or dimensions change`() {
+        val source = Random(9).nextBytes(256 * 128 * 3)
+        val encoder = CompanionFrameEncoder()
+        val original = encoder.encode(source, 256, 128, 85)
+        val changedQuality = encoder.encode(source, 256, 128, 40)
+        assertNotSame(original, changedQuality)
+        assertSame(changedQuality, encoder.encode(source, 256, 128, 40))
+        val changedShape = encoder.encode(source, 128, 256, 40)
+        assertNotSame(changedQuality, changedShape)
+        val image = ImageIO.read(ByteArrayInputStream(changedShape))
+        assertEquals(128, image.width)
+        assertEquals(256, image.height)
+    }
 }

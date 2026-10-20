@@ -73,6 +73,10 @@ class VideoPlayer(
     private val dither = if (ditherStrength > 0) OrderedMapDither(ditherStrength) else null
     private val rgbEncoder = CompanionFrameEncoder()
     private val tileDeltas = Array(rows) { Array(cols) { MapTileDelta() } }
+    private val rgbTiles = Array(rows) { Array(cols) { RgbTileCache() } }
+    private val companionRecipients = FrameRecipients<Player>()
+    private var audienceChecked = Long.MIN_VALUE
+    private var cachedAudience: List<Player> = emptyList()
     private var previousViewers: Map<UUID, Player> = emptyMap()
     private val mapViewers = ScreenMapViewers(screen.mapIds.flatten())
 
@@ -341,13 +345,18 @@ class VideoPlayer(
                 renderWarning.set(false)
                 renderMonitor.beginRead(System.nanoTime())
                 try {
+                    val nearbyPlayers = getNearbyPlayers()
+                    if (nearbyPlayers.isEmpty()) {
+                        // Drain decoded frames to preserve timing, but do no color/render work.
+                        sliceAndSend(rawFrameBuffer, nearbyPlayers)
+                        continue
+                    }
                     val mapper = toneMapper ?: VideoToneMapper(colorInfoReady.await().also { color ->
                         if (color.transfer != VideoTransfer.SDR) {
                             logger.info("Screen '${screen.name}': tone mapping ${color.transfer} HDR to SDR")
                         }
                     }).also { toneMapper = it }
                     mapper.convert(decodedFrameBuffer, rawFrameBuffer)
-                    val nearbyPlayers = getNearbyPlayers()
                     sliceAndSend(rawFrameBuffer, nearbyPlayers)
                 } finally {
                     renderMonitor.endRead()
@@ -546,20 +555,15 @@ class VideoPlayer(
         }
     }
 
+    @Synchronized
     private fun getNearbyPlayers(): List<Player> {
-        val maxDistSq = (maxDistance * maxDistance).toDouble()
-        val result = ArrayList<Player>()
-        for (player in Bukkit.getOnlinePlayers()) {
-            val loc = player.location
-            if (loc.world?.name != screen.worldName) continue
-            val dx = loc.x - screen.centerX
-            val dy = loc.y - screen.centerY
-            val dz = loc.z - screen.centerZ
-            if (dx * dx + dy * dy + dz * dz <= maxDistSq) {
-                result.add(player)
-            }
+        val now = System.nanoTime()
+        if (audienceChecked == Long.MIN_VALUE || now - audienceChecked >= 250_000_000L) {
+            cachedAudience = su.plo.voice.discs.utils.PlayerAudience.nearby(
+                screen.worldName, screen.centerX, screen.centerY, screen.centerZ, maxDistance.toDouble())
+            audienceChecked = now
         }
-        return result
+        return cachedAudience
     }
 
     @Synchronized
@@ -568,6 +572,7 @@ class VideoPlayer(
         mapViewers.update(players.map { it.uniqueId })
         if (players.isEmpty()) {
             previousViewers = emptyMap()
+            companionRecipients.clear()
             return
         }
         val newViewers = players.filter { previousViewers[it.uniqueId] !== it }
@@ -576,7 +581,10 @@ class VideoPlayer(
 
         if (companionRgb && players.any(CompanionScreens::capable)) {
             try {
-                CompanionScreens.frame(screen, rgbEncoder.encode(rawFrame, totalWidth, rows * 128, companionQuality), players)
+                val jpeg = rgbEncoder.encode(rawFrame, totalWidth, rows * 128, companionQuality)
+                val capable = players.filter(CompanionScreens::capable)
+                val recipients = companionRecipients.select(jpeg, capable, System.nanoTime())
+                if (recipients.isNotEmpty()) CompanionScreens.frame(screen, jpeg, recipients)
             } catch (e: Exception) {
                 logger.debug("RGB screen encoding failed; palette fallback remains available", e)
             }
@@ -589,7 +597,8 @@ class VideoPlayer(
                 val mapId = screen.mapIds.getOrNull(r)?.getOrNull(c) ?: continue
                 val tileBuffer = tileBuffers[r][c]
 
-                for (y in 0 until 128) {
+                val rgbChanged = rgbTiles[r][c].update(rawFrame, totalWidth, startX, startY)
+                if (rgbChanged) for (y in 0 until 128) {
                     val globalY = startY + y
                     val rowOffset = (globalY * totalWidth + startX) * 3
                     val tileRowOffset = y * 128
@@ -603,7 +612,7 @@ class VideoPlayer(
                     }
                 }
 
-                val changed = tileDeltas[r][c].update(tileBuffer)
+                val changed = if (rgbChanged) tileDeltas[r][c].update(tileBuffer) else null
                 fun send(region: MapTileRegion, viewers: List<Player>) {
                     val packet = WrapperPlayServerMapData(
                         mapId, 0.toByte(), false, false, emptyList(),
@@ -625,6 +634,8 @@ class VideoPlayer(
 
     @Synchronized
     fun clearScreen() {
+        companionRecipients.clear()
+        audienceChecked = Long.MIN_VALUE
         mapViewers.update(emptyList())
         // Also release overrides held by clients that have already left viewing range.
         for (row in screen.mapIds) for (mapId in row) CompanionScreens.clear(mapId)

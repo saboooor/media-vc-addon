@@ -64,6 +64,7 @@ class ScreenManager : PluginKoinComponent {
             activePlayers.clear()
         }
         selectionSessions.clear()
+        saveScreens()
     }
 
     fun loadScreens() {
@@ -85,15 +86,9 @@ class ScreenManager : PluginKoinComponent {
     }
 
     fun saveScreens() {
-        try {
-            val file = screensFile
-            if (!file.parentFile.exists()) {
-                file.parentFile.mkdirs()
-            }
-            val json = gson.toJson(screens)
-            file.writeText(json)
-        } catch (e: Exception) {
-            plugin.slF4JLogger.error("Failed to save screens to $screensFile", e)
+        val snapshot = screens.mapValues { (_, screen) -> screen.copy() }
+        su.plo.voice.discs.utils.SettingsFileWriter.shared.submit(screensFile, { gson.toJson(snapshot) }) {
+            plugin.slF4JLogger.error("Failed to save screens to $screensFile", it)
         }
     }
 
