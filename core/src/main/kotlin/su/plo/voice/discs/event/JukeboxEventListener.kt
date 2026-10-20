@@ -461,20 +461,19 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     rightSvcChannel = noteSvcChannel,
                     controls = controls
                 )
-            }
-            controls.onPauseChanged = { isPaused ->
-                screenManager?.onJukeboxPause(block, isPaused)
-            }
-            controls.onSeek = { targetMs ->
-                screenManager?.onJukeboxSeek(block, targetMs)
-            }
-            val videoIdentifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.info.identifier?.takeIf { it.isNotBlank() } ?: identifier
-            val isYouTubeMusic = track.info.author.contains("- Topic", ignoreCase = true) ||
-                identifier.contains("music.youtube.com") || (track.info.uri ?: "").contains("music.youtube.com")
-            screenManager?.onJukeboxPlay(block, if (identifier.startsWith("jellyfin:")) identifier else videoIdentifier,
-                artworkUrl = track.info.artworkUrl, isYouTubeMusic = isYouTubeMusic,
-                playbackPositionMs = { controls.position.takeIf { it > 0 } })
-            try {
+            }            try {
+                controls.onPauseChanged = { isPaused ->
+                    screenManager?.onJukeboxPause(block, isPaused)
+                }
+                controls.onSeek = { targetMs ->
+                    screenManager?.onJukeboxSeek(block, targetMs)
+                }
+                val videoIdentifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.info.identifier?.takeIf { it.isNotBlank() } ?: identifier
+                val isYouTubeMusic = track.info.author.contains("- Topic", ignoreCase = true) ||
+                    identifier.contains("music.youtube.com") || (track.info.uri ?: "").contains("music.youtube.com")
+                screenManager?.onJukeboxPlay(block, if (identifier.startsWith("jellyfin:")) identifier else videoIdentifier,
+                    artworkUrl = track.info.artworkUrl, isYouTubeMusic = isYouTubeMusic,
+                    playbackPositionMs = { controls.position.takeIf { it > 0 } })
                 var lastExistenceCheck = System.currentTimeMillis()
                 var lastRecordReset = System.currentTimeMillis()
                 var lastAudioCheck = System.currentTimeMillis()

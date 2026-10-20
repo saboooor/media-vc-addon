@@ -117,10 +117,12 @@ class JukeboxVisualizer(private val jukeboxes: JukeboxEventListener) : Listener,
                         }
                         if (spec.kind == VisualizerKind.SPEAKER) {
                             val pulse = display.speaker.update(if (controls?.paused != false) 0f else bass)
-                            val size = 0.65f + pulse * 0.8f
-                            if (display.spec != spec || abs(display.heights[0] - size) > 0.01f) {
-                                transform(display.entities[0], spec, 0, size, pulse)
-                                display.heights[0] = size
+                            if (display.spec != spec || abs(display.heights[0] - pulse) > 0.01f) {
+                                display.entities.forEachIndexed { index, entity ->
+                                    if (display.spec != spec || SpeakerDriver.parts[index].moving)
+                                        transform(entity, spec, index, 0f, pulse)
+                                }
+                                display.heights[0] = pulse
                             }
                         } else for (index in 0 until 16) {
                             val target = if (controls == null && editing.containsKey(block)) 0.6f else if (controls?.paused != false) 0.05f else 0.05f + levels[index] * 1.8f
@@ -147,11 +149,13 @@ class JukeboxVisualizer(private val jukeboxes: JukeboxEventListener) : Listener,
         val entities = mutableListOf<Entity>()
         try {
             val y = if (block.getRelative(0, 1, 0).state is Chest) 2.1 else 1.1
-            repeat(if (spec.kind == VisualizerKind.BARS) 16 else 1) { index ->
+            repeat(if (spec.kind == VisualizerKind.BARS) 16 else SpeakerDriver.parts.size) { index ->
                 val entity = block.world.spawnEntity(block.location.add(0.5, y, 0.5), type!!)
                 entities += entity
                 entity.isPersistent = false
-                val material = if (spec.kind == VisualizerKind.SPEAKER) Material.GRAY_CONCRETE else Material.valueOf(
+                val material = if (spec.kind == VisualizerKind.SPEAKER) {
+                    if (SpeakerDriver.parts[index].cone) Material.GRAY_CONCRETE else Material.BLACK_CONCRETE
+                } else Material.valueOf(
                     listOf("LIME_CONCRETE", "CYAN_CONCRETE", "BLUE_CONCRETE", "PURPLE_CONCRETE")[index / 4])
                 entity.javaClass.getMethod("setBlock", org.bukkit.block.data.BlockData::class.java).invoke(entity, Bukkit.createBlockData(material))
                 entity.javaClass.getMethod("setInterpolationDuration", Int::class.javaPrimitiveType).invoke(entity, 1)
@@ -174,12 +178,13 @@ class JukeboxVisualizer(private val jukeboxes: JukeboxEventListener) : Listener,
     private fun transform(entity: Entity, spec: VisualizerInstance, index: Int, height: Float, pulse: Float = 0f) {
         val layout = spec.layout
         val speaker = spec.kind == VisualizerKind.SPEAKER
-        val width = if (speaker) height * layout.width else 0.12f * layout.width
-        val tall = height * layout.height
-        val depth = if (speaker) 0.08f + pulse * 0.12f else width
-        val x = if (speaker) -width / 2 else (index - 7.5f) * 0.16f * layout.width - width / 2
-        val y = if (speaker) 0.65f - tall / 2 else 0f
-        val z = 0.4f - depth / 2
+        val part = if (speaker) SpeakerDriver.parts[index] else null
+        val width = if (part != null) part.width * layout.width else 0.12f * layout.width
+        val tall = if (part != null) part.height * layout.height else height * layout.height
+        val depth = part?.depth ?: width
+        val x = if (part != null) part.x * layout.width else (index - 7.5f) * 0.16f * layout.width - width / 2
+        val y = if (part != null) 0.65f + (part.y - 0.65f) * layout.height else 0f
+        val z = if (part != null) part.z + (if (part.moving) SpeakerDriver.excursion(pulse) else 0f) else 0.4f - depth / 2
         val angle = spec.facing.degrees * PI.toFloat() / 180f
         val cosine = when (spec.facing) { VisualizerFacing.SOUTH -> 1f; VisualizerFacing.NORTH -> -1f; else -> 0f }
         val sine = when (spec.facing) { VisualizerFacing.EAST -> 1f; VisualizerFacing.WEST -> -1f; else -> 0f }

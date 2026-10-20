@@ -73,7 +73,7 @@ object PaperPlaybackDialog {
         "audio_menu", "crossfade", "fadeless", "fademore", "fadetoggle" -> "item/repeater"
         "stop" -> "item/redstone"
         "eject" -> "item/iron_pickaxe"
-        "lamp_menu", "lamp_link", "lamp_unlink" -> "item/glowstone_dust"
+        "lamp_menu", "lamp_link", "lamp_link_bass", "lamp_link_mid", "lamp_link_highs", "lamp_unlink" -> "item/glowstone_dust"
         "screen_menu", "screen_link" -> "item/item_frame"
         "screen_subtitles" -> "item/writable_book"
         "screen_unlink" -> "item/shears"

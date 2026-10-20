@@ -3,6 +3,8 @@ package su.plo.voice.discs.command.subcommand
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import net.kyori.adventure.key.Key
+import org.koin.core.component.inject
+import su.plo.voice.discs.item.DiscHelper
 import org.bukkit.Bukkit
 import net.kyori.adventure.text.event.ClickEvent
 import org.bukkit.GameMode
@@ -22,6 +24,7 @@ import org.bukkit.inventory.ItemStack
 import su.plo.slib.api.permission.PermissionDefault
 import su.plo.voice.discs.PlaybackDialogView
 import su.plo.voice.discs.dialog.PaperPlaybackDialog
+import su.plo.voice.discs.visualizer.LightBand
 import su.plo.voice.discs.visualizer.VisualizerKind
 import su.plo.voice.discs.PlaybackControls
 import su.plo.voice.discs.command.SubCommand
@@ -43,6 +46,7 @@ class ControlCommand(
     private val playlists: PlaylistCommand,
     private val worldEditor: VisualizerCommand,
 ) : SubCommand(), Listener {
+    private val discHelper: DiscHelper by inject()
     private val bassLamps: JukeboxBassLamps? by getterOrNull<JukeboxBassLamps>()
     private val visualizer: JukeboxVisualizer? by getterOrNull<JukeboxVisualizer>()
     private val screenManager: ScreenManager? by getterOrNull<ScreenManager>()
@@ -101,9 +105,11 @@ class ControlCommand(
             event.setUseInteractedBlock(Event.Result.DENY)
             return
         }
-        // Held-item interactions belong to vanilla and the disc insertion listeners, even
-        // when a screen is linked, a queue is active, or the jukebox already contains a disc.
-        if (!emptyHands || event.hand != EquipmentSlot.HAND) return
+        // Leave either hand's discs to vanilla and the custom disc insertion listener.
+        // Check the offhand before handling the main-hand event so it can still insert a disc.
+        if (discHelper.isRecord(event.player.inventory.itemInMainHand) ||
+            discHelper.isRecord(event.player.inventory.itemInOffHand)) return
+        if (event.hand != EquipmentSlot.HAND) return
         event.setUseInteractedBlock(Event.Result.DENY)
         event.setUseItemInHand(Event.Result.DENY)
         if (!checkCanExecute(event.player) || event.player.gameMode == GameMode.SPECTATOR) {
@@ -126,6 +132,10 @@ class ControlCommand(
         sessions[player.uniqueId] = session
         val prefix = "/disc control ${session.token} "
         val buttons = mutableListOf<Pair<String, String>>()
+        if (controls != null) {
+            buttons += (if (controls.paused) "Resume" else "Pause") to (prefix + "pause")
+            buttons += "Skip" to (prefix + "skip")
+        }
         val queueLabels = mutableMapOf<String, Component>()
         val chest = block.getRelative(org.bukkit.block.BlockFace.UP).state as? org.bukkit.block.Chest
         if (controls == null && !playlists.isQueued(block) && chest != null)
@@ -140,7 +150,6 @@ class ControlCommand(
         }
         buttons += "Speaker setup" to (prefix + "speakers")
         if (controls != null) {
-            buttons += (if (controls.paused) "Resume" else "Pause") to (prefix + "pause")
             buttons += "Refresh" to (prefix + "refresh")
             buttons += "Stop playback" to (prefix + "stop")
 
@@ -162,7 +171,7 @@ class ControlCommand(
         }
 
         bassLamps?.let {
-            buttons += "Bass lamps" to (prefix + "lamp_menu")
+            buttons += "Lights" to (prefix + "lamp_menu")
         }
         val canManageScreens = player.hasPermission("pv.addon.discs.screen") ||
             player.hasPermission("vc.addon.discs.screen") || player.isOp
@@ -251,7 +260,8 @@ class ControlCommand(
             buttons.clear()
             queueLabels.clear()
             body.clear()
-            body += Component.text("Bass lamps: ${lamps.count(block)} linked", NamedTextColor.GOLD)
+            body += Component.text("Lights: ${lamps.count(block)} linked", NamedTextColor.GOLD)
+            body += Component.text("Choose a band, then click a lamp to link it or change its response.")
             bodyLampButtons(buttons, prefix, lamps.count(block))
             buttons += "Back to playback" to (prefix + "refresh")
         }
@@ -339,7 +349,7 @@ class ControlCommand(
             }
             buttons += "Back to playback" to (prefix + "refresh")
         }
-        val dialogTitle = if (lampMenu) "Bass lamps" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Move Hologram" else if (crossfade) "Audio settings" else "Jukebox controls"
+        val dialogTitle = if (lampMenu) "Lights" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Move Hologram" else if (crossfade) "Audio settings" else "Jukebox controls"
         try {
             PaperPlaybackDialog.show(player, listOf(Component.join(net.kyori.adventure.text.JoinConfiguration.newlines(), body)), buttons, queueLabels, dialogTitle, 2)
         } catch (_: ClassNotFoundException) {
@@ -355,8 +365,9 @@ class ControlCommand(
     }
 
     private fun bodyLampButtons(buttons: MutableList<Pair<String, String>>, prefix: String, count: Int) {
-        buttons += "Link bass lamp" to (prefix + "lamp_link")
-        if (count > 0) buttons += "Unlink bass lamp ($count linked)" to (prefix + "lamp_unlink")
+        for (band in LightBand.entries)
+            buttons += "Set light: ${band.label}" to (prefix + "lamp_link_${band.name.lowercase()}")
+        if (count > 0) buttons += "Unlink light ($count linked)" to (prefix + "lamp_unlink")
     }
 
     override fun execute(sender: CommandSender, arguments: Array<out String>) {
@@ -417,8 +428,16 @@ class ControlCommand(
             }
             "play" -> { if (controls == null) jukeboxes.playStoredDisc(session.block, player); return }
             "pause" -> controls?.togglePause()
-            "lamp_link", "lamp_unlink" -> {
-                bassLamps?.beginLink(player, session.block, unlink = arguments[2] == "lamp_unlink")
+            "skip" -> {
+                if (controls != null) {
+                    if (playlists.isQueued(session.block)) playlists.skipTrack(session.block)
+                    else jukeboxes.stopPlayback(session.block)
+                }
+                return
+            }
+            "lamp_link", "lamp_link_bass", "lamp_link_mid", "lamp_link_highs", "lamp_unlink" -> {
+                bassLamps?.beginLink(player, session.block, unlink = arguments[2] == "lamp_unlink",
+                    band = LightBand.entries.firstOrNull { arguments[2] == "lamp_link_${it.name.lowercase()}" } ?: LightBand.BASS)
                 return
             }
             "holo_edit" -> { worldEditor.editHologram(player, session.block); return }

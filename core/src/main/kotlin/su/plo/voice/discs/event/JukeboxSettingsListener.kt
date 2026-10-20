@@ -41,7 +41,7 @@ class JukeboxSettingsListener(
         return SavedJukeboxSettings(volume = playback.volumeSetting(block),
             loop = playlists.playbackModes(block).first, shuffle = playlists.playbackModes(block).second, stereo = playback.stereoMode(block), crossfade = fade.first, lastCrossfade = fade.second,
             hologram = holograms.getOffset(block).copy(), visualizers = visualizers.instances(block),
-            lamps = lamps.linkedPositions(block), screenName = screens.getScreenForJukebox(block)?.name, noteBlock = playback.noteLink(block),
+            lamps = lamps.linkedPositions(block), lampBands = lamps.linkedBands(block), screenName = screens.getScreenForJukebox(block)?.name, noteBlock = playback.noteLink(block),
             leftNoteBlock = playback.channelNoteLink(block, true), rightNoteBlock = playback.channelNoteLink(block, false))
     }
 
@@ -116,7 +116,7 @@ class JukeboxSettingsListener(
         playlists.restoreCrossfade(block, settings.crossfade, settings.lastCrossfade)
         visualizers.restore(block, settings.visualizers)
         holograms.setOffset(block, settings.hologram.x, settings.hologram.y, settings.hologram.z)
-        if (settings.lamps.isNotEmpty()) lamps.restoreLinks(block, settings.lamps)
+        if (settings.lamps.isNotEmpty()) lamps.restoreLinks(block, settings.lamps, settings.lampBands)
         settings.screenName?.let { name ->
             val screen = screens.getScreen(name)
             if (screen != null && screen.worldName == block.world.name && (screen.jukeboxWorld == null || screen.isLinkedTo(block))) {

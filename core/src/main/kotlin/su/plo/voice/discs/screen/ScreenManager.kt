@@ -43,7 +43,7 @@ class ScreenManager : PluginKoinComponent {
     private val playbackLock = Any()
     private val playbackRequests = mutableMapOf<String, Any>()
     private val activeIdentifiers = ConcurrentHashMap<String, String>()
-    private val activeArtwork = ConcurrentHashMap<String, String?>()
+    private val activeArtwork = ConcurrentHashMap<String, String>()
     private val activeYouTubeMusic = ConcurrentHashMap<String, Boolean>()
     private var shuttingDown = false
     private val selectionSessions = ConcurrentHashMap<UUID, ScreenSelectionSession>()
@@ -339,7 +339,9 @@ class ScreenManager : PluginKoinComponent {
             if (shuttingDown) return
             stopVideo(screen)
             activeIdentifiers[lower] = identifier
-            activeArtwork[lower] = artworkUrl
+            // Missing artwork is normal for local files and private media.
+            if (artworkUrl != null) activeArtwork[lower] = artworkUrl
+            else activeArtwork.remove(lower)
             activeYouTubeMusic[lower] = isYouTubeMusic
             Any().also {
                 playbackRequests[lower] = it

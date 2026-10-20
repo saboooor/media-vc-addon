@@ -17,6 +17,7 @@ data class SavedJukeboxSettings(
     val hologram: HologramOffset = HologramOffset(),
     val visualizers: List<VisualizerInstance> = emptyList(),
     val lamps: List<JukeboxBassLamps.Position> = emptyList(),
+    val lampBands: List<su.plo.voice.discs.visualizer.LightBand> = emptyList(),
     val screenName: String? = null,
     val leftNoteBlock: JukeboxBassLamps.Position? = null,
     val rightNoteBlock: JukeboxBassLamps.Position? = null,
@@ -35,6 +36,8 @@ data class SavedJukeboxSettings(
             require(layout.width in 0.25f..4f && layout.height in 0.25f..4f)
         }
         require(lamps.size <= 1024)
+        require(lampBands.isEmpty() || lampBands.size == lamps.size)
+        lampBands.forEach { requireNotNull(it) }
         for (lamp in lamps + listOfNotNull(noteBlock, leftNoteBlock, rightNoteBlock)) {
             java.util.UUID.fromString(lamp.world)
             require(lamp.x in -30_000_000..30_000_000 && lamp.z in -30_000_000..30_000_000 && lamp.y in -4096..4096)
