@@ -21,6 +21,7 @@ import org.bukkit.inventory.EquipmentSlot
 import org.bukkit.inventory.ItemStack
 import su.plo.slib.api.permission.PermissionDefault
 import su.plo.voice.discs.PlaybackDialogView
+import su.plo.voice.discs.dialog.PaperPlaybackDialog
 import su.plo.voice.discs.visualizer.VisualizerKind
 import su.plo.voice.discs.PlaybackControls
 import su.plo.voice.discs.command.SubCommand
@@ -262,6 +263,8 @@ class ControlCommand(
             val screen = screenManager?.getScreenForJukebox(block)
             if (screen != null) {
                 body += Component.text("Linked screen: ${screen.name} (${screen.columns}x${screen.rows} frames)", NamedTextColor.AQUA)
+                body += Component.text("Subtitles: ${if (screen.subtitlesEnabled) "Enabled" else "Disabled"}", NamedTextColor.GRAY)
+                buttons += "Subtitles: ${if (screen.subtitlesEnabled) "On" else "Off"}" to (prefix + "screen_subtitles")
                 buttons += "Unlink Screen" to (prefix + "screen_unlink")
                 buttons += "Clear Screen" to (prefix + "screen_clear")
             } else {
@@ -302,8 +305,8 @@ class ControlCommand(
             body += Component.text(controls.title, NamedTextColor.GOLD)
             body += PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream)
             body += Component.text("Seek audio and linked video together.", NamedTextColor.GRAY)
-            for (seconds in PlaybackDialogView.seekSteps(controls.duration)) {
-                val label = if (seconds < 60) "${seconds}s" else "${seconds / 60}m"
+            val seekSteps = listOf(15 to "15s", 30 to "30s", 60 to "1m", 300 to "5m")
+            for ((seconds, label) in seekSteps) {
                 buttons += "−$label" to (prefix + "seek_minus_$seconds")
                 buttons += "+$label" to (prefix + "seek_plus_$seconds")
             }
@@ -380,7 +383,8 @@ class ControlCommand(
         val seekSeconds = arguments[2].takeIf { it.startsWith("seek_minus_") || it.startsWith("seek_plus_") }
             ?.substringAfterLast('_')?.toIntOrNull()
         if (seekSeconds != null) {
-            if (controls == null || seekSeconds !in PlaybackDialogView.seekSteps(controls.duration)) return
+            val allowedSteps = setOf(15, 30, 60, 300)
+            if (controls == null || seekSeconds !in allowedSteps) return
             val delta = seekSeconds * 1000L * if (arguments[2].startsWith("seek_minus_")) -1 else 1
             controls.seekTo(controls.position + delta)
             show(player, session.block, seek = true)
@@ -504,6 +508,16 @@ class ControlCommand(
                 show(player, session.block, screenMenu = true)
                 return
             }
+            "screen_subtitles" -> {
+                val sm = screenManager
+                val screen = sm?.getScreenForJukebox(session.block)
+                if (screen != null) {
+                    val enabled = sm.toggleSubtitles(screen)
+                    player.sendMessage(Component.text("Subtitles ${if (enabled) "enabled" else "disabled"} on screen '${screen.name}'.", NamedTextColor.YELLOW))
+                }
+                show(player, session.block, screenMenu = true)
+                return
+            }
             "screen_clear" -> {
                 val sm = screenManager
                 val screen = sm?.getScreenForJukebox(session.block)
@@ -527,94 +541,5 @@ class ControlCommand(
 
     @EventHandler
     fun onQuit(event: PlayerQuitEvent) { sessions.remove(event.player.uniqueId); noteRequests.remove(event.player.uniqueId) }
-}
-
-/** Paper's dialog factory, as used by Lumistones, loaded only on dialog-capable servers. */
-private object PaperPlaybackDialog {
-    private const val ROOT = "io.papermc.paper.registry.data.dialog."
-
-    private fun invoke(type: Class<*>, target: Any?, name: String, vararg args: Any?): Any? {
-        val method = type.methods.first { method ->
-            method.name == name && method.parameterCount == args.size &&
-                method.parameterTypes.zip(args).all { (parameter, argument) ->
-                    argument == null || parameter.isInstance(argument) ||
-                        parameter == Int::class.javaPrimitiveType && argument is Int ||
-                        parameter == Boolean::class.javaPrimitiveType && argument is Boolean
-                }
-        }
-        method.trySetAccessible()
-        return method.invoke(target, *args)
-    }
-    private fun call(target: Any, name: String, vararg args: Any?) = invoke(target.javaClass, target, name, *args)!!
-    private fun static(type: String, name: String, vararg args: Any?) = invoke(Class.forName(type), null, name, *args)!!
-
-    fun icon(sprite: String, label: Component): Component {
-        return try {
-            val contents = static("net.kyori.adventure.text.object.ObjectContents", "sprite",
-                Key.key(if (sprite.startsWith("block/")) "minecraft:blocks" else PlaybackDialogView.spriteAtlas(Bukkit.getMinecraftVersion())), Key.key("minecraft:$sprite"))
-            (static("net.kyori.adventure.text.Component", "object", contents) as Component)
-                .append(Component.text(" ")).append(label)
-        } catch (_: ClassNotFoundException) {
-            label
-        } catch (_: NoSuchElementException) {
-            label
-        }
-    }
-
-    private fun buttonSprite(command: String?): String = when (command?.substringAfterLast(' ')) {
-        "playchest" -> "item/chest_minecart"
-        "loop" -> "item/clock_00"
-        "shuffle" -> "item/ender_eye"
-        "speakers", "stereo" -> "block/jukebox_side"
-        "note_link", "note_left", "note_right" -> "block/note_block"
-        "note_unlink", "note_left_unlink", "note_right_unlink" -> "item/shears"
-        "holo_edit", "holo_menu" -> "item/armor_stand"
-        "holo_reset" -> "item/compass_00"
-        null -> "item/oak_door"
-        "play", "pause" -> "item/music_disc_cat"
-        "seek", "refresh" -> "item/clock_00"
-        "back" -> "item/ender_pearl"
-        "forward", "skip" -> "item/spectral_arrow"
-        "queue_menu" -> "item/book"
-        "volume_menu" -> "item/goat_horn"
-        "quieter" -> "item/echo_shard"
-        "louder" -> "item/goat_horn"
-        "viz_menu", "viz_toggle", "viz_wider", "viz_narrower", "viz_taller", "viz_shorter", "viz_reset" -> "item/amethyst_shard"
-        "audio_menu", "crossfade", "fadeless", "fademore", "fadetoggle" -> "item/repeater"
-        "stop" -> "item/redstone"
-        "eject" -> "item/iron_pickaxe"
-        "lamp_menu", "lamp_link", "lamp_unlink" -> "item/glowstone_dust"
-        "screen_menu", "screen_link" -> "item/item_frame"
-        "screen_unlink" -> "item/shears"
-        "screen_clear" -> "item/water_bucket"
-        else -> when {
-            command?.substringAfterLast(' ')?.startsWith("volume_minus_") == true -> "item/echo_shard"
-            command?.substringAfterLast(' ')?.startsWith("volume_") == true -> "item/goat_horn"
-            command?.substringAfterLast(' ')?.startsWith("viz_") == true -> "item/amethyst_shard"
-            command?.substringAfterLast(' ')?.startsWith("seek_minus_") == true -> "item/ender_pearl"
-            command?.substringAfterLast(' ')?.startsWith("seek_plus_") == true -> "item/spectral_arrow"
-            else -> "item/paper"
-        }
-    }
-
-    fun show(player: Player, body: List<Component>, buttons: List<Pair<String, String>>, queueLabels: Map<String, Component>, title: String, columns: Int) {
-        val dialogClass = Class.forName("io.papermc.paper.dialog.Dialog")
-        fun button(label: String, command: String?) = static(ROOT + "ActionButton", "create",
-            queueLabels[command] ?: icon(buttonSprite(command), Component.text(label)), Component.text(label), 150,
-            command?.let { static(ROOT + "action.DialogAction", "staticAction", ClickEvent.runCommand(it)) })
-        val baseBuilder = static(ROOT + "DialogBase", "builder", Component.text(title))
-        call(baseBuilder, "pause", false)
-        call(baseBuilder, "canCloseWithEscape", true)
-        call(baseBuilder, "body", body.map { static(ROOT + "body.DialogBody", "plainMessage", it, 350) })
-        val base = call(baseBuilder, "build")
-        val type = static(ROOT + "type.DialogType", "multiAction",
-            buttons.map { (label, command) -> button(label, command) }, button("Close", null), columns)
-        val dialog = invoke(dialogClass, null, "create", Consumer<Any> { factory ->
-            val builder = call(factory, "empty")
-            call(builder, "base", base)
-            call(builder, "type", type)
-        })!!
-        invoke(player.javaClass, player, "showDialog", dialog)
-    }
 }
 

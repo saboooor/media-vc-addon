@@ -37,7 +37,8 @@ class VideoPlayer(
     ditherStrength: Int = 12,
     private val companionRgb: Boolean = true,
     private val companionQuality: Int = 85,
-    private val playbackPositionMs: (() -> Long?)? = null
+    val playbackPositionMs: (() -> Long?)? = null,
+    val subtitlePath: String? = null
 ) {
     @Volatile
     private var process: Process? = null
@@ -226,7 +227,7 @@ class VideoPlayer(
         command.addAll(listOf("-map", "0:v:0", "-an", "-sn", "-dn"))
         command.add("-vf")
         // Drop surplus source frames before scaling and padding.
-        command.add(videoFilter(fps, totalWidth, totalHeight))
+        command.add(videoFilter(fps, totalWidth, totalHeight, subtitlePath))
         // Raw RGB needs no frame-threaded encoder queue; flush each frame to the renderer.
         command.addAll(listOf("-threads:v", "1", "-flush_packets", "1"))
         command.add("-f")
@@ -679,12 +680,17 @@ class VideoPlayer(
             "-reconnect_delay_max", "5"
         )
 
-        internal fun videoFilter(fps: Int, width: Int, height: Int): String =
-            "fps='if(gt(source_fps,0),min(source_fps,$fps),$fps)'," +
+        internal fun videoFilter(fps: Int, width: Int, height: Int, subtitlePath: String? = null): String {
+            val base = "fps='if(gt(source_fps,0),min(source_fps,$fps),$fps)'," +
                 "scale=$width:$height:force_original_aspect_ratio=decrease," +
-                "pad=$width:$height:(ow-iw)/2:(oh-ih)/2:black," +
-                // Pace decoded frames by their timestamps instead of throttling MKV input packets.
-                "realtime"
+                "pad=$width:$height:(ow-iw)/2:(oh-ih)/2:black"
+            val subFilter = if (subtitlePath != null && File(subtitlePath).exists()) {
+                val escaped = subtitlePath.replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\''")
+                val fontSize = (height / 14).coerceIn(12, 28)
+                ",subtitles='$escaped':force_style='FontSize=$fontSize,Outline=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000'"
+            } else ""
+            return "$base$subFilter,realtime"
+        }
 
         internal fun shouldReportExit(exit: Int?, cancelled: Boolean, stopped: Boolean): Boolean =
             exit != null && exit != 0 && !cancelled && !stopped
@@ -729,6 +735,9 @@ class VideoPlayer(
         process?.let {
             it.destroyForcibly()
             process = null
+        }
+        if (subtitlePath != null) {
+            runCatching { File(subtitlePath).delete() }
         }
     }
 

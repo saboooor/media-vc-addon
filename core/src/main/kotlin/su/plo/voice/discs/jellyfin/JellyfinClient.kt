@@ -33,12 +33,12 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
         return Session(base, userId, token, deviceId)
     }
 
-    fun browse(session: Session, page: Int, search: String = ""): Page {
+    fun browse(session: Session, page: Int, search: String = "", limit: Int = PAGE_SIZE): Page {
         require(page in 0..100_000 && search.length <= 200)
         val query = "Items?userId=${session.userId}&recursive=true&includeItemTypes=Audio,AudioBook,Movie,Episode,MusicVideo,Video&sortBy=SortName&sortOrder=Ascending" +
-            "&startIndex=${page * PAGE_SIZE}&limit=$PAGE_SIZE&enableImages=false&searchTerm=${encode(search)}"
+            "&startIndex=${page * limit}&limit=$limit&enableImages=false&searchTerm=${encode(search)}"
         val json = request(session.baseUrl, query, session.deviceId, session.token)
-        val items = json.getAsJsonArray("Items")?.take(PAGE_SIZE)?.map { value ->
+        val items = json.getAsJsonArray("Items")?.take(limit)?.map { value ->
             val item = value.asJsonObject
             Media(mediaId(item.get("Id").asString), (item.get("Name")?.asString ?: "Untitled").take(256),
                 (item.getAsJsonArray("Artists")?.joinToString(", ") { it.asString } ?: "").take(256),
@@ -60,6 +60,59 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
 
     fun videoStreamUrl(session: Session, itemId: String): String =
         session.baseUrl + "Videos/${mediaId(itemId)}/stream?static=true"
+
+    data class SubtitleTrack(
+        val index: Int,
+        val displayTitle: String,
+        val language: String,
+        val isDefault: Boolean,
+        val isForced: Boolean,
+        val codec: String,
+        val deliveryUrl: String?
+    )
+
+    fun getSubtitleTracks(session: Session, itemId: String): List<SubtitleTrack> {
+        val json = try {
+            request(session.baseUrl, "Items/${mediaId(itemId)}?userId=${session.userId}&Fields=MediaStreams", session.deviceId, session.token)
+        } catch (_: Exception) {
+            return emptyList()
+        }
+        val streams = json.getAsJsonArray("MediaStreams") ?: return emptyList()
+        val list = mutableListOf<SubtitleTrack>()
+        for (element in streams) {
+            val obj = element.asJsonObject
+            val type = obj.get("Type")?.asString ?: continue
+            if (type.equals("Subtitle", ignoreCase = true)) {
+                val index = obj.get("Index")?.asInt ?: continue
+                val displayTitle = obj.get("DisplayTitle")?.asString ?: "Subtitle $index"
+                val language = obj.get("Language")?.asString ?: "und"
+                val isDefault = obj.get("IsDefault")?.asBoolean ?: false
+                val isForced = obj.get("IsForced")?.asBoolean ?: false
+                val codec = obj.get("Codec")?.asString ?: "srt"
+                val deliveryUrl = obj.get("DeliveryUrl")?.asString
+                list += SubtitleTrack(index, displayTitle, language, isDefault, isForced, codec, deliveryUrl)
+            }
+        }
+        return list
+    }
+
+    fun downloadSubtitle(session: Session, itemId: String, track: SubtitleTrack): String? {
+        val path = track.deliveryUrl?.takeIf { it.isNotBlank() }?.let { if (it.startsWith("/")) it.substring(1) else it }
+            ?: "Videos/${mediaId(itemId)}/${mediaId(itemId)}/Subtitles/${track.index}/Stream.srt"
+        val url = session.baseUrl + path
+        try {
+            val req = HttpRequest.newBuilder(URI.create(url))
+                .header("Authorization", authorization(session.deviceId, session.token))
+                .timeout(Duration.ofSeconds(15))
+                .GET().build()
+            val response = http.send(req, HttpResponse.BodyHandlers.ofString(Charsets.UTF_8))
+            if (response.statusCode() in 200..299 && response.body().isNotBlank()) {
+                return response.body()
+            }
+        } catch (_: Exception) {
+        }
+        return null
+    }
 
     private fun request(base: String, path: String, device: String, token: String? = null, body: JsonObject? = null): JsonObject {
         try {

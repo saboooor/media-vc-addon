@@ -86,10 +86,25 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         val links = if (left) leftNoteLinks else rightNoteLinks
         if (position == null) links.remove(block) else links[block] = position
     }
-    fun clearVolume(block: Block) { savedVolumes.remove(block); stereoModes.remove(block); noteLinks.remove(block); leftNoteLinks.remove(block); rightNoteLinks.remove(block) }
+    fun clearVolume(block: Block) { pendingLoopResumes.remove(block); savedVolumes.remove(block); stereoModes.remove(block); noteLinks.remove(block); leftNoteLinks.remove(block); rightNoteLinks.remove(block) }
     val controlsByBlock: MutableMap<Block, PlaybackControls> = ConcurrentHashMap()
 
-    fun stopPlayback(block: Block) { jobByBlock.remove(block)?.cancel(DiscEjectCause()) }
+    data class PendingLoopResume(
+        val identifier: String,
+        val itemMeta: ItemMeta?,
+        val positionMs: Long,
+        val paused: Boolean = false
+    )
+    val pendingLoopResumes = ConcurrentHashMap<Block, PendingLoopResume>()
+
+    fun cancelPendingLoopResume(block: Block) {
+        pendingLoopResumes.remove(block)
+    }
+
+    fun stopPlayback(block: Block) {
+        pendingLoopResumes.remove(block)
+        jobByBlock.remove(block)?.cancel(DiscEjectCause())
+    }
 
     private val jobByBlock: MutableMap<Block, Job> = ConcurrentHashMap()
 
@@ -98,9 +113,45 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         event.chunk.getTileEntities({ it.isJukebox() }, true)
             .forEach {
                 val jukebox = it as? Jukebox ?: return@forEach
-                if (!it.record.isCustomDisc(discHelper)) return@forEach
+                if (!it.record.isCustomDisc(discHelper)) {
+                    pendingLoopResumes.remove(jukebox.block)
+                    return@forEach
+                }
 
                 jukebox.stopPlaying()
+
+                val block = jukebox.block
+                val pending = pendingLoopResumes.remove(block)
+                if (pending != null && shouldLoop(block)) {
+                    val record = jukebox.record
+                    val identifier = record.customDiscIdentifier(discHelper)
+                    if (identifier != null && identifier == pending.identifier && !isPlaying(block)) {
+                        scope.launch {
+                            delay(100)
+                            suspendSyncAt(block.location, voiceServer, plugin) {
+                                val currentJukebox = block.asJukebox() ?: return@suspendSyncAt
+                                val currentRecord = currentJukebox.record
+                                if (shouldLoop(block) && !isPlaying(block) &&
+                                    currentRecord.customDiscIdentifier(discHelper) == pending.identifier) {
+                                    val controls = PlaybackControls(
+                                        initialPositionMs = pending.positionMs,
+                                        initialVolume = savedVolumes[block] ?: 100
+                                    )
+                                    savedVolumes[block]?.let { controls.changeVolume(it - controls.volume) }
+                                    if (pending.paused) controls.togglePause()
+                                    playChestTrack(
+                                        identifier = pending.identifier,
+                                        block = block,
+                                        itemMeta = pending.itemMeta ?: currentRecord.itemMeta,
+                                        player = null,
+                                        chestQueue = false,
+                                        controls = controls
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
     }
 
@@ -110,8 +161,20 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
 
         jobByBlock.keys
             .filter { it.inChunk(chunk) }
-            .forEach {
-                jobByBlock.remove(it)?.cancel(DiscChunkUnloadCause())
+            .forEach { block ->
+                val looping = shouldLoop(block)
+                val controls = controlsByBlock[block]
+                val record = block.asJukebox()?.record
+                val identifier = record?.takeIf { it.isCustomDisc(discHelper) }?.customDiscIdentifier(discHelper)
+                if (looping && identifier != null) {
+                    pendingLoopResumes[block] = PendingLoopResume(
+                        identifier = identifier,
+                        itemMeta = record.itemMeta,
+                        positionMs = controls?.position ?: 0L,
+                        paused = controls?.paused ?: false
+                    )
+                }
+                jobByBlock.remove(block)?.cancel(DiscChunkUnloadCause())
             }
     }
 
@@ -151,6 +214,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             player.sendActionBar(Component.text("Loading...", NamedTextColor.YELLOW))
         }
 
+        pendingLoopResumes.remove(block)
         jobByBlock[block]?.cancel(DiscReplaceCause())
         val playbackJob = playTrack(identifier, block, item.itemMeta, voicePlayer, player)
         jobByBlock[block] = playbackJob
@@ -181,6 +245,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
 
         block.asJukebox()?.takeIf { it.isPlaying } ?: return
 
+        pendingLoopResumes.remove(block)
         jobByBlock.remove(block)?.cancel(DiscEjectCause())
     }
 
@@ -189,6 +254,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         event.block
             .takeIf { it.isJukebox() }
             ?.also { block ->
+                pendingLoopResumes.remove(block)
                 block.asJukebox()?.stopPlaying()
                 val sm = screenManager ?: return@also
                 sm.getScreenForJukebox(block)?.let { screen ->
@@ -205,6 +271,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         event.blockList()
             .filter { it.isJukebox() }
             .forEach { block ->
+                pendingLoopResumes.remove(block)
                 sm?.getScreenForJukebox(block)?.let { screen ->
                     sm.unlinkJukebox(screen.name)
                 }
@@ -218,6 +285,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         event.blockList()
             .filter { it.isJukebox() }
             .forEach { block ->
+                pendingLoopResumes.remove(block)
                 sm?.getScreenForJukebox(block)?.let { screen ->
                     sm.unlinkJukebox(screen.name)
                 }
@@ -532,6 +600,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             val item = event.item
             if (!item.isCustomDisc(discHelper)) return
 
+            pendingLoopResumes.remove(block)
             jobByBlock.remove(block)?.cancel(DiscPullCause())
         }
 
@@ -544,6 +613,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             val item = event.item
             val identifier = item.customDiscIdentifier(discHelper) ?: return
 
+            pendingLoopResumes.remove(block)
             jobByBlock.remove(block)?.cancel(DiscReplaceCause())
             jobByBlock[block] = playTrack(identifier, block, item.itemMeta)
         }

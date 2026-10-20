@@ -8,7 +8,11 @@ import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.Floa
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory
 
 /** One logical playback, shared by the PV and SVC decoders. */
-class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
+class PlaybackControls(
+    initialVolume: Int = 100,
+    initialGain: Double = 1.0,
+    initialPositionMs: Long = 0L
+) {
     @Volatile var failure: String? = null
         private set
     @Synchronized fun fail(message: String) {
@@ -71,7 +75,9 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
         private set
     @Volatile var volume: Int = initialVolume.coerceIn(0, 100)
         private set
-    val position: Long get() = players.firstOrNull()?.playingTrack?.position ?: 0
+    @Volatile var initialPositionMs: Long = initialPositionMs
+        private set
+    val position: Long get() = players.firstOrNull()?.playingTrack?.position?.takeIf { it > 0 } ?: initialPositionMs
     val duration: Long get() = players.firstOrNull()?.playingTrack?.duration ?: 0
     val isStream: Boolean get() = players.firstOrNull()?.playingTrack?.let {
         it.info.isStream && (it as? JellyfinTranscodedTrack)?.canRestart != true
@@ -88,8 +94,13 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
     }
 
     @Synchronized fun attach(player: AudioPlayer, channel: Int? = null) {
-        players.firstOrNull()?.playingTrack?.let { current ->
+        val current = players.firstOrNull()?.playingTrack
+        if (current != null) {
             seekPlayer(player, current.position)
+        } else if (initialPositionMs > 0L) {
+            val track = player.playingTrack
+            val target = if (track != null && track.duration > 0 && initialPositionMs >= track.duration - 1000) 0L else initialPositionMs
+            if (target > 0L) seekPlayer(player, target)
         }
         player.isPaused = paused
         player.volume = effectiveVolume()
@@ -116,6 +127,7 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
     @Synchronized fun seekTo(positionMs: Long) {
         if (!seekable) return
         val target = positionMs.coerceIn(0, (duration - 1).coerceAtLeast(0))
+        initialPositionMs = target
         players.forEach { seekPlayer(it, target) }
         spectrum.reset()
         onSeek?.invoke(target)

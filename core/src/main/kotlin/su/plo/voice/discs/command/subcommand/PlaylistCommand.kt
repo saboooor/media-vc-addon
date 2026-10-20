@@ -6,6 +6,7 @@ import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
+import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.block.Block
 import org.bukkit.block.BlockFace
@@ -28,6 +29,7 @@ import org.bukkit.event.inventory.InventoryMoveItemEvent
 import org.bukkit.event.block.BlockPlaceEvent
 import org.bukkit.event.player.PlayerInteractEvent
 import org.bukkit.event.player.PlayerQuitEvent
+import org.bukkit.event.world.ChunkLoadEvent
 import org.bukkit.event.world.ChunkUnloadEvent
 import org.bukkit.inventory.ItemStack
 import org.bukkit.inventory.EquipmentSlot
@@ -71,10 +73,19 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     private val modes = ConcurrentHashMap<Block, Pair<Boolean, Boolean>>()
     fun playbackModes(block: Block) = modes[block] ?: (false to false)
     fun restoreModes(block: Block, loop: Boolean, shuffle: Boolean) { modes[block] = loop to shuffle }
-    fun toggleLoop(block: Block) { val mode = playbackModes(block); restoreModes(block, !mode.first, mode.second) }
+    fun toggleLoop(block: Block) {
+        val mode = playbackModes(block)
+        val newLoop = !mode.first
+        restoreModes(block, newLoop, mode.second)
+        if (!newLoop) {
+            pendingLoopQueues.remove(block)
+            jukeboxes.cancelPendingLoopResume(block)
+        }
+    }
     fun toggleShuffle(block: Block) { val mode = playbackModes(block); restoreModes(block, mode.first, !mode.second) }
-    fun clearSettings(block: Block) { crossfadeDefaults.remove(block); modes.remove(block) }
+    fun clearSettings(block: Block) { crossfadeDefaults.remove(block); modes.remove(block); pendingLoopQueues.remove(block) }
     private val queueStates = ConcurrentHashMap<Block, QueueState>()
+    private val pendingLoopQueues = ConcurrentHashMap<Block, Int>()
 
     fun queueView(block: Block): QueueView? = queueStates[block]?.let { QueueView(it.items, it.currentIndex, it.crossfadeSeconds) }
 
@@ -99,7 +110,13 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     }
 
     fun isQueued(block: Block) = queues.containsKey(block)
-    fun stopQueue(block: Block) { queues.remove(block)?.cancel(); skipping.remove(block); jumpTargets.remove(block) }
+    fun stopQueue(block: Block) {
+        pendingLoopQueues.remove(block)
+        pendingLoopQueues.remove(block.getRelative(BlockFace.DOWN))
+        queues.remove(block)?.cancel()
+        skipping.remove(block)
+        jumpTargets.remove(block)
+    }
     fun jumpToTrack(block: Block, index: Int) {
         val state = queueStates[block] ?: return
         if (index !in state.items.indices || !queues.containsKey(block) || !jukeboxes.isPlaying(block)) return
@@ -247,7 +264,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     }
 
     /** Called only on the inventory's server thread, after the inventory mutation commits. */
-    fun startChestQueue(block: Block, chest: Chest, player: Player? = null) {
+    fun startChestQueue(block: Block, chest: Chest, player: Player? = null, initialIndex: Int? = null) {
         if (block.type != Material.JUKEBOX || isQueued(block) || jukeboxes.isPlaying(block) ||
             block.asJukebox()?.record?.type != Material.AIR) return
         val discs = chest.inventory.contents.filterNotNull()
@@ -269,7 +286,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             var oldControls: PlaybackControls? = null
             var liveDiscs = discs
             val order = ChestQueueOrder()
-            var index = order.next(discs.size, -1, false, playbackModes(block).second) ?: return@launch
+            var index = (initialIndex ?: jumpTargets.remove(block))?.takeIf { it in discs.indices }
+                ?: order.next(discs.size, -1, false, playbackModes(block).second) ?: return@launch
             var activeDisc = discs.first()
             var removedNextIndex = 0
             var refreshTicks = 0
@@ -485,6 +503,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     }
 
     private fun stop(block: Block) {
+        pendingLoopQueues.remove(block)
+        pendingLoopQueues.remove(block.getRelative(BlockFace.DOWN))
         queues.remove(block)?.cancel()
         queues.remove(block.getRelative(BlockFace.DOWN))?.cancel()
     }
@@ -500,7 +520,31 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onUnload(event: ChunkUnloadEvent) {
-        queues.keys.filter { it.inChunk(event.chunk) }.forEach { queues.remove(it)?.cancel() }
+        queues.keys.filter { it.inChunk(event.chunk) }.forEach { block ->
+            if (playbackModes(block).first) {
+                pendingLoopQueues[block] = queueStates[block]?.currentIndex ?: 0
+            }
+            queues.remove(block)?.cancel()
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onLoad(event: ChunkLoadEvent) {
+        val pendingInChunk = pendingLoopQueues.keys.filter { it.inChunk(event.chunk) }
+        if (pendingInChunk.isEmpty()) return
+        scope.launch {
+            delay(100)
+            suspendSyncAt(Location(event.world, (event.chunk.x shl 4) + 8.0, 64.0, (event.chunk.z shl 4) + 8.0), voiceServer, plugin) {
+                pendingInChunk.forEach { block ->
+                    val resumeIndex = pendingLoopQueues.remove(block) ?: return@forEach
+                    if (!playbackModes(block).first || isQueued(block) || jukeboxes.isPlaying(block)) return@forEach
+                    val chest = block.getRelative(BlockFace.UP).state as? Chest ?: return@forEach
+                    if (block.type == Material.JUKEBOX && block.asJukebox()?.record?.type == Material.AIR) {
+                        startChestQueue(block, chest, initialIndex = resumeIndex)
+                    }
+                }
+            }
+        }
     }
 
     @EventHandler

@@ -203,4 +203,22 @@ class PlaybackControlsTest {
         controls.changeVolume(-200)
         assertEquals(0, decoder.volume)
     }
+
+    @Test fun `initial position is restored on attachment for seekable tracks`() {
+        val controls = PlaybackControls(initialPositionMs = 45_000L)
+        assertEquals(45_000L, controls.position)
+        val decoder = Decoder()
+        decoder.position = 0L
+        controls.attach(decoder.player)
+        assertEquals(45_000L, decoder.position)
+        assertEquals(45_000L, controls.position)
+    }
+
+    @Test fun `initial position near end of duration wraps to beginning`() {
+        val controls = PlaybackControls(initialPositionMs = 89_500L)
+        val decoder = Decoder() // duration is 90_000L
+        decoder.position = 0L
+        controls.attach(decoder.player)
+        assertEquals(0L, decoder.position)
+    }
 }

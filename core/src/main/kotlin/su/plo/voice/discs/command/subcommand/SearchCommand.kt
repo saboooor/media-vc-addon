@@ -11,6 +11,7 @@ import su.plo.slib.api.chat.style.McTextHoverEvent
 import su.plo.slib.api.permission.PermissionDefault
 import su.plo.voice.discs.api.PlayerSearchEvent
 import su.plo.voice.discs.command.SubCommand
+import su.plo.voice.discs.dialog.PaperPlaybackDialog
 import su.plo.voice.discs.utils.extend.*
 
 class SearchCommand : SubCommand() {
@@ -53,7 +54,15 @@ class SearchCommand : SubCommand() {
             return@launch
         }
 
-        val query = arguments.drop(1).joinToString(" ")
+        val query = arguments.drop(1).joinToString(" ").trim()
+        if (query.isBlank()) {
+            if (voicePlayer != null) {
+                voicePlayer.instance.sendTranslatable("pv.addon.discs.arg.search")
+            } else {
+                player.sendMessage(Component.text("Usage: /disc search <query>", NamedTextColor.RED))
+            }
+            return@launch
+        }
 
         if (voicePlayer != null) {
             if (!suspendSyncFor(player, voiceServer, plugin) {
@@ -81,6 +90,33 @@ class SearchCommand : SubCommand() {
                 player.sendMessage(Component.text("No results found", NamedTextColor.RED))
             }
             return@launch
+        }
+
+        if (PaperPlaybackDialog.isAvailable()) {
+            val topTracks = tracks.take(6)
+            val body = listOf(
+                Component.text("Search: \"$query\"", NamedTextColor.GOLD),
+                Component.text("Hold a blank disc in hand and click a track to burn:", NamedTextColor.GRAY)
+            )
+            val buttons = mutableListOf<Pair<String, String>>()
+            val labels = mutableMapOf<String, Component>()
+            for (track in topTracks) {
+                val command = "/disc burn ${track.identifier}"
+                val cleanAuthor = track.info.author.cleanArtistName()
+                val cleanTitle = track.info.title.cleanTrackName()
+                val titleHasArtist = cleanAuthor.isNotBlank() && cleanTitle.containsArtist(cleanAuthor)
+                val displayTitle = if (titleHasArtist) cleanTitle else "$cleanTitle - $cleanAuthor"
+                val shortTitle = displayTitle.take(36)
+                buttons += shortTitle to command
+                labels[command] = PaperPlaybackDialog.icon("item/music_disc_cat", Component.text(shortTitle, NamedTextColor.YELLOW))
+            }
+
+            try {
+                PaperPlaybackDialog.show(player, body, buttons, labels, "Search: ${query.take(20)}", columns = 1, buttonWidth = 320)
+                return@launch
+            } catch (_: Throwable) {
+                // Fall back to chat format below
+            }
         }
 
         tracks.take(5).forEach {

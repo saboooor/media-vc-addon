@@ -24,6 +24,7 @@ import su.plo.voice.discs.AddonKeys
 import su.plo.voice.discs.api.PlayerBurnEvent
 import su.plo.voice.discs.api.PrePlayerBurnEvent
 import su.plo.voice.discs.command.SubCommand
+import su.plo.voice.discs.dialog.PaperPlaybackDialog
 import su.plo.voice.discs.item.DiscHelper
 import su.plo.voice.discs.jellyfin.*
 import su.plo.voice.discs.utils.extend.*
@@ -45,6 +46,9 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
         lateinit var view: Inventory
         override fun getInventory() = view
     }
+    private class DialogSession(val token: UUID, val connection: JellyfinLibrary.Connection, val page: Int,
+                                val search: String, val result: JellyfinClient.Page)
+    private val dialogSessions = ConcurrentHashMap<UUID, DialogSession>()
     override val name = "jellyfin"
     override val permissions = listOf("jellyfin" to PermissionDefault.OP)
     private fun Player.allowed(suffix: String) = hasPermission("pv.addon.discs.$suffix") || hasPermission("vc.addon.discs.$suffix")
@@ -62,14 +66,38 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
         if (!checkCanExecute(player)) { message(player, "No permission to use Jellyfin and burn discs.", true); return }
         when (arguments.getOrNull(1)?.lowercase()) {
             "cancel" -> {
-                prompts.remove(player.uniqueId); requests.remove(player.uniqueId)
+                prompts.remove(player.uniqueId); requests.remove(player.uniqueId); dialogSessions.remove(player.uniqueId)
                 message(player, "Jellyfin input cancelled.")
+            }
+            "action" -> {
+                val tokenStr = arguments.getOrNull(2) ?: return
+                val token = try { UUID.fromString(tokenStr) } catch (_: Exception) { return }
+                val session = dialogSessions[player.uniqueId] ?: return
+                if (session.token != token) return
+                val action = arguments.getOrNull(3) ?: return
+                when {
+                    action.startsWith("burn_") -> {
+                        val idx = action.removePrefix("burn_").toIntOrNull() ?: return
+                        val media = session.result.items.getOrNull(idx) ?: return
+                        burn(player, session.connection, media)
+                    }
+                    action == "prev" -> openPage(player, session.connection, session.page - 1, session.search)
+                    action == "next" -> openPage(player, session.connection, session.page + 1, session.search)
+                    action.startsWith("search") -> {
+                        val query = arguments.drop(4).joinToString(" ").trim()
+                        openPage(player, session.connection, 0, query)
+                    }
+                    action == "clear_search" -> openPage(player, session.connection, 0, "")
+                    action == "disconnect" -> execute(player, arrayOf("jellyfin", "disconnect"))
+                    action == "inv" -> openPage(player, session.connection, 0, session.search, forceInventory = true)
+                }
+                return
             }
             "disconnect" -> run(player) {
                 val old = library.disconnect(player.uniqueId)
                 if (old != null) runCatching { client.logout(old.session) }
                 suspendSyncFor(player, voiceServer, plugin) {
-                    player.closeInventory(); prompts.remove(player.uniqueId)
+                    player.closeInventory(); prompts.remove(player.uniqueId); dialogSessions.remove(player.uniqueId)
                     message(player, "Jellyfin disconnected. Connect to the same server/account again to use its discs.")
                 }
             }
@@ -84,10 +112,33 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
             }
             "search" -> browse(player, 0, arguments.drop(2).joinToString(" ").take(200))
             null, "browse" -> {
-                if (library.connection(player.uniqueId) == null) prompt(player, Prompt(Step.URL), "Enter your Jellyfin server URL in chat, or cancel.")
-                else browse(player, 0, "")
+                val conn = library.connection(player.uniqueId)
+                if (conn == null) {
+                    if (PaperPlaybackDialog.isAvailable()) {
+                        showConnectDialog(player)
+                    } else {
+                        prompt(player, Prompt(Step.URL), "Enter your Jellyfin server URL in chat, or cancel.")
+                    }
+                } else browse(player, 0, "")
             }
             else -> message(player, "Usage: /disc jellyfin [connect [url]|browse|search <text>|disconnect|cancel]", true)
+        }
+    }
+
+    private fun showConnectDialog(player: Player) {
+        val body = listOf(
+            Component.text("Jellyfin Media Library", NamedTextColor.GOLD),
+            Component.text("Connect to your Jellyfin server to stream and burn custom music discs.", NamedTextColor.GRAY),
+            Component.text("Click Connect Server below to enter your server address in chat.", NamedTextColor.GRAY)
+        )
+        val buttons = listOf(
+            "Connect Server" to "/disc jellyfin connect",
+            "Cancel" to "/disc jellyfin cancel"
+        )
+        try {
+            PaperPlaybackDialog.show(player, body, buttons, title = "Jellyfin", columns = 2)
+        } catch (_: Throwable) {
+            prompt(player, Prompt(Step.URL), "Enter your Jellyfin server URL in chat, or cancel.")
         }
     }
     private fun prompt(player: Player, value: Prompt, text: String) {
@@ -154,20 +205,83 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
             }
         }
     }
-    private fun browse(player: Player, page: Int, search: String) {
+    private fun browse(player: Player, page: Int, search: String, forceInventory: Boolean = false) {
         val connection = library.connection(player.uniqueId) ?: run { message(player, "Connect first with /disc jellyfin connect.", true); return }
-        openPage(player, connection, page, search)
+        openPage(player, connection, page, search, forceInventory)
     }
-    private fun openPage(player: Player, connection: JellyfinLibrary.Connection, page: Int, search: String) {
+    private fun openPage(
+        player: Player,
+        connection: JellyfinLibrary.Connection,
+        page: Int,
+        search: String,
+        forceInventory: Boolean = false
+    ) {
         // Separate page loads from the connection job, which may still own the busy flag.
         if (!pageLoading.add(player.uniqueId)) return
         val request = UUID.randomUUID()
         requests[player.uniqueId] = request
+        val useDialog = !forceInventory && PaperPlaybackDialog.isAvailable()
+        val limit = if (useDialog) 10 else JellyfinClient.PAGE_SIZE
         scope.launch(Dispatchers.IO) {
             try {
-                val result = client.browse(connection.session, page, search)
+                val result = client.browse(connection.session, page, search, limit)
                 suspendSyncFor(player, voiceServer, plugin) {
                     if (!player.isOnline || !checkCanExecute(player) || requests[player.uniqueId] != request || library.connection(player.uniqueId) !== connection) return@suspendSyncFor
+                    if (useDialog) {
+                        val session = DialogSession(UUID.randomUUID(), connection, page, search, result)
+                        dialogSessions[player.uniqueId] = session
+                        val prefix = "/disc jellyfin action ${session.token} "
+                        val buttons = mutableListOf<Pair<String, String>>()
+                        val labels = mutableMapOf<String, Component>()
+                        result.items.forEachIndexed { index, media ->
+                            val durationStr = "${media.durationMs / 60_000}:${(media.durationMs / 1000 % 60).toString().padStart(2, '0')}"
+                            val label = "${media.label.take(28)} ($durationStr)"
+                            val command = "${prefix}burn_$index"
+                            buttons += label to command
+                            labels[command] = PaperPlaybackDialog.icon("item/music_disc_cat", Component.text(label, NamedTextColor.YELLOW))
+                        }
+                        if (page > 0) {
+                            buttons += "◀ Prev" to "${prefix}prev"
+                            labels["${prefix}prev"] = PaperPlaybackDialog.icon("item/ender_pearl", Component.text("◀ Prev"))
+                        }
+                        if ((page + 1) * limit < result.total) {
+                            buttons += "Next ▶" to "${prefix}next"
+                            labels["${prefix}next"] = PaperPlaybackDialog.icon("item/spectral_arrow", Component.text("Next ▶"))
+                        }
+                        if (search.isNotBlank()) {
+                            buttons += "Clear search" to "${prefix}clear_search"
+                            labels["${prefix}clear_search"] = PaperPlaybackDialog.icon("item/barrier", Component.text("Clear search"))
+                        }
+                        buttons += "Search" to "${prefix}search $(query)"
+                        labels["${prefix}search $(query)"] = PaperPlaybackDialog.icon("item/compass_00", Component.text("Search"))
+                        buttons += "Chest view" to "${prefix}inv"
+                        labels["${prefix}inv"] = PaperPlaybackDialog.icon("item/chest", Component.text("Chest view"))
+                        buttons += "Disconnect" to "${prefix}disconnect"
+                        labels["${prefix}disconnect"] = PaperPlaybackDialog.icon("item/barrier", Component.text("Disconnect"))
+
+                        val totalPages = ((result.total + limit - 1) / limit).coerceAtLeast(1)
+                        val body = listOf(
+                            Component.text("Jellyfin · Page ${page + 1} of $totalPages", NamedTextColor.GOLD),
+                            Component.text("Total items: ${result.total} · Filter: ${search.ifEmpty { "All media" }}", NamedTextColor.GRAY),
+                            Component.text("Type in the search field and click Search, or click a track to burn:", NamedTextColor.GRAY)
+                        )
+                        val inputs = listOf(
+                            PaperPlaybackDialog.DialogTextInput(
+                                key = "query",
+                                label = "Search query",
+                                initial = search,
+                                maxLength = 100,
+                                width = 310
+                            )
+                        )
+                        try {
+                            PaperPlaybackDialog.show(player, body, buttons, labels, "Jellyfin · Page ${page + 1}", columns = 2, buttonWidth = 150, inputs = inputs)
+                            return@suspendSyncFor
+                        } catch (_: Throwable) {
+                            // Fallback to chest inventory below
+                        }
+                    }
+
                     val menu = Menu(player.uniqueId, connection, page, search, result)
                     menu.view = Bukkit.createInventory(menu, 54, Component.text("Jellyfin · Page ${page + 1}"))
                     result.items.forEachIndexed { index, media ->
@@ -178,7 +292,7 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
                     menu.view.setItem(47, icon(Material.COMPASS, "Search media"))
                     menu.view.setItem(49, icon(Material.BOOK, "${result.total} media items", listOf(search.ifEmpty { "All media" })))
                     menu.view.setItem(51, icon(Material.BARRIER, "Disconnect Jellyfin"))
-                    if ((page + 1) * JellyfinClient.PAGE_SIZE < result.total) menu.view.setItem(53, icon(Material.ARROW, "Next page"))
+                    if ((page + 1) * limit < result.total) menu.view.setItem(53, icon(Material.ARROW, "Next page"))
                     player.openInventory(menu.view)
                 }
             } catch (e: CancellationException) { throw e }
@@ -203,8 +317,8 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
             if (player.openInventory.topInventory.holder !== menu) return@suspendSyncFor
             when {
                 slot in menu.result.items.indices -> burn(player, menu.connection, menu.result.items[slot])
-                slot == 45 && menu.page > 0 -> openPage(player, menu.connection, menu.page - 1, menu.search)
-                slot == 53 && (menu.page + 1) * JellyfinClient.PAGE_SIZE < menu.result.total -> openPage(player, menu.connection, menu.page + 1, menu.search)
+                slot == 45 && menu.page > 0 -> openPage(player, menu.connection, menu.page - 1, menu.search, forceInventory = true)
+                slot == 53 && (menu.page + 1) * JellyfinClient.PAGE_SIZE < menu.result.total -> openPage(player, menu.connection, menu.page + 1, menu.search, forceInventory = true)
                 slot == 47 -> { player.closeInventory(); prompt(player, Prompt(Step.SEARCH), "Enter a title or artist to search, or cancel.") }
                 slot == 51 -> execute(player, arrayOf("jellyfin", "disconnect"))
             }
@@ -215,7 +329,11 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
     @EventHandler fun onMenuClose(event: InventoryCloseEvent) {
         if (event.inventory.holder is Menu) requests.remove(event.player.uniqueId)
     }
-    @EventHandler fun onQuit(event: PlayerQuitEvent) { prompts.remove(event.player.uniqueId); requests.remove(event.player.uniqueId) }
+    @EventHandler fun onQuit(event: PlayerQuitEvent) {
+        prompts.remove(event.player.uniqueId)
+        requests.remove(event.player.uniqueId)
+        dialogSessions.remove(event.player.uniqueId)
+    }
 
     private fun burn(player: Player, connection: JellyfinLibrary.Connection, media: JellyfinClient.Media) {
         val original = player.inventory.itemInMainHand.clone()

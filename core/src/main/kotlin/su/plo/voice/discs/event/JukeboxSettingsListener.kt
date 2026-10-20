@@ -135,7 +135,7 @@ class JukeboxSettingsListener(
         val json = state.persistentDataContainer.get(AddonKeys.jukeboxSettingsKey, PersistentDataType.STRING) ?: return
         SavedJukeboxSettings.decode(json)?.let { apply(block, it) }
     }
-    @EventHandler fun onLoad(event: ChunkLoadEvent) {
+    @EventHandler(priority = EventPriority.LOWEST) fun onLoad(event: ChunkLoadEvent) {
         event.chunk.tileEntities.filter { it.type == Material.JUKEBOX }.forEach { restore(it.block) }
     }
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
