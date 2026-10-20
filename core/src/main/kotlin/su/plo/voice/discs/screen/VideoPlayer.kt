@@ -194,6 +194,10 @@ class VideoPlayer(
 
         val frameSizeBytes = totalWidth * totalHeight * 3
         val rawFrameBuffer = ByteArray(frameSizeBytes)
+        // Preserve HDR precision until transfer/gamut conversion, before quantizing to RGB24.
+        val decodedFrameBuffer = ByteArray(frameSizeBytes * 2)
+        val colorInfoReady = CompletableDeferred<VideoColorInfo>()
+        var toneMapper: VideoToneMapper? = null
 
         val command = mutableListOf<String>()
         command.add(ffmpegPath)
@@ -224,7 +228,7 @@ class VideoPlayer(
         command.add("-f")
         command.add("rawvideo")
         command.add("-pix_fmt")
-        command.add("rgb24")
+        command.add("rgb48le")
         command.add("pipe:1")
 
         logger.info("Starting FFmpeg video stream for screen '${screen.name}' at up to $fps FPS using $ffmpegPath")
@@ -264,9 +268,21 @@ class VideoPlayer(
             }
 
             val stderrJob = coroutineScope.launch(Dispatchers.IO) {
+                var inputColor: VideoColorInfo? = null
+                var outputStarted = false
                 try {
                     proc.errorStream.bufferedReader().useLines { lines ->
                         lines.forEach { line ->
+                            if (!colorInfoReady.isCompleted) {
+                                if (line.startsWith("Output #0,")) outputStarted = true
+                                val streamColor = VideoColorInfo.fromStreamLine(line)
+                                if (outputStarted && streamColor != null) {
+                                    // Some decoders expose transfer metadata only after decoding
+                                    // the first frame. RGB48 retains it in the output stream header.
+                                    colorInfoReady.complete(if (streamColor.transfer != VideoTransfer.SDR)
+                                        streamColor else inputColor ?: streamColor)
+                                } else if (!outputStarted && inputColor == null) inputColor = streamColor
+                            }
                             if (line.startsWith("out_time_us=")) {
                                 line.substringAfter('=').toLongOrNull()?.let { outputPositionUs.set(it) }
                             }
@@ -277,7 +293,10 @@ class VideoPlayer(
                             }
                         }
                     }
-                } catch (_: Exception) {}
+                } catch (_: Exception) {
+                } finally {
+                    colorInfoReady.complete(inputColor ?: VideoColorInfo())
+                }
             }
 
             val input = proc.inputStream
@@ -310,7 +329,7 @@ class VideoPlayer(
 
                 readMonitor.beginRead(System.nanoTime())
                 val ok = try {
-                    readFully(input, rawFrameBuffer)
+                    readFully(input, decodedFrameBuffer)
                 } finally {
                     readMonitor.endRead()
                 }
@@ -322,6 +341,12 @@ class VideoPlayer(
                 renderWarning.set(false)
                 renderMonitor.beginRead(System.nanoTime())
                 try {
+                    val mapper = toneMapper ?: VideoToneMapper(colorInfoReady.await().also { color ->
+                        if (color.transfer != VideoTransfer.SDR) {
+                            logger.info("Screen '${screen.name}': tone mapping ${color.transfer} HDR to SDR")
+                        }
+                    }).also { toneMapper = it }
+                    mapper.convert(decodedFrameBuffer, rawFrameBuffer)
                     val nearbyPlayers = getNearbyPlayers()
                     sliceAndSend(rawFrameBuffer, nearbyPlayers)
                 } finally {
