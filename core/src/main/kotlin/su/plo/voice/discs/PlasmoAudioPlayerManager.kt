@@ -84,7 +84,8 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         pvSource: ServerProximitySource<*>? = null,
         distance: Short = 0,
         svcChannel: AudioChannel? = null,
-        controls: PlaybackControls? = null
+        controls: PlaybackControls? = null,
+        pcmChannel: Int? = null
     ): Job {
         if (pvSource != null && svcChannel != null) {
             // Keep PV's sender lifecycle (including source state) intact. Each backend
@@ -94,8 +95,8 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 var pvJob: Job? = null
                 var svcJob: Job? = null
                 try {
-                    pvJob = startTrackJob(track, pvSource, distance, controls = controls)
-                    svcJob = startTrackJob(svcTrack, svcChannel = svcChannel, controls = controls)
+                    pvJob = startTrackJob(track, pvSource, distance, controls = controls, pcmChannel = pcmChannel)
+                    svcJob = startTrackJob(svcTrack, svcChannel = svcChannel, controls = controls, pcmChannel = pcmChannel)
                     svcJob.join()
                 } finally {
                     withContext(NonCancellable) {
@@ -135,7 +136,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         })
         if (controls != null) track.userData = controls
         player.playTrack(track)
-        controls?.attach(player)
+        controls?.attach(player, pcmChannel)
 
         val trackTitle = pvSource?.sourceInfo?.name ?: track.info.title
         debugLogger.log("Starting track \"$trackTitle\" on pvSource=$pvSource svcChannel=$svcChannel")
@@ -485,3 +486,4 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         private val logger = McLoggerFactory.createLogger("PlasmoAudioPlayerManager")
     }
 }
+

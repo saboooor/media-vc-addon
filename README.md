@@ -40,14 +40,14 @@ Use `shuffle` to select random songs from the full playlist without repeating en
 
 Chest queues:
 
-- Place a chest (single or double) directly above a jukebox and put music discs inside. Sneak-right-click the chest to open it.
+- Place a chest (single or double) directly above a jukebox and put music discs inside. Open the chest normally to manage its contents.
 - Playlist burning skips non-disc items, stacks, and discs that fail the configured burnable-tag requirement. One disc receives one track; extra tracks are left unburned when discs run out. Existing burned discs are overwritten.
-- Right-click the chest to play all its burned discs in slot order, including any existing burned discs. Discs remain in the chest and are never consumed or moved into the jukebox.
+- Playback starts automatically when burned discs are added or the chest is edited/closed, including hopper transfers into the chest. Right-clicking the jukebox with a disc stores one disc in the chest and starts playback when idle. A full chest leaves the disc in your hand. Placing a chest above an occupied jukebox transfers its disc into the chest. Discs stay in the chest during playback; ordinary unburned discs are stored but skipped by the custom-audio queue.
 - Tracks crossfade over three seconds by default. Open Crossfade settings from the jukebox dialog and use its -1s/+1s buttons to adjust it from 0–30 seconds, or Enable/Disable crossfade to toggle it. The dialog shows the current setting. Changes apply to upcoming transitions in that queue; an ongoing fade finishes at its original duration. New jukeboxes default to three seconds; subsequent queues reuse the jukebox’s chosen crossfade setting. Live streams use normal transitions. Pause and volume affect both tracks during a fade; skipping or stopping cancels the transition. Network loading delays can shorten the overlap.
-- The active queue follows chest contents in slot order, including hopper transfers, updating about every quarter second. Added discs join the queue, removed discs leave it, and moving discs changes their order. The current song keeps playing; removing its disc lets it finish before continuing from that position. Refresh an open jukebox dialog to see updated queue buttons. The queue plays once; click the chest again to replay it.
+- The active queue follows chest contents in slot order, including hopper transfers, updating about every quarter second. Added discs join the queue, removed discs leave it, and moving discs changes their order. The current song keeps playing; removing its disc lets it finish before continuing from that position. Refresh an open jukebox dialog to see updated queue buttons. The queue plays once by default. Enable Loop in the jukebox controls to repeat the queue, and Shuffle to visit each disc once in random order per pass. Loop also repeats a standalone custom disc. Use Play chest in the controls to restart a stopped queue.
 - If a song cannot be resolved or its audio stream fails/stalls, playback reports the error, removes the failed disc’s custom audio, and skips to the next queued disc. Audio lookup and startup time out after 30 seconds rather than loading indefinitely. Ordinary pauses and manual stops do not erase discs.
 - Right-click the jukebox to open playback controls; choose Stop playback to stop. Breaking the chest or jukebox, unloading the jukebox chunk, or restarting the server stops the queue. Queues do not resume automatically.
-- Normal chest playback needs only `pv.addon.discs.play`. Protection plugins can deny chest interactions to prevent burning and playback.
+- Player-triggered playback needs `pv.addon.discs.play` (or the `vc` alias); hopper additions run without a player. Protection plugins can deny the inventory action or jukebox interaction.
 
 `/disc search <query>` – Search tracks on YouTube.
 
@@ -96,7 +96,7 @@ Source line weight/default volume, HTTP proxy, YouTube settings, local source se
 
 ## Playback controls
 
-Right-click a jukebox with a custom disc or an active chest queue to open a native Paper dialog, following Lumistones' multi-action dialog pattern. The click opens controls instead of ejecting the disc.
+Right-click a jukebox with a custom disc or an active chest queue to open a native Paper dialog, following Lumistones' multi-action dialog pattern. The click opens controls instead of ejecting the disc. Sneak-right-click only opens controls with both hands empty, allowing blocks to be placed while holding an item. A disc aimed at a jukebox with a chest above it goes into the chest.
 
 - Use a two-column button menu to pause/resume, select queue tracks, seek backward/forward 15 seconds, and adjust volume from 0–100%.
 - Click a queue track to jump to it, or stop playback entirely. Play/Pause, Refresh, and Stop playback share the first row, with Crossfade settings immediately after them.
@@ -236,7 +236,7 @@ These are ordinary player-placed blocks with actual world lighting. Bass turns t
 
 ### Carrying jukebox settings
 
-Mining a jukebox saves its volume, crossfade duration/toggle, hologram offset, visualizer instances (type, facing, size, position and enable state), and physical links on the dropped jukebox item. Its lore reads **Saved jukebox settings**. Place that item to restore the setup. Ordinary disc drops are unchanged; playback and queue contents do not travel with the jukebox.
+Mining a jukebox saves its volume, loop/shuffle toggles, stereo channel assignment, crossfade duration/toggle, hologram offset, visualizer instances (type, facing, size, position and enable state), and physical links on the dropped jukebox item. Its lore reads **Saved jukebox settings**. Place that item to restore the setup. Ordinary disc drops are unchanged; playback and queue contents do not travel with the jukebox.
 
 Creative-mode breaks also drop a jukebox carrying its saved settings. Placed jukeboxes also save settings on chunk unload and plugin shutdown and restore them when loaded. Breaking clears the old location's settings. Lamp links reconnect only to available lamps in the same world within 32 blocks, and screen links reconnect only when the original screen exists and has not been linked elsewhere. Lamps and screen frames themselves stay where they were built. Cancelled breaks and placements do not transfer settings.
 
@@ -252,3 +252,8 @@ Hold a **stick**, look at a jukebox (or its chest) within six blocks, and run `/
 - **Sneak-right-click** or `/disc visualizer done` finishes and keeps your changes. Selecting another item, leaving the area/world, losing permission, disconnecting, or five minutes of inactivity also ends editing. Previewing a disabled visualizer does not enable it; use `toggle` to change its playback visibility.
 
 The existing position and size limits still apply, and edits travel with saved jukebox settings.
+
+
+### Physical stereo speakers
+
+Place a note block directly beside the jukebox (north, east, south, or west). The note block automatically plays the original left channel and the jukebox plays the original right channel. Use the Stereo control to swap them or turn the split off. Channel assignment and speaker placement are read at the start of each song; changes take effect on the next song or after restarting playback. Without a note block, normal jukebox playback is used. If several note blocks touch the jukebox, the first in north/east/south/west order is selected. Mono recordings play from both speakers. Removing either active speaker stops playback. Both Plasmo Voice and Simple Voice Chat use the same channel assignment and shared pause, seek, volume, and crossfade controls.

@@ -9,6 +9,9 @@ import su.plo.voice.discs.visualizer.VisualizerInstance
 data class SavedJukeboxSettings(
     val version: Int = 1,
     val volume: Int = 100,
+    val loop: Boolean = false,
+    val shuffle: Boolean = false,
+    val stereo: Int = 1,
     val crossfade: Int = 3,
     val lastCrossfade: Int = 3,
     val hologram: HologramOffset = HologramOffset(),
@@ -17,6 +20,7 @@ data class SavedJukeboxSettings(
     val screenName: String? = null,
 ) {
     fun validate(): SavedJukeboxSettings {
+        require(stereo in 0..2)
         require(version == 1 && volume in 0..100 && crossfade in 0..30 && lastCrossfade in 1..30)
         require(hologram.x.isFinite() && hologram.y.isFinite() && hologram.z.isFinite())
         require(visualizers.size <= 8 && visualizers.map { it.id }.distinct().size == visualizers.size)
@@ -43,3 +47,4 @@ data class SavedJukeboxSettings(
         }.getOrNull()
     }
 }
+

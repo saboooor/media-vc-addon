@@ -38,7 +38,8 @@ class JukeboxSettingsListener(
 
     private fun capture(block: Block): SavedJukeboxSettings {
         val fade = playlists.crossfadeSettings(block)
-        return SavedJukeboxSettings(volume = playback.volumeSetting(block), crossfade = fade.first, lastCrossfade = fade.second,
+        return SavedJukeboxSettings(volume = playback.volumeSetting(block),
+            loop = playlists.playbackModes(block).first, shuffle = playlists.playbackModes(block).second, stereo = playback.stereoMode(block), crossfade = fade.first, lastCrossfade = fade.second,
             hologram = holograms.getOffset(block).copy(), visualizers = visualizers.instances(block),
             lamps = lamps.linkedPositions(block), screenName = screens.getScreenForJukebox(block)?.name)
     }
@@ -100,6 +101,8 @@ class JukeboxSettingsListener(
 
     private fun apply(block: Block, settings: SavedJukeboxSettings) {
         playback.restoreVolume(block, settings.volume)
+        playback.restoreStereo(block, settings.stereo)
+        playlists.restoreModes(block, settings.loop, settings.shuffle)
         playlists.restoreCrossfade(block, settings.crossfade, settings.lastCrossfade)
         visualizers.restore(block, settings.visualizers)
         holograms.setOffset(block, settings.hologram.x, settings.hologram.y, settings.hologram.z)
@@ -139,3 +142,4 @@ class JukeboxSettingsListener(
         pending.clear()
     }
 }
+
