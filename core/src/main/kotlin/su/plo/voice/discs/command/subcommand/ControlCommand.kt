@@ -61,6 +61,9 @@ class ControlCommand(
         if (event.action != Action.RIGHT_CLICK_BLOCK || event.useInteractedBlock() == Event.Result.DENY) return
         val block = event.clickedBlock ?: return
         val jukebox = block.asJukebox() ?: return
+        val emptyHands = event.player.inventory.itemInMainHand.type == Material.AIR &&
+            event.player.inventory.itemInOffHand.type == Material.AIR
+        if (event.player.isSneaking && !emptyHands) return
         val heldFrame = event.item?.type?.name in setOf("ITEM_FRAME", "GLOW_ITEM_FRAME")
         val offhandFrame = event.hand == EquipmentSlot.HAND && event.player.inventory.itemInMainHand.type == Material.AIR &&
             event.player.inventory.itemInOffHand.type.name in setOf("ITEM_FRAME", "GLOW_ITEM_FRAME")
@@ -97,6 +100,18 @@ class ControlCommand(
         val prefix = "/disc control ${session.token} "
         val buttons = mutableListOf<Pair<String, String>>()
         val queueLabels = mutableMapOf<String, Component>()
+        val chest = block.getRelative(org.bukkit.block.BlockFace.UP).state as? org.bukkit.block.Chest
+        if (controls == null && !playlists.isQueued(block) && chest != null)
+            buttons += "Play chest" to (prefix + "playchest")
+        val modes = playlists.playbackModes(block)
+        buttons += "Loop: ${if (modes.first) "On" else "Off"}" to (prefix + "loop")
+        buttons += "Shuffle: ${if (modes.second) "On" else "Off"}" to (prefix + "shuffle")
+        val stereoLabel = when (jukeboxes.stereoMode(block)) {
+            1 -> "Note block L / Jukebox R"
+            2 -> "Jukebox L / Note block R"
+            else -> "Off"
+        }
+        buttons += "Stereo: $stereoLabel" to (prefix + "stereo")
         if (controls != null) {
             buttons += (if (controls.paused) "Resume" else "Pause") to (prefix + "pause")
             buttons += "Refresh" to (prefix + "refresh")
@@ -283,6 +298,11 @@ class ControlCommand(
             return
         }
         when (arguments[2]) {
+            "playchest" -> {
+                val chest = session.block.getRelative(org.bukkit.block.BlockFace.UP).state as? org.bukkit.block.Chest ?: return
+                playlists.startChestQueue(session.block, chest, player)
+                return
+            }
             "play" -> { if (controls == null) jukeboxes.playStoredDisc(session.block, player); return }
             "pause" -> controls?.togglePause()
             "lamp_link", "lamp_unlink" -> {
@@ -331,6 +351,9 @@ class ControlCommand(
                 show(player, session.block, seek = true)
                 return
             }
+            "loop" -> playlists.toggleLoop(session.block)
+            "shuffle" -> playlists.toggleShuffle(session.block)
+            "stereo" -> jukeboxes.cycleStereo(session.block)
             "quieter" -> controls?.changeVolume(-10)
             "louder" -> controls?.changeVolume(10)
             "stop", "eject" -> {
@@ -501,3 +524,4 @@ private object PaperPlaybackDialog {
         invoke(player.javaClass, player, "showDialog", dialog)
     }
 }
+

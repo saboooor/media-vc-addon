@@ -21,6 +21,11 @@ import org.bukkit.event.block.Action
 import org.bukkit.event.block.BlockBreakEvent
 import org.bukkit.event.block.BlockExplodeEvent
 import org.bukkit.event.entity.EntityExplodeEvent
+import org.bukkit.event.inventory.InventoryClickEvent
+import org.bukkit.event.inventory.InventoryDragEvent
+import org.bukkit.event.inventory.InventoryCloseEvent
+import org.bukkit.event.inventory.InventoryMoveItemEvent
+import org.bukkit.event.block.BlockPlaceEvent
 import org.bukkit.event.player.PlayerInteractEvent
 import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.event.world.ChunkUnloadEvent
@@ -44,6 +49,7 @@ import java.util.concurrent.ConcurrentHashMap
 /** Chest inventories are only inspected/edited on their region's server thread. */
 class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(), Listener {
     private val discHelper: DiscHelper by inject()
+    init { jukeboxes.shouldLoop = { playbackModes(it).first } }
     private class Pending(@Volatile var created: Long = System.currentTimeMillis()) {
         @Volatile var tracks: List<AudioTrack>? = null
     }
@@ -62,7 +68,12 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     fun crossfadeSettings(block: Block): Pair<Int, Int> = queueStates[block]?.let { it.crossfadeSeconds to it.lastCrossfadeSeconds }
         ?: crossfadeDefaults[block] ?: (3 to 3)
     fun restoreCrossfade(block: Block, seconds: Int, last: Int) { crossfadeDefaults[block] = seconds.coerceIn(0, 30) to last.coerceIn(1, 30) }
-    fun clearSettings(block: Block) { crossfadeDefaults.remove(block) }
+    private val modes = ConcurrentHashMap<Block, Pair<Boolean, Boolean>>()
+    fun playbackModes(block: Block) = modes[block] ?: (false to false)
+    fun restoreModes(block: Block, loop: Boolean, shuffle: Boolean) { modes[block] = loop to shuffle }
+    fun toggleLoop(block: Block) { val mode = playbackModes(block); restoreModes(block, !mode.first, mode.second) }
+    fun toggleShuffle(block: Block) { val mode = playbackModes(block); restoreModes(block, mode.first, !mode.second) }
+    fun clearSettings(block: Block) { crossfadeDefaults.remove(block); modes.remove(block) }
     private val queueStates = ConcurrentHashMap<Block, QueueState>()
 
     fun queueView(block: Block): QueueView? = queueStates[block]?.let { QueueView(it.items, it.currentIndex, it.crossfadeSeconds) }
@@ -196,7 +207,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             message(player, "Playlist selection expired. Run /disc playlist again.", true)
             return
         }
-        if (!player.allowed("play")) return
+        if (!player.allowed("play") || request == null) return
         if (queues.containsKey(block) || jukeboxes.isPlaying(block) || block.asJukebox()?.record?.type != Material.AIR) {
             message(player, "This jukebox is busy. Right-click the jukebox for playback controls.", true)
             return
@@ -232,14 +243,18 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 message(player, "No eligible music discs found.", true)
             }
         }
+        startChestQueue(block, chest, player)
+    }
+
+    /** Called only on the inventory's server thread, after the inventory mutation commits. */
+    fun startChestQueue(block: Block, chest: Chest, player: Player? = null) {
+        if (block.type != Material.JUKEBOX || isQueued(block) || jukeboxes.isPlaying(block) ||
+            block.asJukebox()?.record?.type != Material.AIR) return
         val discs = chest.inventory.contents.filterNotNull()
             .filter { it.isCustomDisc(discHelper) }.map { it.clone() }
         if (discs.isEmpty()) {
-            if (request != null) message(player, "No playable discs found in the chest.", true)
             return
         }
-        event.setUseInteractedBlock(Event.Result.DENY)
-        event.setUseItemInHand(Event.Result.DENY)
         fun queueItems(discs: List<ItemStack>) = discs.map { disc ->
             QueueItem(disc.itemMeta.lore()?.firstOrNull()?.let { PlainTextComponentSerializer.plainText().serialize(it) }
                 ?.takeIf { it.isNotBlank() } ?: disc.customDiscIdentifier(discHelper)!!,
@@ -253,7 +268,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             var controls = PlaybackControls()
             var oldControls: PlaybackControls? = null
             var liveDiscs = discs
-            var index = 0
+            val order = ChestQueueOrder()
+            var index = order.next(discs.size, -1, false, playbackModes(block).second) ?: return@launch
             var activeDisc = discs.first()
             var removedNextIndex = 0
             var refreshTicks = 0
@@ -306,6 +322,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                                     remapQueueIndex(liveDiscs, updated, target, disc).takeIf { it >= 0 }
                                 }
                             }
+                            order.reset()
                             liveDiscs = updated
                             state.items = queueItems(updated)
                             state.currentIndex = index
@@ -328,16 +345,17 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     if (!playing.isActive) {
                         playing.join()
                         if (playing.isCancelled && !skipping.remove(block)) break
-                        index = jumpTargets.remove(block) ?: (if (index >= 0) index + 1 else removedNextIndex)
-                        if (index >= liveDiscs.size) break
+                        index = jumpTargets.remove(block) ?: order.next(liveDiscs.size, index,
+                            playbackModes(block).first, playbackModes(block).second, removedNextIndex) ?: break
                         controls = PlaybackControls(initialVolume = controls.volume)
                         current = start(index, controls, false) ?: break
                         continue
                     }
                     val fadeMs = state.crossfadeSeconds * 1000L
                     val remaining = controls.duration - controls.position
-                    val nextIndex = if (index >= 0) index + 1 else removedNextIndex
-                    if (outgoing == null && nextIndex < liveDiscs.size && fadeMs > 0 &&
+                    val nextIndex = order.peek(liveDiscs.size, index, playbackModes(block).first,
+                        playbackModes(block).second, removedNextIndex)
+                    if (outgoing == null && nextIndex != null && fadeMs > 0 &&
                         controls.seekable && !controls.isStream && !controls.paused &&
                         controls.duration > 0 && remaining in 1..fadeMs) {
                         val nextControls = PlaybackControls(initialVolume = controls.volume, initialGain = 0.0)
@@ -348,7 +366,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         nextControls.transitionPartner = controls
                         controls = nextControls
                         current = next
-                        index = nextIndex
+                        index = order.next(liveDiscs.size, index, playbackModes(block).first,
+                            playbackModes(block).second, removedNextIndex) ?: break
                     }
                 }
             } finally {
@@ -366,7 +385,101 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             if (queues.remove(block, queue)) { skipping.remove(block); jumpTargets.remove(block) }
         }
         queue.start()
-        message(player, "Playing ${discs.size} discs in chest slot order. Sneak-click the chest to open it.")
+
+    }
+
+    private fun scheduleChest(chest: Chest, player: Player? = null) {
+        scope.launch {
+            delay(100)
+            suspendSyncAt(chest.location, voiceServer, plugin) {
+                val live = chest.block.state as? Chest ?: return@suspendSyncAt
+                val halves = (live.inventory.holder as? DoubleChest)?.let {
+                    listOfNotNull(it.leftSide as? Chest, it.rightSide as? Chest)
+                } ?: listOf(live)
+                halves.firstOrNull { it.block.getRelative(BlockFace.DOWN).type == Material.JUKEBOX }?.let {
+                    startChestQueue(it.block.getRelative(BlockFace.DOWN), live, player)
+                }
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onChestEdit(event: InventoryClickEvent) {
+        val player = event.whoClicked as? Player ?: return
+        if (!player.allowed("play")) return
+        chestHolder(event.view.topInventory.holder)?.let { scheduleChest(it, player) }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onChestDrag(event: InventoryDragEvent) {
+        val player = event.whoClicked as? Player ?: return
+        if (!player.allowed("play")) return
+        chestHolder(event.view.topInventory.holder)?.let { scheduleChest(it, player) }
+    }
+
+    private fun chestHolder(holder: org.bukkit.inventory.InventoryHolder?): Chest? = when (holder) {
+        is Chest -> holder
+        is DoubleChest -> holder.leftSide as? Chest
+        else -> null
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    fun onChestClose(event: InventoryCloseEvent) {
+        val chest = when (val holder = event.inventory.holder) {
+            is Chest -> holder
+            is DoubleChest -> holder.leftSide as? Chest
+            else -> null
+        } ?: return
+        val player = event.player as? Player ?: return
+        if (player.allowed("play")) scheduleChest(chest, player)
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onChestTransfer(event: InventoryMoveItemEvent) {
+        val holder = event.destination.holder
+        val chest = holder as? Chest ?: (holder as? DoubleChest)?.leftSide as? Chest ?: return
+        scheduleChest(chest)
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onChestPlace(event: BlockPlaceEvent) {
+        val chest = event.blockPlaced.state as? Chest ?: return
+        if (!event.player.allowed("play")) return
+        scope.launch {
+            delay(100)
+            suspendSyncAt(chest.location, voiceServer, plugin) {
+                val live = chest.block.state as? Chest ?: return@suspendSyncAt
+                val block = live.block.getRelative(BlockFace.DOWN)
+                val jukebox = block.asJukebox() ?: return@suspendSyncAt
+                val record = jukebox.record
+                if (record.type != Material.AIR && live.inventory.addItem(record.clone()).isEmpty()) {
+                    jukeboxes.stopPlayback(block)
+                    jukebox.setRecord(null)
+                    jukebox.update()
+                }
+                scheduleChest(live, event.player)
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    fun onDiscToChest(event: PlayerInteractEvent) {
+        if (event.action != Action.RIGHT_CLICK_BLOCK || event.hand != EquipmentSlot.HAND ||
+            event.player.isSneaking || event.useInteractedBlock() == Event.Result.DENY ||
+            event.useItemInHand() == Event.Result.DENY || !event.player.allowed("play")) return
+        val block = event.clickedBlock?.takeIf { it.type == Material.JUKEBOX } ?: return
+        val chest = block.getRelative(BlockFace.UP).state as? Chest ?: return
+        val item = event.item?.takeIf { discHelper.isRecord(it) } ?: return
+        event.setUseInteractedBlock(Event.Result.DENY)
+        event.setUseItemInHand(Event.Result.DENY)
+        val disc = item.clone().apply { amount = 1 }
+        if (chest.inventory.addItem(disc).isNotEmpty()) {
+            message(event.player, "The chest is full.", true)
+            return
+        }
+        // Transfer, including creative mode: the chest receives exactly one real item.
+        event.player.inventory.setItemInMainHand(item.clone().apply { amount -= 1 })
+        scheduleChest(chest, event.player)
     }
 
     private fun stop(block: Block) {
@@ -391,3 +504,4 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     @EventHandler
     fun onQuit(event: PlayerQuitEvent) { pending.remove(event.player.uniqueId) }
 }
+

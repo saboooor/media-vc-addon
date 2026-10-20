@@ -8,7 +8,7 @@ import su.plo.voice.discs.visualizer.*
 
 class SavedJukeboxSettingsTest {
     @Test fun `saved payload preserves placement playback and available links`() {
-        val settings = SavedJukeboxSettings(volume = 70, crossfade = 0, lastCrossfade = 8,
+        val settings = SavedJukeboxSettings(volume = 70, loop = true, shuffle = true, stereo = 2, crossfade = 0, lastCrossfade = 8,
             hologram = HologramOffset(1.5, 2.0, -0.5),
             visualizers = listOf(VisualizerInstance(7, VisualizerKind.SPEAKER, true,
                 VisualizerLayout(1f, 2f, 3f, 1.5f, 0.75f), VisualizerFacing.WEST)),
@@ -30,6 +30,14 @@ class SavedJukeboxSettingsTest {
         }
     }
 
+    @Test fun `old settings default to automatic note block stereo without looping`() {
+        val restored = SavedJukeboxSettings.decode("{}")!!
+        assertFalse(restored.loop)
+        assertFalse(restored.shuffle)
+        assertEquals(1, restored.stereo)
+        assertThrows(IllegalArgumentException::class.java) { SavedJukeboxSettings(stereo = 3).encode() }
+    }
+
     @Test fun `restored visualizers keep IDs and new instances receive fresh IDs`() {
         val instances = VisualizerInstances()
         instances.restore(listOf(VisualizerInstance(7), VisualizerInstance(12, VisualizerKind.SPEAKER)))
@@ -37,3 +45,4 @@ class SavedJukeboxSettingsTest {
         assertEquals(listOf(7, 12, 13), instances.snapshot.map { it.id })
     }
 }
+

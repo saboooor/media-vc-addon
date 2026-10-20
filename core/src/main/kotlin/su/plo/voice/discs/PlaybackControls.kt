@@ -22,12 +22,19 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
         if (visualizing == active) return
         visualizing = active
         spectrum.reset()
-        players.firstOrNull()?.setFilterFactory(if (active) spectrumFilter() else null)
+        players.forEach { updateFilter(it) }
     }
-    private fun spectrumFilter() = PcmFilterFactory { _, format, output ->
+    private val channels = java.util.concurrent.ConcurrentHashMap<AudioPlayer, Int>()
+    private fun updateFilter(player: AudioPlayer) {
+        val channel = channels[player]
+        player.setFilterFactory(if (channel != null || (visualizing && players.firstOrNull() === player))
+            spectrumFilter(player, channel) else null)
+    }
+    private fun spectrumFilter(player: AudioPlayer, channel: Int?) = PcmFilterFactory { _, format, output ->
         listOf(object : FloatPcmAudioFilter {
             override fun process(input: Array<FloatArray>, offset: Int, length: Int) {
-                if (visualizing) spectrum.accept(input, offset, length, format.sampleRate)
+                if (visualizing && players.firstOrNull() === player) spectrum.accept(input, offset, length, format.sampleRate)
+                if (channel != null) SpeakerChannels.isolate(input, offset, length, channel)
                 output.process(input, offset, length)
             }
             override fun seekPerformed(requested: Long, provided: Long) { spectrum.reset() }
@@ -69,20 +76,22 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
     val isStream: Boolean get() = players.firstOrNull()?.playingTrack?.info?.isStream == true
     val seekable: Boolean get() = players.firstOrNull()?.playingTrack?.isSeekable == true
 
-    @Synchronized fun attach(player: AudioPlayer) {
+    @Synchronized fun attach(player: AudioPlayer, channel: Int? = null) {
         players.firstOrNull()?.playingTrack?.let { current ->
             player.playingTrack?.takeIf { it.isSeekable }?.position = current.position
         }
         player.isPaused = paused
         player.volume = effectiveVolume()
-        if (players.isEmpty() && visualizing) player.setFilterFactory(spectrumFilter())
+        if (channel != null) channels[player] = channel
         players.add(player)
+        updateFilter(player)
     }
 
     @Synchronized fun detach(player: AudioPlayer) {
         val primary = players.firstOrNull() === player
         players.remove(player)
-        if (primary && visualizing) players.firstOrNull()?.setFilterFactory(spectrumFilter())
+        channels.remove(player)
+        if (primary && visualizing) players.firstOrNull()?.let { updateFilter(it) }
     }
 
     fun togglePause() {
@@ -102,3 +111,4 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
         onSeek?.invoke(target)
     }
 }
+

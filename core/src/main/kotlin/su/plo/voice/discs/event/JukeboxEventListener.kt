@@ -9,6 +9,7 @@ import org.bukkit.Bukkit
 import org.bukkit.GameMode
 import org.bukkit.Location
 import org.bukkit.Material
+import org.bukkit.block.BlockFace
 import org.bukkit.block.Block
 import org.bukkit.block.Jukebox
 import org.bukkit.entity.Player
@@ -63,10 +64,17 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     private val svcPlugin: SvcDiscsPlugin? by getterOrNull()
     private val discHelper: DiscHelper by inject()
 
+    var shouldLoop: (Block) -> Boolean = { false }
+
     private val savedVolumes = ConcurrentHashMap<Block, Int>()
     fun volumeSetting(block: Block) = controlsByBlock[block]?.volume ?: savedVolumes[block] ?: 100
     fun restoreVolume(block: Block, volume: Int) { savedVolumes[block] = volume.coerceIn(0, 100) }
-    fun clearVolume(block: Block) { savedVolumes.remove(block) }
+    // 0: mono/default, 1: note block left, 2: note block right.
+    private val stereoModes = ConcurrentHashMap<Block, Int>()
+    fun stereoMode(block: Block) = stereoModes[block] ?: 1
+    fun restoreStereo(block: Block, mode: Int) { stereoModes[block] = mode.coerceIn(0, 2) }
+    fun cycleStereo(block: Block) { restoreStereo(block, (stereoMode(block) + 1) % 3) }
+    fun clearVolume(block: Block) { savedVolumes.remove(block); stereoModes.remove(block) }
     val controlsByBlock: MutableMap<Block, PlaybackControls> = ConcurrentHashMap()
 
     fun stopPlayback(block: Block) { jobByBlock.remove(block)?.cancel(DiscEjectCause()) }
@@ -214,10 +222,10 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         if (!isPlaying(block)) playChestTrack(identifier, block, record.itemMeta, player, chestQueue = false)
     }
 
-    fun playChestTrack(identifier: String, block: Block, itemMeta: ItemMeta?, player: Player, chestQueue: Boolean = true,
+    fun playChestTrack(identifier: String, block: Block, itemMeta: ItemMeta?, player: Player? = null, chestQueue: Boolean = true,
                        controls: PlaybackControls = PlaybackControls(), overlap: Boolean = false, onFailure: (() -> Unit)? = null): Job {
         check(overlap || !isPlaying(block)) { "Jukebox is already playing" }
-        val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
+        val voicePlayer = player?.let { p -> voiceServer?.let { p.asVoicePlayer(it) } }
         val job = playTrack(identifier, block, itemMeta, voicePlayer, player, chestQueue = chestQueue, controls = controls, onFailure = onFailure)
         jobByBlock[block] = job
         job.invokeOnCompletion { jobByBlock.remove(block, job) }
@@ -306,33 +314,26 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 false -> config.distance.jukeboxDistance
             }
 
-            val pvSource = if (sourceLine != null && voiceServer != null) {
-                val world = voiceServer?.minecraftServer?.getWorld(block.world)
-                val pos = ServerPos3d(
-                    world,
-                    block.x.toDouble() + 0.5,
-                    block.y.toDouble() + 1.5,
-                    block.z.toDouble() + 0.5
-                )
-                val source = sourceLine?.createStaticSource(pos, !config.monoSources)
-                source?.setName(trackName)
-
-                if (config.distance.visualizeDistance) {
-                    voicePlayer?.visualizeDistance(
-                        pos.toPosition(),
-                        distance.toInt(),
-                        0xf1c40f
-                    )
-                }
-                source
-            } else null
-
-            val svcLoc = Location(block.world, block.x + 0.5, block.y + 1.5, block.z + 0.5)
-            val svcChannel = svcPlugin?.createLocationalChannel(svcLoc, distance.toFloat())?.apply {
-                setFilter { sp ->
-                    svcPlugin?.hasClient(sp.uuid) == true
-                }
+            val stereo = suspendSyncAt(block.location, voiceServer, plugin) {
+                val mode = stereoMode(block)
+                val note = if (mode == 0) null else listOf(BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST)
+                    .map { block.getRelative(it) }.firstOrNull { it.type == Material.NOTE_BLOCK }
+                note to mode
             }
+            val noteBlock = stereo.first
+            fun pvAt(speaker: Block) = if (sourceLine != null && voiceServer != null) {
+                val world = voiceServer?.minecraftServer?.getWorld(speaker.world)
+                val pos = ServerPos3d(world, speaker.x + 0.5, speaker.y + 1.5, speaker.z + 0.5)
+                if (config.distance.visualizeDistance) voicePlayer?.visualizeDistance(pos.toPosition(), distance.toInt(), 0xf1c40f)
+                sourceLine?.createStaticSource(pos, if (noteBlock != null) false else !config.monoSources)?.apply { setName(trackName) }
+            } else null
+            fun svcAt(speaker: Block) = svcPlugin?.createLocationalChannel(
+                Location(speaker.world, speaker.x + 0.5, speaker.y + 1.5, speaker.z + 0.5), distance.toFloat()
+            )?.apply { setFilter { sp -> svcPlugin?.hasClient(sp.uuid) == true } }
+            val pvSource = pvAt(block)
+            val svcChannel = svcAt(block)
+            val notePvSource = noteBlock?.let { pvAt(it) }
+            val noteSvcChannel = noteBlock?.let { svcAt(it) }
 
             val actionbarMessage = McTextComponent.translatable(
                 "pv.addon.discs.actionbar.playing", displayTitle
@@ -355,8 +356,14 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 pvSource = pvSource,
                 distance = distance,
                 svcChannel = svcChannel,
-                controls = controls
+                controls = controls,
+                pcmChannel = if (noteBlock == null) null else if (stereo.second == 1) 1 else 0
             )
+            val noteJob = if (noteBlock != null) audioPlayerManager.startTrackJob(
+                track = track.makeClone(), pvSource = notePvSource, distance = distance,
+                svcChannel = noteSvcChannel, controls = controls,
+                pcmChannel = if (stereo.second == 1) 0 else 1
+            ) else null
             controls.onPauseChanged = { isPaused ->
                 screenManager?.onJukeboxPause(block, isPaused)
             }
@@ -388,7 +395,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     // Check if jukebox still exists every 3 seconds
                     if (timeSinceExistenceCheck >= 3_000L) {
                         val stillExists = suspendSyncAt(block.location, voiceServer, plugin) {
-                            block.type == Material.JUKEBOX
+                            block.type == Material.JUKEBOX && (noteBlock == null || noteBlock.type == Material.NOTE_BLOCK)
                         }
 
                         if (!stillExists) {
@@ -426,6 +433,8 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     debugLogger.log("Track \"$trackName\" at ${block.location} ended")
 
                     job.cancelAndJoin()
+                    noteJob?.cancelAndJoin()
+                    notePvSource?.remove()
                     pvSource?.remove()
                     screenManager?.onJukeboxStop(block)
 
@@ -447,7 +456,19 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             }
         }
         controlsByBlock[block] = controls
-        playback.invokeOnCompletion { controlsByBlock.remove(block, controls) }
+        playback.invokeOnCompletion { failure ->
+            controlsByBlock.remove(block, controls)
+            if (failure == null && controls.failure == null && !chestQueue && scope.isActive) scope.launch {
+                delay(100)
+                suspendSyncAt(block.location, voiceServer, plugin) {
+                    val record = block.asJukebox()?.record ?: return@suspendSyncAt
+                    if (shouldLoop(block) && !isPlaying(block) &&
+                        record.customDiscIdentifier(discHelper) == identifier && record.itemMeta == itemMeta) {
+                        playChestTrack(identifier, block, itemMeta, player, chestQueue = false)
+                    }
+                }
+            }
+        }
         playback.start()
         return playback
     }
@@ -495,3 +516,4 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         }
     }
 }
+
