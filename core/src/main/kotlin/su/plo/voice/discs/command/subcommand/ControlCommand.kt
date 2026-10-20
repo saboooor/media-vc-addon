@@ -22,7 +22,6 @@ import org.bukkit.inventory.ItemStack
 import su.plo.slib.api.permission.PermissionDefault
 import su.plo.voice.discs.PlaybackDialogView
 import su.plo.voice.discs.visualizer.VisualizerKind
-import su.plo.voice.discs.visualizer.VisualizerFacing
 import su.plo.voice.discs.PlaybackControls
 import su.plo.voice.discs.command.SubCommand
 import su.plo.voice.discs.event.JukeboxEventListener
@@ -41,6 +40,7 @@ import java.util.function.Consumer
 class ControlCommand(
     private val jukeboxes: JukeboxEventListener,
     private val playlists: PlaylistCommand,
+    private val worldEditor: VisualizerCommand,
 ) : SubCommand(), Listener {
     private val bassLamps: JukeboxBassLamps? by getterOrNull<JukeboxBassLamps>()
     private val visualizer: JukeboxVisualizer? by getterOrNull<JukeboxVisualizer>()
@@ -173,7 +173,7 @@ class ControlCommand(
         }
 
         if (progressDisplay != null) {
-            buttons += "Move Hologram" to (prefix + "holo_menu")
+            buttons += "Move hologram in world" to (prefix + "holo_edit")
         }
 
         val body = mutableListOf<Component>()
@@ -224,13 +224,8 @@ class ControlCommand(
             body.clear()
             val offset = pd.getOffset(block)
             body += Component.text("Hologram Offset: X: ${offset.x}, Y: ${offset.y}, Z: ${offset.z}", NamedTextColor.GOLD)
-            body += Component.text("Click to move the hologram position relative to the jukebox:", NamedTextColor.GRAY)
-            buttons += "Up (+0.25)" to (prefix + "holo_up")
-            buttons += "Down (-0.25)" to (prefix + "holo_down")
-            buttons += "North (-Z)" to (prefix + "holo_north")
-            buttons += "South (+Z)" to (prefix + "holo_south")
-            buttons += "East (+X)" to (prefix + "holo_east")
-            buttons += "West (-X)" to (prefix + "holo_west")
+            body += Component.text("Hold a stick, then choose Move in world. Right-click to grab/place; scroll for distance; sneak-right-click to finish.", NamedTextColor.GRAY)
+            buttons += "Move in world" to (prefix + "holo_edit")
             buttons += "Reset Position" to (prefix + "holo_reset")
             buttons += "Back to controls" to (prefix + "refresh")
         }
@@ -263,11 +258,8 @@ class ControlCommand(
                 body += Component.text("Offset: ${layout.x}, ${layout.y}, ${layout.z} · Width: ${layout.width}× · Height: ${layout.height}×", NamedTextColor.GRAY)
                 buttons += (if (selected.enabled) "Disable #${selected.id}" else "Enable #${selected.id}") to (prefix + "viz_toggle")
                 buttons += ("Change to " + VisualizerKind.entries[(selected.kind.ordinal + 1) % VisualizerKind.entries.size].label) to (prefix + "viz_type")
-                for ((action, label) in listOf("up" to "Up", "down" to "Down", "north" to "Move North", "south" to "Move South", "east" to "Move East", "west" to "Move West",
-                    "wider" to "Wider", "narrower" to "Narrower", "taller" to "Taller", "shorter" to "Shorter", "reset" to "Reset position, size and facing")) {
-                    buttons += label to (prefix + "viz_$action")
-                }
-                for (facing in VisualizerFacing.entries) buttons += "Face ${facing.name.lowercase()}" to (prefix + "viz_face_${facing.name.lowercase()}")
+                buttons += "Move / resize in world" to (prefix + "viz_edit")
+                buttons += "Reset position, size and facing" to (prefix + "viz_reset")
                 buttons += "Remove #${selected.id}" to (prefix + "viz_remove")
             }
             for (instance in visualizers) {
@@ -328,6 +320,8 @@ class ControlCommand(
                 bassLamps?.beginLink(player, session.block, unlink = arguments[2] == "lamp_unlink")
                 return
             }
+            "holo_edit" -> { worldEditor.editHologram(player, session.block); return }
+            "viz_edit" -> { worldEditor.editVisualizer(player, session.block, session.visualizerId); return }
             "viz_menu" -> { show(player, session.block, visualization = true); return }
             "viz_add_bars", "viz_add_speaker" -> {
                 val manager = visualizer ?: return
@@ -336,27 +330,14 @@ class ControlCommand(
                 show(player, session.block, visualization = true, selectedVisualizerId = id ?: session.visualizerId)
                 return
             }
-            "viz_toggle", "viz_up", "viz_down", "viz_north", "viz_south", "viz_east", "viz_west",
-            "viz_wider", "viz_narrower", "viz_taller", "viz_shorter", "viz_reset", "viz_remove", "viz_type",
-            "viz_face_north", "viz_face_south", "viz_face_east", "viz_face_west" -> {
+            "viz_toggle", "viz_reset", "viz_remove", "viz_type" -> {
                 val manager = visualizer ?: return
                 val id = session.visualizerId ?: return
                 when (arguments[2]) {
                     "viz_toggle" -> manager.toggle(session.block, id)
                     "viz_type" -> manager.changeKind(session.block, id)
                     "viz_remove" -> manager.delete(session.block, id)
-                    "viz_up" -> manager.adjustLayout(session.block, id, dy = 0.25f)
-                    "viz_down" -> manager.adjustLayout(session.block, id, dy = -0.25f)
-                    "viz_north" -> manager.adjustLayout(session.block, id, dz = -0.25f)
-                    "viz_south" -> manager.adjustLayout(session.block, id, dz = 0.25f)
-                    "viz_east" -> manager.adjustLayout(session.block, id, dx = 0.25f)
-                    "viz_west" -> manager.adjustLayout(session.block, id, dx = -0.25f)
-                    "viz_wider" -> manager.adjustLayout(session.block, id, dw = 0.25f)
-                    "viz_narrower" -> manager.adjustLayout(session.block, id, dw = -0.25f)
-                    "viz_taller" -> manager.adjustLayout(session.block, id, dh = 0.25f)
-                    "viz_shorter" -> manager.adjustLayout(session.block, id, dh = -0.25f)
                     "viz_reset" -> manager.resetLayout(session.block, id)
-                    else -> manager.setFacing(session.block, id, VisualizerFacing.valueOf(arguments[2].removePrefix("viz_face_").uppercase()))
                 }
                 show(player, session.block, visualization = true, selectedVisualizerId = id)
                 return
@@ -395,36 +376,6 @@ class ControlCommand(
             "fademore" -> playlists.changeCrossfade(session.block, 1)
             "fadetoggle" -> playlists.toggleCrossfade(session.block)
             "holo_menu" -> { show(player, session.block, hologram = true); return }
-            "holo_up" -> {
-                progressDisplay?.adjustOffset(session.block, 0.0, 0.25, 0.0)
-                show(player, session.block, hologram = true)
-                return
-            }
-            "holo_down" -> {
-                progressDisplay?.adjustOffset(session.block, 0.0, -0.25, 0.0)
-                show(player, session.block, hologram = true)
-                return
-            }
-            "holo_north" -> {
-                progressDisplay?.adjustOffset(session.block, 0.0, 0.0, -0.25)
-                show(player, session.block, hologram = true)
-                return
-            }
-            "holo_south" -> {
-                progressDisplay?.adjustOffset(session.block, 0.0, 0.0, 0.25)
-                show(player, session.block, hologram = true)
-                return
-            }
-            "holo_east" -> {
-                progressDisplay?.adjustOffset(session.block, 0.25, 0.0, 0.0)
-                show(player, session.block, hologram = true)
-                return
-            }
-            "holo_west" -> {
-                progressDisplay?.adjustOffset(session.block, -0.25, 0.0, 0.0)
-                show(player, session.block, hologram = true)
-                return
-            }
             "holo_reset" -> {
                 progressDisplay?.resetOffset(session.block)
                 show(player, session.block, hologram = true)

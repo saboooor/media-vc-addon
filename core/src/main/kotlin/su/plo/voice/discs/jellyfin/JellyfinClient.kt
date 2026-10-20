@@ -55,6 +55,9 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
             if (type in listOf("Audio", "AudioBook")) "?static=true"
             else "?container=mp3&audioCodec=mp3&audioBitRate=192000&audioChannels=2&static=false"
 
+    fun videoStreamUrl(session: Session, itemId: String): String =
+        session.baseUrl + "Videos/${mediaId(itemId)}/stream?static=true"
+
     private fun request(base: String, path: String, device: String, token: String? = null, body: JsonObject? = null): JsonObject {
         try {
             val builder = HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(20))

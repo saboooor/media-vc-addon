@@ -19,6 +19,7 @@ import su.plo.voice.discs.utils.extend.getValue
 class HologramCommand(
     private val jukeboxes: JukeboxEventListener,
     private val controlCommand: ControlCommand,
+    private val editor: VisualizerCommand,
 ) : SubCommand() {
 
     private val progressDisplay: JukeboxProgressDisplay? by getterOrNull<JukeboxProgressDisplay>()
@@ -35,6 +36,11 @@ class HologramCommand(
             sender.sendMessage(Component.text("Only players can use this command.", NamedTextColor.RED))
             return
         }
+        if (!checkCanExecute(player)) return
+        if (arguments.getOrNull(1).equals("done", ignoreCase = true)) {
+            editor.finishEditing(player)
+            return
+        }
         val display = progressDisplay ?: run {
             player.sendMessage(Component.text("Holograms are not available on this server version.", NamedTextColor.RED))
             return
@@ -45,7 +51,11 @@ class HologramCommand(
             return
         }
 
-        if (arguments.size <= 1 || arguments[1].equals("gui", ignoreCase = true)) {
+        if (arguments.size <= 1 || arguments[1].equals("edit", ignoreCase = true)) {
+            editor.editHologram(player, targetJukebox)
+            return
+        }
+        if (arguments[1].equals("gui", ignoreCase = true)) {
             controlCommand.showHologramDialog(player, targetJukebox)
             return
         }
@@ -94,7 +104,7 @@ class HologramCommand(
                 player.sendMessage(Component.text("Hologram position reset to default.", NamedTextColor.GREEN))
             }
             else -> {
-                player.sendMessage(Component.text("Usage: /disc hologram [gui|move|offset|reset]", NamedTextColor.RED))
+                player.sendMessage(Component.text("Usage: /disc hologram [edit|done|gui|move|offset|reset]", NamedTextColor.RED))
             }
         }
     }
@@ -121,7 +131,7 @@ class HologramCommand(
 
     override fun suggest(sender: CommandSender, arguments: Array<out String>): List<String> {
         return when (arguments.size) {
-            2 -> listOf("gui", "move", "offset", "reset").filter { it.startsWith(arguments[1], ignoreCase = true) }
+            2 -> listOf("edit", "done", "gui", "move", "offset", "reset").filter { it.startsWith(arguments[1], ignoreCase = true) }
             3 -> if (arguments[1].equals("move", ignoreCase = true)) {
                 listOf("up", "down", "north", "south", "east", "west").filter { it.startsWith(arguments[2], ignoreCase = true) }
             } else emptyList()

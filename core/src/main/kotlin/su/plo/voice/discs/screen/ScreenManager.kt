@@ -33,6 +33,8 @@ class ScreenManager : PluginKoinComponent {
     private val config: AddonConfig by getter()
     private val audioPlayerManager: PlasmoAudioPlayerManager by getter()
 
+    private val jellyfinLibrary: su.plo.voice.discs.jellyfin.JellyfinLibrary by inject()
+
     private val screens = ConcurrentHashMap<String, Screen>()
     private val activePlayers = ConcurrentHashMap<String, VideoPlayer>()
     private val selectionSessions = ConcurrentHashMap<UUID, ScreenSelectionSession>()
@@ -302,7 +304,19 @@ class ScreenManager : PluginKoinComponent {
             val videoId = VideoSourceResolver.extractYouTubeVideoId(identifier)
             val fallbackImg = artworkUrl ?: videoId?.let { VideoSourceResolver.getYouTubeThumbnailUrl(it) }
 
-            val resolvedUrl = VideoSourceResolver.resolveVideoUrl(
+            val jellyfin = if (identifier.startsWith("jellyfin:")) {
+                try { jellyfinLibrary.resolve(identifier) } catch (e: Exception) {
+                    plugin.slF4JLogger.warn("Cannot open Jellyfin video for screen '${screen.name}': ${e.message}")
+                    return@launch
+                }
+            } else null
+            if (jellyfin != null && jellyfin.second.type !in listOf("Movie", "Episode", "MusicVideo", "Video")) return@launch
+            val sourceAuthorization = jellyfin?.first?.session?.let {
+                su.plo.voice.discs.jellyfin.JellyfinClient.authorization(it.deviceId, it.token)
+            }
+            val resolvedUrl = if (jellyfin != null) {
+                su.plo.voice.discs.jellyfin.JellyfinClient().videoStreamUrl(jellyfin.first.session, jellyfin.second.mediaId)
+            } else VideoSourceResolver.resolveVideoUrl(
                 identifier = identifier,
                 audioPlayerManager = audioPlayerManager,
                 ytdlpPath = config.screen.ytdlpPath,
@@ -320,6 +334,7 @@ class ScreenManager : PluginKoinComponent {
             videoPlayer = VideoPlayer(
                 screen = screen,
                 sourceUrl = resolvedUrl,
+                sourceAuthorization = sourceAuthorization,
                 fps = config.screen.fps.coerceIn(5, 30),
                 maxDistance = config.screen.maxDistance.coerceIn(8, 128),
                 ffmpegPath = resolvedFfmpegPath,

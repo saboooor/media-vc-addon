@@ -40,6 +40,8 @@ class JellyfinClientTest {
             assertTrue(requests[1].first.contains("startIndex=45"))
             assertTrue(requests[1].first.contains("includeItemTypes=Audio,AudioBook,Movie,Episode,MusicVideo,Video"))
             val videoUrl = client.streamUrl(session, page.items.single().id, "Movie")
+            assertEquals("${session.baseUrl}Videos/${page.items.single().id}/stream?static=true",
+                client.videoStreamUrl(session, page.items.single().id))
             assertTrue(videoUrl.contains("container=mp3"))
             assertTrue(videoUrl.contains("static=false"))
             assertFalse(videoUrl.contains("test-token"))

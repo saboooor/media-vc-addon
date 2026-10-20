@@ -84,7 +84,7 @@ Music video screens:
 
 `/disc cancel [player]` – Cancel user's goat horn playback. You need `pv.addon.discs.cancel.other` permission to cancel for others.
 
-`/disc hologram [gui|move|offset|reset]` – Adjust the position of the playback hologram for a jukebox. Can be opened interactively from the Jukebox controls dialog ("Move Hologram") or run as a command. Supports `/disc hologram move <up|down|north|south|east|west> [amount]`, `/disc hologram offset <x> <y> <z>`, and `/disc hologram reset`.
+`/disc hologram [edit|done|gui|move|offset|reset]` – Hold a stick and look at a jukebox, then run `/disc hologram` to position its playback hologram directly in the world. `/disc hologram gui` opens the hologram settings, with a Move in world action and position reset. Directional `move`, exact `offset <x> <y> <z>`, and `reset` remain available.
 
 `/disc oauth [force|status]` – Authorize YouTube access via Google device OAuth2 to prevent "Sign in to confirm you're not a bot" or "This video requires login" errors. Check server console for the pairing code, visit https://www.google.com/device with a burner account, and authorize. Use `/disc oauth force` to re-authorize and refresh the stored token.
 
@@ -240,6 +240,18 @@ Mining a jukebox saves its volume, loop/shuffle toggles, stereo channel assignme
 
 Creative-mode breaks also drop a jukebox carrying its saved settings. Placed jukeboxes also save settings on chunk unload and plugin shutdown and restore them when loaded. Breaking clears the old location's settings. Lamp links reconnect only to available lamps in the same world within 32 blocks, and screen links reconnect only when the original screen exists and has not been linked elsewhere. Lamps and screen frames themselves stay where they were built. Cancelled breaks and placements do not transfer settings.
 
+### Moving holograms in the world
+
+Hold a **stick**, look at a jukebox or its chest within six blocks, and run `/disc hologram` (or `/disc hologram edit`). A preview appears even when no music is playing.
+
+- **Right-click** to grab or place the hologram. Look around or walk to move it.
+- **Scroll** while grabbed to move it closer or farther away; **sneak** for quarter-block grid snapping.
+- **Sneak-right-click** or `/disc hologram done` finishes and saves. Switching items, leaving the area, disconnecting, or five minutes of inactivity also saves and ends editing.
+
+The jukebox controls offer **Move hologram in world**, and visualizer settings offer **Move / resize in world** for the selected visualizer. Hold a stick before choosing either action. Directional movement and size buttons have been replaced by these tools.
+
+Holograms and visualizers share the same stick controls and allow one editor per jukebox. Hologram dragging stays within 24 blocks of its default position. Existing playback/control permissions apply.
+
 ### Editing visualizers in the world
 
 Hold a **stick**, look at a jukebox (or its chest) within six blocks, and run `/disc visualizer edit`. The selected visualizer glows, and visualizers remain visible as previews even when music is stopped or they are disabled. Editing requires the existing playback and control permissions. One player can edit a jukebox at a time.
@@ -272,4 +284,4 @@ Requires `pv.addon.discs.jellyfin` (or `vc.addon.discs.jellyfin`, operator by de
 
 Passwords are exchanged for Jellyfin user tokens and are not saved. Connection tokens and selected-media grants are stored server-side in `plugins/vc-addon-discs/jellyfin.json`; keep that file private. Disc items contain only random `jellyfin:` references, never URLs, passwords, or tokens. A burned disc can be shared and played by other players using its owner's saved connection, including while the owner is offline and after server restarts. Unselected library items cannot be retrieved through the disc reference. Tokens expire if revoked by Jellyfin; reconnect when needed.
 
-Jellyfin songs support chest queues, loop/shuffle, crossfading, pause, seek, volume, and physical stereo through both voice backends. Connection failures preserve the disc reference and stop its queue rather than erasing the song or repeatedly retrying a broken login. The browser includes music, audiobooks, movies, episodes, music videos, and home videos. Audio items stream their original supported files; video items request a stereo MP3 audio stream from Jellyfin and require audio transcoding permission. Video images are not sent to screens. Progressive video audio transcodes do not support seeking; original audio files remain seekable. Jellyfin stream reads allow up to 60 seconds for transcoding startup.
+Jellyfin songs support chest queues, loop/shuffle, crossfading, pause, seek, volume, and physical stereo through both voice backends. Connection failures preserve the disc reference and stop its queue rather than erasing the song or repeatedly retrying a broken login. The browser includes music, audiobooks, movies, episodes, music videos, and home videos. Audio items stream their original supported files; video items request a stereo MP3 audio stream from Jellyfin and require audio transcoding permission. Video items also play on linked item-frame screens using server-side FFmpeg. The original video streams through an authenticated local proxy; tokens are never passed to FFmpeg or placed in URLs. The Jellyfin user must have permission to play the original video. Progressive video audio transcodes do not support seeking; original audio files remain seekable. Jellyfin stream reads allow up to 60 seconds for transcoding startup.

@@ -31,7 +31,8 @@ class VideoPlayer(
     val ffmpegPath: String = "ffmpeg",
     val fallbackImageUrl: String? = null,
     val coroutineScope: CoroutineScope,
-    val onCompletion: (() -> Unit)? = null
+    val onCompletion: (() -> Unit)? = null,
+    private val sourceAuthorization: String? = null
 ) {
     @Volatile
     private var process: Process? = null
@@ -128,7 +129,7 @@ class VideoPlayer(
         val isNetworkStream = sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://")
 
         // stdin cannot seek; a loopback range proxy keeps HTTPS handling in Java on seeks.
-        val pipeNetworkStream = isNetworkStream && startPositionMs <= 0
+        val pipeNetworkStream = isNetworkStream && startPositionMs <= 0 && sourceAuthorization == null
         var httpConn: HttpURLConnection? = null
         var netStream: InputStream? = null
 
@@ -155,7 +156,7 @@ class VideoPlayer(
             sourceUrl.contains("c=TVHTML5") -> "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
             sourceUrl.contains("c=ANDROID") -> "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip"
             else -> "Mozilla/5.0"
-        }) else null
+        }, sourceAuthorization) else null
 
         val frameSizeBytes = totalWidth * totalHeight * 3
         val rawFrameBuffer = ByteArray(frameSizeBytes)

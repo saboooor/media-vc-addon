@@ -383,8 +383,8 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             val videoIdentifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.info.identifier?.takeIf { it.isNotBlank() } ?: identifier
             val isYouTubeMusic = track.info.author.contains("- Topic", ignoreCase = true) ||
                 identifier.contains("music.youtube.com") || (track.info.uri ?: "").contains("music.youtube.com")
-            if (!identifier.startsWith("jellyfin:"))
-                screenManager?.onJukeboxPlay(block, videoIdentifier, artworkUrl = track.info.artworkUrl, isYouTubeMusic = isYouTubeMusic)
+            screenManager?.onJukeboxPlay(block, if (identifier.startsWith("jellyfin:")) identifier else videoIdentifier,
+                artworkUrl = track.info.artworkUrl, isYouTubeMusic = isYouTubeMusic)
             try {
                 var lastExistenceCheck = System.currentTimeMillis()
                 var lastRecordReset = System.currentTimeMillis()

@@ -266,13 +266,13 @@ class DiscsPlugin : JavaPlugin(), Listener {
         server.pluginManager.registerEvents(ScreenEventListener(), this)
 
         val playlistCommand = PlaylistCommand(jukeboxEventListener)
-        val controlCommand = ControlCommand(jukeboxEventListener, playlistCommand)
-        val hologramCommand = HologramCommand(jukeboxEventListener, controlCommand)
         val visualizerCommand = VisualizerCommand(visualizerInstance).also {
             visualizerEditor = it
             server.pluginManager.registerEvents(it, this)
             it.start()
         }
+        val controlCommand = ControlCommand(jukeboxEventListener, playlistCommand, visualizerCommand)
+        val hologramCommand = HologramCommand(jukeboxEventListener, controlCommand, visualizerCommand)
         server.pluginManager.registerEvents(controlCommand, this)
         server.pluginManager.registerEvents(playlistCommand, this)
         server.pluginManager.registerEvents(jukeboxEventListener, this)

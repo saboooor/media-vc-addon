@@ -42,12 +42,18 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
     private val displays = ConcurrentHashMap<Block, Entity>()
     private val displayType = runCatching { EntityType.valueOf("TEXT_DISPLAY") }.getOrNull()
     private var updater: Job? = null
+    private val editing = ConcurrentHashMap.newKeySet<Block>()
+    val supported get() = displayType != null
+
+    fun setEditing(block: Block, active: Boolean) {
+        if (active) editing.add(block) else editing.remove(block)
+    }
 
     fun start() {
         if (displayType == null) return
         updater = scope.launch {
             while (isActive) {
-                val blocks = displays.keys.toSet() + jukeboxes.controlsByBlock.keys.toSet()
+                val blocks = displays.keys.toSet() + jukeboxes.controlsByBlock.keys.toSet() + editing
                 for (block in blocks) {
                     suspendSyncAt(block.location, voiceServer, plugin) {
                         if (!block.world.isChunkLoaded(block.x shr 4, block.z shr 4)) {
@@ -55,7 +61,7 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
                             return@suspendSyncAt
                         }
                         val controls = jukeboxes.controlsByBlock[block]
-                        if (controls == null || block.type != Material.JUKEBOX) {
+                        if ((controls == null && block !in editing) || block.type != Material.JUKEBOX) {
                             displays.remove(block)?.remove()
                             return@suspendSyncAt
                         }
@@ -64,7 +70,8 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
                         if (display.location.distanceSquared(targetLoc) > 0.001) {
                             display.teleport(targetLoc)
                         }
-                        val text = Component.text(controls.title.take(80), NamedTextColor.GOLD)
+                        val text = if (controls == null) Component.text("Playback hologram\nPreview", NamedTextColor.AQUA)
+                            else Component.text(controls.title.take(80), NamedTextColor.GOLD)
                             .append(Component.text(if (controls.paused) "\nPaused\n" else "\n", NamedTextColor.GRAY))
                             .append(PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream))
                         display.javaClass.getMethod("text", Component::class.java).invoke(display, text)
@@ -124,7 +131,7 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
         return offsets[blockKey(block)] ?: HologramOffset()
     }
 
-    fun setOffset(block: Block, x: Double, y: Double, z: Double) {
+    fun setOffset(block: Block, x: Double, y: Double, z: Double, persist: Boolean = true) {
         val key = blockKey(block)
         val roundedX = Math.round(x * 100.0) / 100.0
         val roundedY = Math.round(y * 100.0) / 100.0
@@ -134,7 +141,7 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
         } else {
             offsets[key] = HologramOffset(roundedX, roundedY, roundedZ)
         }
-        saveOffsets()
+        if (persist) saveOffsets()
         teleportDisplay(block)
     }
 
@@ -265,5 +272,6 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
         updater?.cancel()
         displays.values.forEach { it.remove() }
         displays.clear()
+        editing.clear()
     }
 }

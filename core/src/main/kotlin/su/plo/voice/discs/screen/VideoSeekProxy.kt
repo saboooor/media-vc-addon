@@ -10,7 +10,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /** A per-playback loopback bridge: Java handles TLS, while FFmpeg retains HTTP range seeking. */
-internal class VideoSeekProxy(private val source: String, private val userAgent: String) : AutoCloseable {
+internal class VideoSeekProxy(private val source: String, private val userAgent: String,
+    private val authorization: String? = null
+) : AutoCloseable {
     private val connections = ConcurrentHashMap.newKeySet<HttpURLConnection>()
     private val executor = Executors.newCachedThreadPool { task -> Thread(task, "disc-video-seek").apply { isDaemon = true } }
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -37,13 +39,19 @@ internal class VideoSeekProxy(private val source: String, private val userAgent:
                 connections.add(upstream)
                 upstream.instanceFollowRedirects = false
                 upstream.connectTimeout = 10_000
-                upstream.readTimeout = 20_000
+                upstream.readTimeout = if (authorization != null) 60_000 else 20_000
                 upstream.requestMethod = exchange.requestMethod
                 upstream.setRequestProperty("User-Agent", userAgent)
+                authorization?.let { upstream.setRequestProperty("Authorization", it) }
                 exchange.requestHeaders.getFirst("Range")?.let { upstream.setRequestProperty("Range", it) }
                 exchange.requestHeaders.getFirst("If-Range")?.let { upstream.setRequestProperty("If-Range", it) }
                 val status = upstream.responseCode
                 if (status in listOf(301, 302, 303, 307, 308)) {
+                    // Authenticated Jellyfin streams must never forward credentials to redirects.
+                    if (authorization != null) {
+                        exchange.sendResponseHeaders(502, -1)
+                        return
+                    }
                     val location = upstream.getHeaderField("Location") ?: error("Missing redirect target")
                     uri = uri.resolve(location)
                     require(uri.scheme in listOf("http", "https"))
