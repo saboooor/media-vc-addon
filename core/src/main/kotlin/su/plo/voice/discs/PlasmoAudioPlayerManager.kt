@@ -51,6 +51,7 @@ import su.plo.voice.lavaplayer.libs.org.apache.http.impl.client.HttpClientBuilde
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.format.StandardAudioDataFormats
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.format.OpusAudioDataFormat
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.format.transcoder.AudioChunkEncoder
+import su.plo.voice.discs.audio.PlaybackSpectrumTap
 import su.plo.voice.discs.audio.StereoPcmFrameEncoder
 import su.plo.voice.discs.audio.QualityYoutubeSourceManager
 import java.io.File
@@ -179,6 +180,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         var player: AudioPlayer? = null
         var leftEncoder: AudioChunkEncoder? = null
         var rightEncoder: AudioChunkEncoder? = null
+        var spectrumTap: PlaybackSpectrumTap? = null
         val pvSources = listOfNotNull(primaryPv, secondaryPv)
         val svcChannels = listOfNotNull(primarySvc, secondarySvc)
         val enc = encryption
@@ -214,6 +216,13 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 val sent = synchronized(controls) {
                     if (controls.paused || controls.failure != null) false
                     else playbackPlayer.provide()?.let { frame ->
+                        if (controls.visualizing) {
+                            val tap = spectrumTap ?: PlaybackSpectrumTap(frame.format).also { spectrumTap = it }
+                            tap.accept(frame.data, controls.spectrum)
+                        } else {
+                            spectrumTap?.close()
+                            spectrumTap = null
+                        }
                         val pair = encoder?.encode(frame.data)
                         val primary = pair?.first ?: frame.data
                         val secondary = pair?.second
@@ -247,6 +256,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
             }
             pvSources.forEach { source -> cleanup { source.sendAudioEnd(sequence, distance) } }
             svcChannels.forEach { channel -> cleanup { channel.flush() } }
+            spectrumTap?.let { tap -> cleanup { tap.close() } }
             player?.let { playbackPlayer -> controls.detach(playbackPlayer); cleanup { playbackPlayer.destroy() } }
             leftEncoder?.let { cleanup { it.close() } }
             rightEncoder?.let { cleanup { it.close() } }

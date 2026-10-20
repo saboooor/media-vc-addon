@@ -11,7 +11,7 @@ data class SavedJukeboxSettings(
     val volume: Int = 100,
     val loop: Boolean = false,
     val shuffle: Boolean = false,
-    val stereo: Int = 1,
+    val stereo: Int = 0,
     val crossfade: Int = 3,
     val lastCrossfade: Int = 3,
     val hologram: HologramOffset = HologramOffset(),

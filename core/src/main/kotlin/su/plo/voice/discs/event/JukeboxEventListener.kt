@@ -71,9 +71,9 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     fun restoreVolume(block: Block, volume: Int) { savedVolumes[block] = volume.coerceIn(0, 100) }
     // 0: mono/default, 1/2: note block + jukebox, 3: two note blocks.
     private val stereoModes = ConcurrentHashMap<Block, Int>()
-    fun stereoMode(block: Block) = stereoModes[block] ?: 1
-    fun restoreStereo(block: Block, mode: Int) { stereoModes[block] = mode.coerceIn(0, 3) }
-    fun cycleStereo(block: Block) { restoreStereo(block, (stereoMode(block) + 1) % 4) }
+    fun stereoMode(block: Block) = stereoModes[block] ?: 0
+    fun restoreStereo(block: Block, mode: Int) { stereoModes[block] = if (mode == 3) 3 else 0 }
+    fun cycleStereo(block: Block) { restoreStereo(block, if (stereoMode(block) == 3) 0 else 3) }
     private val noteLinks = ConcurrentHashMap<Block, JukeboxBassLamps.Position>()
     fun noteLink(block: Block) = noteLinks[block]
     fun linkNote(block: Block, position: JukeboxBassLamps.Position?) {
@@ -337,11 +337,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 if (mode == 3) {
                     resolve(channelNoteLink(block, true)) to resolve(channelNoteLink(block, false))
                 } else {
-                    val linked = noteLink(block)
-                    val note = if (mode == 0) null else if (linked != null) resolve(linked)
-                    else listOf(BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST)
-                        .map { block.getRelative(it) }.firstOrNull { it.type == Material.NOTE_BLOCK }
-                    block to note
+                    block to null
                 }
             }
             if (mode == 3 && (speakers.first == null || speakers.second == null || speakers.first == speakers.second)) {
@@ -388,14 +384,13 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 track = track, pvSource = pvSource, distance = distance,
                 svcChannel = svcChannel, controls = controls
             ) else {
-                val primaryIsLeft = mode != 1
                 audioPlayerManager.startStereoTrackJob(
                     track = track,
-                    leftPvSource = if (primaryIsLeft) pvSource else notePvSource,
-                    rightPvSource = if (primaryIsLeft) notePvSource else pvSource,
+                    leftPvSource = pvSource,
+                    rightPvSource = notePvSource,
                     distance = distance,
-                    leftSvcChannel = if (primaryIsLeft) svcChannel else noteSvcChannel,
-                    rightSvcChannel = if (primaryIsLeft) noteSvcChannel else svcChannel,
+                    leftSvcChannel = svcChannel,
+                    rightSvcChannel = noteSvcChannel,
                     controls = controls
                 )
             }

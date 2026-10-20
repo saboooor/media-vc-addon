@@ -163,37 +163,19 @@ class PlaybackControlsTest {
         assertFalse(called)
     }
 
-    @Test fun `visualizer taps only one backend and passes audio through unchanged`() {
+    @Test fun `visualizer requests do not attach a decoder lookahead filter`() {
         val controls = PlaybackControls()
         val pv = Decoder()
         val svc = Decoder()
         controls.attach(pv.player)
         controls.attach(svc.player)
-        assertNull(pv.filterFactory)
         controls.setVisualizing(true)
-        assertNotNull(pv.filterFactory)
-        assertNull(svc.filterFactory)
-        var forwarded: Array<FloatArray>? = null
-        val outputType = su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.UniversalPcmAudioFilter::class.java
-        val output = Proxy.newProxyInstance(outputType.classLoader, arrayOf(outputType)) { _, method, args ->
-            if (method.name == "process") {
-                @Suppress("UNCHECKED_CAST")
-                val samples = args!![0] as Array<FloatArray>
-                forwarded = samples
-            }
-            null
-        } as su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.UniversalPcmAudioFilter
-        val filter = pv.filterFactory!!.buildChain(pv.track,
-            su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.format.StandardAudioDataFormats.DISCORD_OPUS, output)
-            .single() as su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.FloatPcmAudioFilter
-        val samples = arrayOf(FloatArray(4800) { 0.2f }, FloatArray(4800) { -0.1f })
-        val original = samples.map { it.clone() }
-        filter.process(samples, 0, 4800)
-        assertSame(samples, forwarded)
-        original.indices.forEach { assertArrayEquals(original[it], samples[it]) }
-        controls.setVisualizing(false)
+        assertTrue(controls.visualizing)
         assertNull(pv.filterFactory)
         assertNull(svc.filterFactory)
+        assertTrue(controls.spectrum.levels.all { it == 0f })
+        controls.setVisualizing(false)
+        assertFalse(controls.visualizing)
     }
 
     @Test fun `linked bass lamps and visualizers independently request the shared audio tap`() {
@@ -201,12 +183,14 @@ class PlaybackControlsTest {
         val decoder = Decoder()
         controls.attach(decoder.player)
         controls.setVisualizing(true, "bass_lamps")
-        assertNotNull(decoder.filterFactory)
-        val filter = decoder.filterFactory
+        assertTrue(controls.visualizing)
+        assertNull(decoder.filterFactory)
         controls.setVisualizing(true)
         controls.setVisualizing(false)
-        assertSame(filter, decoder.filterFactory)
+        assertTrue(controls.visualizing)
+        assertNull(decoder.filterFactory)
         controls.setVisualizing(false, "bass_lamps")
+        assertFalse(controls.visualizing)
         assertNull(decoder.filterFactory)
     }
 

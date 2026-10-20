@@ -15,7 +15,8 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
         if (failure == null) failure = message
     }
     val spectrum = SpectrumAnalyzer()
-    @Volatile private var visualizing = false
+    @Volatile var visualizing = false
+        private set
     private val analysisConsumers = mutableSetOf<String>()
     @Synchronized fun setVisualizing(enabled: Boolean, consumer: String = "visualizer") {
         if (enabled) analysisConsumers.add(consumer) else analysisConsumers.remove(consumer)
@@ -23,19 +24,17 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
         if (visualizing == active) return
         visualizing = active
         spectrum.reset()
-        players.forEach { updateFilter(it) }
     }
     private val channels = java.util.concurrent.ConcurrentHashMap<AudioPlayer, Int>()
     private fun updateFilter(player: AudioPlayer) {
         val channel = channels[player]
-        player.setFilterFactory(if (channel != null || (visualizing && players.firstOrNull() === player))
-            spectrumFilter(player, channel) else null)
+        player.setFilterFactory(if (channel != null)
+            channelFilter(channel) else null)
     }
-    private fun spectrumFilter(player: AudioPlayer, channel: Int?) = PcmFilterFactory { _, format, output ->
+    private fun channelFilter(channel: Int) = PcmFilterFactory { _, _, output ->
         listOf(object : FloatPcmAudioFilter {
             override fun process(input: Array<FloatArray>, offset: Int, length: Int) {
-                if (visualizing && players.firstOrNull() === player) spectrum.accept(input, offset, length, format.sampleRate)
-                if (channel != null) SpeakerChannels.isolate(input, offset, length, channel)
+                SpeakerChannels.isolate(input, offset, length, channel)
                 output.process(input, offset, length)
             }
             override fun seekPerformed(requested: Long, provided: Long) { spectrum.reset() }
@@ -100,10 +99,8 @@ class PlaybackControls(initialVolume: Int = 100, initialGain: Double = 1.0) {
     }
 
     @Synchronized fun detach(player: AudioPlayer) {
-        val primary = players.firstOrNull() === player
         players.remove(player)
         channels.remove(player)
-        if (primary && visualizing) players.firstOrNull()?.let { updateFilter(it) }
     }
 
     fun togglePause() {

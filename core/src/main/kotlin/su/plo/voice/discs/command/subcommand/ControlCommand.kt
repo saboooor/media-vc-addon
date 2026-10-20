@@ -51,6 +51,8 @@ class ControlCommand(
     private data class NoteRequest(val block: Block, val left: Boolean? = null, val expires: Long = System.currentTimeMillis() + 120_000)
     private val noteRequests = ConcurrentHashMap<UUID, NoteRequest>()
     private val sessions = ConcurrentHashMap<UUID, Session>()
+    private val volumeSteps = listOf(1, 5, 10, 25)
+    private val volumePresets = listOf(0, 10, 25, 50, 75, 100)
     override val name = "control"
     override val permissions = listOf("control" to PermissionDefault.TRUE)
 
@@ -86,7 +88,7 @@ class ControlCommand(
             event.player.sendMessage(Component.text("Note block linked. Stereo changes apply on the next song or after restarting playback."))
             return
         }
-        val jukebox = block.asJukebox() ?: return
+        if (block.asJukebox() == null) return
         val emptyHands = event.player.inventory.itemInMainHand.type == Material.AIR &&
             event.player.inventory.itemInOffHand.type == Material.AIR
         if (event.player.isSneaking && !emptyHands) return
@@ -98,11 +100,9 @@ class ControlCommand(
             event.setUseInteractedBlock(Event.Result.DENY)
             return
         }
-        if (event.hand != EquipmentSlot.HAND) return
-        val hasCustomDisc = jukebox.record.hasIdentifier()
-        val isLinked = screenManager?.getScreenForJukebox(block) != null
-        val isEmptyHand = event.item == null || event.item?.type == Material.AIR
-        if (!jukeboxes.isPlaying(block) && !playlists.isQueued(block) && !hasCustomDisc && !isLinked && !event.player.isSneaking && !isEmptyHand) return
+        // Held-item interactions belong to vanilla and the disc insertion listeners, even
+        // when a screen is linked, a queue is active, or the jukebox already contains a disc.
+        if (!emptyHands || event.hand != EquipmentSlot.HAND) return
         event.setUseInteractedBlock(Event.Result.DENY)
         event.setUseItemInHand(Event.Result.DENY)
         if (!checkCanExecute(event.player) || event.player.gameMode == GameMode.SPECTATOR) {
@@ -116,7 +116,7 @@ class ControlCommand(
         show(player, block, hologram = true)
     }
 
-    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null) {
+    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null, speakers: Boolean = false, visualizerSelection: Boolean = false, queueMenu: Boolean = false, volumeMenu: Boolean = false, lampMenu: Boolean = false, screenMenu: Boolean = false) {
         val record = block.asJukebox()?.record?.clone() ?: return
         val controls = jukeboxes.controlsByBlock[block]
         val visualizers = visualizer?.instances(block).orEmpty()
@@ -130,39 +130,28 @@ class ControlCommand(
         if (controls == null && !playlists.isQueued(block) && chest != null)
             buttons += "Play chest" to (prefix + "playchest")
         val modes = playlists.playbackModes(block)
-        buttons += "Loop: ${if (modes.first) "On" else "Off"}" to (prefix + "loop")
-        buttons += "Shuffle: ${if (modes.second) "On" else "Off"}" to (prefix + "shuffle")
+        buttons += "Queue" to (prefix + "queue_menu")
+        buttons += "Volume" to (prefix + "volume_menu")
+        buttons += "Audio settings" to (prefix + "audio_menu")
         val stereoLabel = when (jukeboxes.stereoMode(block)) {
-            1 -> "Note block L / Jukebox R"
-            2 -> "Jukebox L / Note block R"
             3 -> "Note block L / Note block R"
             else -> "Off"
         }
-        buttons += "Stereo: $stereoLabel" to (prefix + "stereo")
-        buttons += "Link left note block" to (prefix + "note_left")
-        buttons += "Link right note block" to (prefix + "note_right")
-        if (jukeboxes.channelNoteLink(block, true) != null) buttons += "Unlink left note block" to (prefix + "note_left_unlink")
-        if (jukeboxes.channelNoteLink(block, false) != null) buttons += "Unlink right note block" to (prefix + "note_right_unlink")
-        buttons += "Link note block" to (prefix + "note_link")
-        if (jukeboxes.noteLink(block) != null) buttons += "Unlink note block" to (prefix + "note_unlink")
+        buttons += "Speaker setup" to (prefix + "speakers")
         if (controls != null) {
             buttons += (if (controls.paused) "Resume" else "Pause") to (prefix + "pause")
             buttons += "Refresh" to (prefix + "refresh")
             buttons += "Stop playback" to (prefix + "stop")
-            if (playlists.isQueued(block)) buttons += "Crossfade settings" to (prefix + "crossfade")
 
             if (controls.seekable) {
                 buttons += "Seek" to (prefix + "seek")
             }
-            buttons += "Volume -10%" to (prefix + "quieter")
-            buttons += "Volume +10%" to (prefix + "louder")
         }
         if (controls == null) {
             if (record.hasIdentifier()) buttons += "Play disc" to (prefix + "play")
             buttons += "Refresh" to (prefix + "refresh")
             if (playlists.isQueued(block)) {
                 buttons += "Stop playback" to (prefix + "stop")
-                buttons += "Crossfade settings" to (prefix + "crossfade")
             }
         }
         if (record.type != Material.AIR) buttons += "Eject disc" to (prefix + "eject")
@@ -172,18 +161,12 @@ class ControlCommand(
         }
 
         bassLamps?.let {
-            bodyLampButtons(buttons, prefix, it.count(block))
+            buttons += "Bass lamps" to (prefix + "lamp_menu")
         }
         val canManageScreens = player.hasPermission("pv.addon.discs.screen") ||
             player.hasPermission("vc.addon.discs.screen") || player.isOp
         if (screenManager != null && canManageScreens) {
-            val linkedScreen = screenManager?.getScreenForJukebox(block)
-            if (linkedScreen != null) {
-                buttons += "Unlink Screen" to (prefix + "screen_unlink")
-                buttons += "Clear Screen" to (prefix + "screen_clear")
-            } else {
-                buttons += "Link Screen" to (prefix + "screen_link")
-            }
+            buttons += "Screen" to (prefix + "screen_menu")
         }
 
         if (progressDisplay != null) {
@@ -191,44 +174,100 @@ class ControlCommand(
         }
 
         val body = mutableListOf<Component>()
-        screenManager?.getScreenForJukebox(block)?.let { s ->
-            body += Component.text("Linked screen: ${s.name} (${s.columns}x${s.rows} frames)", NamedTextColor.AQUA)
-        }
         if (controls != null) {
+            body += Component.text(controls.title, NamedTextColor.GOLD)
+            body += PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream)
             body += Component.text("${if (controls.paused) "Paused" else "Playing"} · Volume ${controls.volume}%", NamedTextColor.GRAY)
         } else if (record.type != Material.AIR) {
             body += Component.text("Playback stopped. You can play or eject the disc.")
         } else {
             body += Component.text("Jukebox is idle.")
         }
-        playlists.queueView(block)?.let { queue ->
-            body += PaperPlaybackDialog.icon("item/book", Component.text("Queue · ${queue.currentIndex + 1} of ${queue.items.size}", NamedTextColor.GOLD))
-            queue.items.forEachIndexed { index, item ->
-                val marker = when {
-                    index < queue.currentIndex -> "✓"
-                    index == queue.currentIndex -> "▶"
-                    else -> "·"
-                }
-                val color = when {
-                    index < queue.currentIndex -> NamedTextColor.DARK_GRAY
-                    index == queue.currentIndex -> NamedTextColor.GREEN
-                    else -> NamedTextColor.GRAY
-                }
-                val command = prefix + "queue$index"
-                buttons += "$marker ${index + 1}. ${item.title}" to command
-                queueLabels[command] = PaperPlaybackDialog.icon(item.sprite, Component.text("$marker ${index + 1}. ${item.title.take(36)}", color))
-            }
-        }
-        if (crossfade) {
-            val queue = playlists.queueView(block) ?: return show(player, block)
+        if (queueMenu) {
             buttons.clear()
             queueLabels.clear()
             body.clear()
-            body += Component.text("Crossfade: ${if (queue.crossfadeSeconds == 0) "Off" else "${queue.crossfadeSeconds}s"}", NamedTextColor.GOLD)
-            body += Component.text("Changes apply to upcoming transitions. An active fade finishes at its original duration.", NamedTextColor.GRAY)
-            buttons += "Crossfade -1s" to (prefix + "fadeless")
-            buttons += "Crossfade +1s" to (prefix + "fademore")
-            buttons += (if (queue.crossfadeSeconds > 0) "Disable crossfade" else "Enable crossfade") to (prefix + "fadetoggle")
+            buttons += "Loop: ${if (modes.first) "On" else "Off"}" to (prefix + "loop")
+            buttons += "Shuffle: ${if (modes.second) "On" else "Off"}" to (prefix + "shuffle")
+            val queue = playlists.queueView(block)
+            if (queue == null) body += Component.text("No tracks queued.", NamedTextColor.GRAY)
+            else {
+                body += PaperPlaybackDialog.icon("item/book", Component.text("Queue · ${queue.currentIndex + 1} of ${queue.items.size}", NamedTextColor.GOLD))
+                queue.items.forEachIndexed { index, item ->
+                    val marker = when {
+                        index < queue.currentIndex -> "✓"
+                        index == queue.currentIndex -> "▶"
+                        else -> "·"
+                    }
+                    val color = when {
+                        index < queue.currentIndex -> NamedTextColor.DARK_GRAY
+                        index == queue.currentIndex -> NamedTextColor.GREEN
+                        else -> NamedTextColor.GRAY
+                    }
+                    val command = prefix + "queue$index"
+                    buttons += "$marker ${index + 1}. ${item.title}" to command
+                    queueLabels[command] = PaperPlaybackDialog.icon(item.sprite, Component.text("$marker ${index + 1}. ${item.title.take(36)}", color))
+                }
+            }
+            buttons += "Refresh queue" to (prefix + "queue_menu")
+            buttons += "Back to playback" to (prefix + "refresh")
+        }
+        if (volumeMenu) {
+            buttons.clear()
+            queueLabels.clear()
+            body.clear()
+            val volume = jukeboxes.volumeSetting(block)
+            body += Component.text("Volume: $volume%", NamedTextColor.GOLD)
+            body += Component.text(if (controls == null) "Applies when playback starts." else "Changes apply immediately.", NamedTextColor.GRAY)
+            for (step in volumeSteps) {
+                buttons += "Volume −$step%" to (prefix + "volume_minus_$step")
+                buttons += "Volume +$step%" to (prefix + "volume_plus_$step")
+            }
+            for (preset in volumePresets) {
+                val label = when (preset) { 0 -> "Mute"; 100 -> "Maximum · 100%"; else -> "Set $preset%" }
+                buttons += label to (prefix + "volume_set_$preset")
+            }
+            buttons += "Back to playback" to (prefix + "refresh")
+        }
+        if (crossfade) {
+            val queue = playlists.queueView(block)
+            buttons.clear()
+            queueLabels.clear()
+            body.clear()
+            if (queue != null) {
+                body += Component.text("Crossfade: ${if (queue.crossfadeSeconds == 0) "Off" else "${queue.crossfadeSeconds}s"}", NamedTextColor.GOLD)
+                body += Component.text("Changes apply to upcoming transitions. An active fade finishes at its original duration.", NamedTextColor.GRAY)
+                buttons += "Crossfade -1s" to (prefix + "fadeless")
+                buttons += "Crossfade +1s" to (prefix + "fademore")
+                buttons += (if (queue.crossfadeSeconds > 0) "Disable crossfade" else "Enable crossfade") to (prefix + "fadetoggle")
+            } else {
+                body += Component.text("Start a queue to adjust crossfade settings.", NamedTextColor.GRAY)
+            }
+            buttons += "Back to playback" to (prefix + "refresh")
+        }
+        if (lampMenu) {
+            val lamps = bassLamps ?: return show(player, block)
+            buttons.clear()
+            queueLabels.clear()
+            body.clear()
+            body += Component.text("Bass lamps: ${lamps.count(block)} linked", NamedTextColor.GOLD)
+            bodyLampButtons(buttons, prefix, lamps.count(block))
+            buttons += "Back to playback" to (prefix + "refresh")
+        }
+        if (screenMenu) {
+            if (screenManager == null || !canManageScreens) return show(player, block)
+            buttons.clear()
+            queueLabels.clear()
+            body.clear()
+            val screen = screenManager?.getScreenForJukebox(block)
+            if (screen != null) {
+                body += Component.text("Linked screen: ${screen.name} (${screen.columns}x${screen.rows} frames)", NamedTextColor.AQUA)
+                buttons += "Unlink Screen" to (prefix + "screen_unlink")
+                buttons += "Clear Screen" to (prefix + "screen_clear")
+            } else {
+                body += Component.text("No screen linked.", NamedTextColor.GRAY)
+                buttons += "Link Screen" to (prefix + "screen_link")
+            }
             buttons += "Back to playback" to (prefix + "refresh")
         }
         if (hologram) {
@@ -243,30 +282,45 @@ class ControlCommand(
             buttons += "Reset Position" to (prefix + "holo_reset")
             buttons += "Back to controls" to (prefix + "refresh")
         }
+        if (speakers) {
+            buttons.clear()
+            queueLabels.clear()
+            body.clear()
+            body += Component.text("Stereo changes apply on the next song or after restarting playback.", NamedTextColor.GRAY)
+            buttons += "Stereo: $stereoLabel" to (prefix + "stereo")
+            buttons += "Link left note block" to (prefix + "note_left")
+            buttons += "Link right note block" to (prefix + "note_right")
+            if (jukeboxes.channelNoteLink(block, true) != null) buttons += "Unlink left note block" to (prefix + "note_left_unlink")
+            if (jukeboxes.channelNoteLink(block, false) != null) buttons += "Unlink right note block" to (prefix + "note_right_unlink")
+            buttons += "Back to playback" to (prefix + "refresh")
+        }
         if (seek) {
             if (controls?.seekable != true) return show(player, block)
             buttons.clear()
             queueLabels.clear()
             body.clear()
             body += Component.text(controls.title, NamedTextColor.GOLD)
+            body += PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream)
             body += Component.text("Seek audio and linked video together.", NamedTextColor.GRAY)
-            for ((seconds, label) in listOf(15 to "15s", 30 to "30s", 60 to "1m", 300 to "5m")) {
+            for (seconds in PlaybackDialogView.seekSteps(controls.duration)) {
+                val label = if (seconds < 60) "${seconds}s" else "${seconds / 60}m"
                 buttons += "−$label" to (prefix + "seek_minus_$seconds")
                 buttons += "+$label" to (prefix + "seek_plus_$seconds")
             }
+            buttons += "Refresh progress" to (prefix + "seek")
             buttons += "Back to playback" to (prefix + "refresh")
         }
-        if (visualization) {
-            val manager = visualizer ?: return show(player, block)
+        if (visualization || visualizerSelection) {
+            if (visualizer == null) return show(player, block)
             buttons.clear()
             queueLabels.clear()
             body.clear()
             body += Component.text("Visualizers: ${visualizers.size}/8", NamedTextColor.GOLD)
-            if (visualizers.size < 8) {
+            if (visualizerSelection && visualizers.size < 8) {
                 buttons += "Add frequency bars" to (prefix + "viz_add_bars")
                 buttons += "Add speaker driver" to (prefix + "viz_add_speaker")
             }
-            selectedVisualizer?.let { selected ->
+            if (!visualizerSelection) selectedVisualizer?.let { selected ->
                 val layout = selected.layout
                 body += Component.text("Editing #${selected.id}: ${selected.kind.label} · ${if (selected.enabled) "On" else "Off"} · Facing ${selected.facing}", NamedTextColor.GOLD)
                 body += Component.text("Offset: ${layout.x}, ${layout.y}, ${layout.z} · Width: ${layout.width}× · Height: ${layout.height}×", NamedTextColor.GRAY)
@@ -276,14 +330,15 @@ class ControlCommand(
                 buttons += "Reset position, size and facing" to (prefix + "viz_reset")
                 buttons += "Remove #${selected.id}" to (prefix + "viz_remove")
             }
-            for (instance in visualizers) {
+            if (!visualizerSelection) buttons += "Select visualizer" to (prefix + "viz_menu")
+            if (visualizerSelection) for (instance in visualizers) {
                 buttons += "${if (instance.id == selectedVisualizer?.id) "▶ " else ""}Select #${instance.id} · ${instance.kind.label}" to (prefix + "viz_select_${instance.id}")
             }
             buttons += "Back to playback" to (prefix + "refresh")
         }
-        val dialogTitle = if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Move Hologram" else if (crossfade) "Crossfade settings" else "Jukebox controls"
+        val dialogTitle = if (lampMenu) "Bass lamps" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Move Hologram" else if (crossfade) "Audio settings" else "Jukebox controls"
         try {
-            PaperPlaybackDialog.show(player, body, buttons, queueLabels, dialogTitle, 2)
+            PaperPlaybackDialog.show(player, listOf(Component.join(net.kyori.adventure.text.JoinConfiguration.newlines(), body)), buttons, queueLabels, dialogTitle, 2)
         } catch (_: ClassNotFoundException) {
             // Preserve older supported Minecraft releases which predate native dialogs.
             body.forEach { player.sendMessage(it) }
@@ -322,7 +377,35 @@ class ControlCommand(
             show(player, session.block, visualization = true, selectedVisualizerId = id)
             return
         }
+        val seekSeconds = arguments[2].takeIf { it.startsWith("seek_minus_") || it.startsWith("seek_plus_") }
+            ?.substringAfterLast('_')?.toIntOrNull()
+        if (seekSeconds != null) {
+            if (controls == null || seekSeconds !in PlaybackDialogView.seekSteps(controls.duration)) return
+            val delta = seekSeconds * 1000L * if (arguments[2].startsWith("seek_minus_")) -1 else 1
+            controls.seekTo(controls.position + delta)
+            show(player, session.block, seek = true)
+            return
+        }
+        val volumeAction = arguments[2]
+        if (volumeAction.startsWith("volume_minus_") || volumeAction.startsWith("volume_plus_") || volumeAction.startsWith("volume_set_")) {
+            val amount = volumeAction.substringAfterLast('_').toIntOrNull() ?: return
+            val current = jukeboxes.volumeSetting(session.block)
+            val target = when {
+                volumeAction.startsWith("volume_set_") && amount in volumePresets -> amount
+                volumeAction.startsWith("volume_minus_") && amount in volumeSteps -> current - amount
+                volumeAction.startsWith("volume_plus_") && amount in volumeSteps -> current + amount
+                else -> return
+            }.coerceIn(0, 100)
+            if (controls != null) controls.changeVolume(target - current)
+            else jukeboxes.restoreVolume(session.block, target)
+            show(player, session.block, volumeMenu = true)
+            return
+        }
         when (arguments[2]) {
+            "lamp_menu" -> { show(player, session.block, lampMenu = true); return }
+            "screen_menu" -> { show(player, session.block, screenMenu = true); return }
+            "queue_menu" -> { show(player, session.block, queueMenu = true); return }
+            "volume_menu" -> { show(player, session.block, volumeMenu = true); return }
             "playchest" -> {
                 val chest = session.block.getRelative(org.bukkit.block.BlockFace.UP).state as? org.bukkit.block.Chest ?: return
                 playlists.startChestQueue(session.block, chest, player)
@@ -336,7 +419,8 @@ class ControlCommand(
             }
             "holo_edit" -> { worldEditor.editHologram(player, session.block); return }
             "viz_edit" -> { worldEditor.editVisualizer(player, session.block, session.visualizerId); return }
-            "viz_menu" -> { show(player, session.block, visualization = true); return }
+            "viz_menu" -> { show(player, session.block, visualizerSelection = true); return }
+            "speakers" -> { show(player, session.block, speakers = true); return }
             "viz_add_bars", "viz_add_speaker" -> {
                 val manager = visualizer ?: return
                 val kind = if (arguments[2] == "viz_add_bars") VisualizerKind.BARS else VisualizerKind.SPEAKER
@@ -357,14 +441,6 @@ class ControlCommand(
                 return
             }
             "seek" -> { show(player, session.block, seek = true); return }
-            "seek_minus_15", "seek_minus_30", "seek_minus_60", "seek_minus_300",
-            "seek_plus_15", "seek_plus_30", "seek_plus_60", "seek_plus_300" -> {
-                val seconds = arguments[2].substringAfterLast('_').toLong()
-                val delta = seconds * 1000 * if (arguments[2].startsWith("seek_minus_")) -1 else 1
-                controls?.seekTo(controls.position + delta)
-                show(player, session.block, seek = true)
-                return
-            }
             "loop" -> playlists.toggleLoop(session.block)
             "shuffle" -> playlists.toggleShuffle(session.block)
             "note_left", "note_right" -> {
@@ -395,7 +471,7 @@ class ControlCommand(
                 if (arguments[2] == "eject") session.block.asJukebox()?.eject()
                 return
             }
-            "crossfade" -> { show(player, session.block, crossfade = true); return }
+            "audio_menu", "crossfade" -> { show(player, session.block, crossfade = true); return }
             "fadeless" -> playlists.changeCrossfade(session.block, -1)
             "fademore" -> playlists.changeCrossfade(session.block, 1)
             "fadetoggle" -> playlists.toggleCrossfade(session.block)
@@ -425,7 +501,7 @@ class ControlCommand(
                     sm.unlinkJukebox(screen.name)
                     player.sendMessage(Component.text("Screen '${screen.name}' unlinked and deleted.", NamedTextColor.YELLOW))
                 }
-                show(player, session.block)
+                show(player, session.block, screenMenu = true)
                 return
             }
             "screen_clear" -> {
@@ -435,7 +511,7 @@ class ControlCommand(
                     sm.clearScreen(screen)
                     player.sendMessage(Component.text("Screen '${screen.name}' cleared.", NamedTextColor.YELLOW))
                 }
-                show(player, session.block)
+                show(player, session.block, screenMenu = true)
                 return
             }
             "refresh" -> {}
@@ -445,7 +521,8 @@ class ControlCommand(
                 return
             }
         }
-        show(player, session.block, crossfade = arguments[2] in setOf("fadeless", "fademore", "fadetoggle"))
+        show(player, session.block, crossfade = arguments[2] in setOf("fadeless", "fademore", "fadetoggle"), speakers = arguments[2] == "stereo" || arguments[2].startsWith("note_"),
+            queueMenu = arguments[2] in setOf("loop", "shuffle"), volumeMenu = arguments[2] in setOf("quieter", "louder"))
     }
 
     @EventHandler
@@ -474,7 +551,7 @@ private object PaperPlaybackDialog {
     fun icon(sprite: String, label: Component): Component {
         return try {
             val contents = static("net.kyori.adventure.text.object.ObjectContents", "sprite",
-                Key.key(PlaybackDialogView.spriteAtlas(Bukkit.getMinecraftVersion())), Key.key("minecraft:$sprite"))
+                Key.key(if (sprite.startsWith("block/")) "minecraft:blocks" else PlaybackDialogView.spriteAtlas(Bukkit.getMinecraftVersion())), Key.key("minecraft:$sprite"))
             (static("net.kyori.adventure.text.Component", "object", contents) as Component)
                 .append(Component.text(" ")).append(label)
         } catch (_: ClassNotFoundException) {
@@ -485,25 +562,38 @@ private object PaperPlaybackDialog {
     }
 
     private fun buttonSprite(command: String?): String = when (command?.substringAfterLast(' ')) {
+        "playchest" -> "item/chest_minecart"
+        "loop" -> "item/clock_00"
+        "shuffle" -> "item/ender_eye"
+        "speakers", "stereo" -> "block/jukebox_side"
+        "note_link", "note_left", "note_right" -> "block/note_block"
+        "note_unlink", "note_left_unlink", "note_right_unlink" -> "item/shears"
+        "holo_edit", "holo_menu" -> "item/armor_stand"
+        "holo_reset" -> "item/compass_00"
+        null -> "item/oak_door"
         "play", "pause" -> "item/music_disc_cat"
         "seek", "refresh" -> "item/clock_00"
         "back" -> "item/ender_pearl"
         "forward", "skip" -> "item/spectral_arrow"
+        "queue_menu" -> "item/book"
+        "volume_menu" -> "item/goat_horn"
         "quieter" -> "item/echo_shard"
         "louder" -> "item/goat_horn"
         "viz_menu", "viz_toggle", "viz_wider", "viz_narrower", "viz_taller", "viz_shorter", "viz_reset" -> "item/amethyst_shard"
-        "crossfade", "fadeless", "fademore", "fadetoggle" -> "item/repeater"
+        "audio_menu", "crossfade", "fadeless", "fademore", "fadetoggle" -> "item/repeater"
         "stop" -> "item/redstone"
         "eject" -> "item/iron_pickaxe"
-        "lamp_link", "lamp_unlink" -> "item/glowstone_dust"
-        "screen_link" -> "item/item_frame"
+        "lamp_menu", "lamp_link", "lamp_unlink" -> "item/glowstone_dust"
+        "screen_menu", "screen_link" -> "item/item_frame"
         "screen_unlink" -> "item/shears"
         "screen_clear" -> "item/water_bucket"
         else -> when {
+            command?.substringAfterLast(' ')?.startsWith("volume_minus_") == true -> "item/echo_shard"
+            command?.substringAfterLast(' ')?.startsWith("volume_") == true -> "item/goat_horn"
             command?.substringAfterLast(' ')?.startsWith("viz_") == true -> "item/amethyst_shard"
             command?.substringAfterLast(' ')?.startsWith("seek_minus_") == true -> "item/ender_pearl"
             command?.substringAfterLast(' ')?.startsWith("seek_plus_") == true -> "item/spectral_arrow"
-            else -> "item/barrier"
+            else -> "item/paper"
         }
     }
 

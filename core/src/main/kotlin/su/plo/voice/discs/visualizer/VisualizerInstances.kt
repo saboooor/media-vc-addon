@@ -47,11 +47,15 @@ class SpeakerEnvelope {
 
 /** Hysteresis avoids rebuilding world lighting for tiny fluctuations around the trigger. */
 class BassLampEnvelope {
-    private val envelope = SpeakerEnvelope()
+    private var previous = 0f
+    private var pulse = 0f
     var lit = false
         private set
     fun update(bass: Float): Boolean {
-        val pulse = envelope.update(bass)
+        val value = bass.coerceIn(0f, 1f)
+        // Lamps need a crisp flash; the speaker driver's slower release blurs adjacent beats.
+        pulse = max(max((value - previous).coerceAtLeast(0f) * 3f, pulse * 0.2f), value * 0.25f).coerceIn(0f, 1f)
+        previous = value
         lit = if (lit) pulse > 0.2f else pulse > 0.4f
         return lit
     }

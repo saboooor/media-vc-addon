@@ -54,7 +54,9 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
         session.baseUrl + "Audio/${mediaId(itemId)}/stream" +
             if (type in listOf("Audio", "AudioBook")) "?static=true"
             else "?container=mp3&audioCodec=mp3&audioBitRate=192000&audioChannels=2&static=false" +
-                "&startTimeTicks=${startPositionMs.coerceIn(0, Long.MAX_VALUE / 10_000) * 10_000}"
+                "&startTimeTicks=${startPositionMs.coerceIn(0, Long.MAX_VALUE / 10_000) * 10_000}" +
+                // Jellyfin keys progressive transcode files by session, not startTimeTicks.
+                "&playSessionId=${java.util.UUID.randomUUID()}"
 
     fun videoStreamUrl(session: Session, itemId: String): String =
         session.baseUrl + "Videos/${mediaId(itemId)}/stream?static=true"

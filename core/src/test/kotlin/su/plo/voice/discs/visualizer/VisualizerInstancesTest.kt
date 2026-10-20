@@ -65,7 +65,9 @@ class VisualizerInstancesTest {
         assertFalse(lamp.update(0f))
         assertTrue(lamp.update(1f))
         assertTrue(lamp.update(1f))
-        repeat(20) { lamp.update(0f) }
+        assertFalse(lamp.update(0f), "A lamp should turn off on the first silent update")
+        assertTrue(lamp.update(1f), "The next beat should trigger a fresh flash immediately")
+        assertFalse(lamp.update(0f))
         assertFalse(lamp.lit)
     }
 

@@ -13,6 +13,11 @@ internal object PlaybackDialogView {
         return if (major > 1 || minor > 21 || minor == 21 && patch >= 11) "minecraft:items" else "minecraft:blocks"
     }
 
+    fun seekSteps(durationMs: Long): List<Int> =
+        listOf(5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600)
+            .filter { it * 1000L < durationMs && (it <= 30 || it * 4000L <= durationMs) }
+            .ifEmpty { listOf(1) }
+
     fun filledSegments(position: Long, duration: Long, width: Int = 24): Int =
         if (duration <= 0) 0 else (position.toDouble() / duration * width).toInt().coerceIn(0, width)
 

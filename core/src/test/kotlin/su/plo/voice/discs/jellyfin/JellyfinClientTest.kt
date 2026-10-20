@@ -43,6 +43,12 @@ class JellyfinClientTest {
             assertFalse(requests[0].second.contains("Token="))
             assertTrue(requests[1].first.contains("startIndex=45"))
             assertTrue(requests[1].first.contains("includeItemTypes=Audio,AudioBook,Movie,Episode,MusicVideo,Video"))
+            val firstSeek = client.streamUrl(session, page.items.single().id, "Movie", 50_000)
+            val secondSeek = client.streamUrl(session, page.items.single().id, "Movie", 50_000)
+            val firstSession = firstSeek.substringAfter("playSessionId=")
+            val secondSession = secondSeek.substringAfter("playSessionId=")
+            assertDoesNotThrow { java.util.UUID.fromString(firstSession) }
+            assertNotEquals(firstSession, secondSession)
             val videoUrl = client.streamUrl(session, page.items.single().id, "Movie")
             assertEquals("${session.baseUrl}Videos/${page.items.single().id}/stream?static=true",
                 client.videoStreamUrl(session, page.items.single().id))

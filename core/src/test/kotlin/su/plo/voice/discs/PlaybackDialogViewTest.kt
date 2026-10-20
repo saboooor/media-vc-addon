@@ -5,6 +5,15 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 class PlaybackDialogViewTest {
+    @Test fun `seek steps scale from short clips to long movies`() {
+        assertEquals(listOf(1), PlaybackDialogView.seekSteps(3_000))
+        assertEquals(listOf(5, 10, 15), PlaybackDialogView.seekSteps(20_000))
+        assertEquals(listOf(5, 10, 15, 30, 60), PlaybackDialogView.seekSteps(240_000))
+        assertTrue(PlaybackDialogView.seekSteps(7_200_000).containsAll(listOf(300, 600, 900, 1800)))
+        assertFalse(PlaybackDialogView.seekSteps(7_200_000).contains(3600))
+        assertTrue(PlaybackDialogView.seekSteps(14_400_000).contains(3600))
+    }
+
     @Test fun `icons switch atlases at Minecraft 1_21_11`() {
         assertEquals("minecraft:blocks", PlaybackDialogView.spriteAtlas("1.21.10"))
         assertEquals("minecraft:items", PlaybackDialogView.spriteAtlas("1.21.11"))

@@ -31,12 +31,12 @@ class SavedJukeboxSettingsTest {
         }
     }
 
-    @Test fun `old settings default to automatic note block stereo without looping`() {
+    @Test fun `old settings default to jukebox playback without stereo or looping`() {
         val restored = SavedJukeboxSettings.decode("{}")!!
         assertNull(restored.noteBlock)
         assertFalse(restored.loop)
         assertFalse(restored.shuffle)
-        assertEquals(1, restored.stereo)
+        assertEquals(0, restored.stereo)
         assertThrows(IllegalArgumentException::class.java) { SavedJukeboxSettings(stereo = 4).encode() }
     }
 

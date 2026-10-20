@@ -124,6 +124,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
             var nextMaintenance = 0L
             var validSources: Map<Position, Boolean> = emptyMap()
             while (isActive) {
+                val updateStarted = System.nanoTime()
                 val snapshot = linkedIndex()
                 val maintenance = System.nanoTime() >= nextMaintenance
                 if (maintenance) {
@@ -141,13 +142,6 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                     nextMaintenance = System.nanoTime() + 3_000_000_000L
                 }
                 val sourceControls = jukeboxes.controlsByBlock.entries.associate { Position.of(it.key) to it.value }
-                val bass = sourceControls.mapValues { (_, controls) ->
-                    if (controls.paused) 0f else controls.spectrum.levels.let { levels ->
-                        var peak = 0f
-                        for (i in 0 until minOf(5, levels.size)) peak = maxOf(peak, levels[i])
-                        peak
-                    }
-                }
                 // One coarse audience query per playing jukebox; lamps test immutable positions.
                 val audiences = snapshot.sources.keys.filter { sourceControls.containsKey(it) }.associateWith {
                     PlayerAudience.positions(it.world, it.x.toDouble(), it.y.toDouble(), it.z.toDouble(), 64.0)
@@ -174,7 +168,12 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                             }
                             if (listening) active += controls!!
                             val lit = if (listening && controls?.paused == false)
-                                envelopes.computeIfAbsent(link.lamp) { BassLampEnvelope() }.update(bass[link.jukebox] ?: 0f)
+                                envelopes.computeIfAbsent(link.lamp) { BassLampEnvelope() }.update(
+                                    controls.spectrum.levels.let { levels ->
+                                        var peak = 0f
+                                        for (i in 0 until minOf(5, levels.size)) peak = maxOf(peak, levels[i])
+                                        peak
+                                    })
                             else { envelopes.remove(link.lamp); false }
                             setLit(lamp, lit)
                         }
@@ -184,7 +183,8 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                 active.filterNot { it in consumers }.forEach { it.setVisualizing(true, "bass_lamps") }
                 consumers.filterNot { it in active }.forEach { it.setVisualizing(false, "bass_lamps") }
                 consumers.clear(); consumers.addAll(active)
-                delay(100)
+                val elapsedMs = (System.nanoTime() - updateStarted) / 1_000_000L
+                delay((50L - elapsedMs).coerceAtLeast(1L))
             }
         }
     }
