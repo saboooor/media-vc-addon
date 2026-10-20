@@ -345,6 +345,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     if (!playing.isActive) {
                         playing.join()
                         if (playing.isCancelled && !skipping.remove(block)) break
+                        // Keep private-media references during outages and stop looping a failed connection.
+                        if (controls.failure != null && activeDisc.identifier()?.startsWith("jellyfin:") == true) break
                         index = jumpTargets.remove(block) ?: order.next(liveDiscs.size, index,
                             playbackModes(block).first, playbackModes(block).second, removedNextIndex) ?: break
                         controls = PlaybackControls(initialVolume = controls.volume)

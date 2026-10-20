@@ -1,5 +1,7 @@
 package su.plo.voice.discs
 
+import su.plo.voice.discs.jellyfin.JellyfinLibrary
+import su.plo.voice.discs.jellyfin.JellyfinAudioSourceManager
 import de.maxhenkel.voicechat.api.audiochannel.AudioChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -66,6 +68,8 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     private val voiceServer: PlasmoVoiceServer? by getterOrNull()
     private val debugLogger: DebugLogger by getter()
     private val config: AddonConfig by getter()
+
+    private val jellyfinLibrary: JellyfinLibrary by inject()
 
     private val lavaPlayerManager: AudioPlayerManager = DefaultAudioPlayerManager()
     private val encryption get() = voiceServer?.defaultEncryption
@@ -420,6 +424,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         lavaPlayerManager.registerSourceManagerCatching("twitch") { TwitchStreamAudioSourceManager() }
         lavaPlayerManager.registerSourceManagerCatching("beam.pro") { BeamAudioSourceManager() }
         lavaPlayerManager.registerSourceManagerCatching("getyarn.io") { GetyarnAudioSourceManager() }
+        lavaPlayerManager.registerSourceManagerCatching("jellyfin") { JellyfinAudioSourceManager(jellyfinLibrary) }
         lavaPlayerManager.registerSourceManagerCatching("http") { CustomHttpAudioSourceManager() }
 
         if (config.localSource.enabled) {
