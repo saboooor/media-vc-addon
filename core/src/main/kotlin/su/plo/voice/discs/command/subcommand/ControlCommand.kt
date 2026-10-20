@@ -48,6 +48,8 @@ class ControlCommand(
     private val progressDisplay: JukeboxProgressDisplay? by getterOrNull<JukeboxProgressDisplay>()
     private data class Session(val token: UUID, val block: Block, val controls: PlaybackControls?,
                                val record: ItemStack, val visualizerId: Int? = null, val expires: Long = System.currentTimeMillis() + 120_000)
+    private data class NoteRequest(val block: Block, val expires: Long = System.currentTimeMillis() + 120_000)
+    private val noteRequests = ConcurrentHashMap<UUID, NoteRequest>()
     private val sessions = ConcurrentHashMap<UUID, Session>()
     override val name = "control"
     override val permissions = listOf("control" to PermissionDefault.TRUE)
@@ -60,6 +62,21 @@ class ControlCommand(
     fun onClick(event: PlayerInteractEvent) {
         if (event.action != Action.RIGHT_CLICK_BLOCK || event.useInteractedBlock() == Event.Result.DENY) return
         val block = event.clickedBlock ?: return
+        if (block.type == Material.NOTE_BLOCK && event.hand == EquipmentSlot.HAND) {
+            val request = noteRequests[event.player.uniqueId] ?: return
+            if (System.currentTimeMillis() > request.expires || !checkCanExecute(event.player)) {
+                noteRequests.remove(event.player.uniqueId); return
+            }
+            if (event.player.gameMode == GameMode.SPECTATOR || request.block.type != Material.JUKEBOX ||
+                block.world != request.block.world || block.location.distanceSquared(request.block.location) > 1024) {
+                event.player.sendMessage(Component.text("Choose a note block within 32 blocks of the jukebox.")); return
+            }
+            event.isCancelled = true
+            noteRequests.remove(event.player.uniqueId)
+            jukeboxes.linkNote(request.block, JukeboxBassLamps.Position.of(block))
+            event.player.sendMessage(Component.text("Note block linked. Stereo changes apply on the next song or after restarting playback."))
+            return
+        }
         val jukebox = block.asJukebox() ?: return
         val emptyHands = event.player.inventory.itemInMainHand.type == Material.AIR &&
             event.player.inventory.itemInOffHand.type == Material.AIR
@@ -112,6 +129,8 @@ class ControlCommand(
             else -> "Off"
         }
         buttons += "Stereo: $stereoLabel" to (prefix + "stereo")
+        buttons += "Link note block" to (prefix + "note_link")
+        if (jukeboxes.noteLink(block) != null) buttons += "Unlink note block" to (prefix + "note_unlink")
         if (controls != null) {
             buttons += (if (controls.paused) "Resume" else "Pause") to (prefix + "pause")
             buttons += "Refresh" to (prefix + "refresh")
@@ -353,6 +372,15 @@ class ControlCommand(
             }
             "loop" -> playlists.toggleLoop(session.block)
             "shuffle" -> playlists.toggleShuffle(session.block)
+            "note_link" -> {
+                noteRequests[player.uniqueId] = NoteRequest(session.block)
+                player.sendMessage(Component.text("Right-click a note block within 32 blocks of this jukebox (2 minutes)."))
+                return
+            }
+            "note_unlink" -> {
+                jukeboxes.linkNote(session.block, null)
+                player.sendMessage(Component.text("Note block unlinked. Adjacent detection resumes on the next song."))
+            }
             "stereo" -> jukeboxes.cycleStereo(session.block)
             "quieter" -> controls?.changeVolume(-10)
             "louder" -> controls?.changeVolume(10)
@@ -446,7 +474,7 @@ class ControlCommand(
     }
 
     @EventHandler
-    fun onQuit(event: PlayerQuitEvent) { sessions.remove(event.player.uniqueId) }
+    fun onQuit(event: PlayerQuitEvent) { sessions.remove(event.player.uniqueId); noteRequests.remove(event.player.uniqueId) }
 }
 
 /** Paper's dialog factory, as used by Lumistones, loaded only on dialog-capable servers. */

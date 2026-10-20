@@ -41,7 +41,7 @@ class JukeboxSettingsListener(
         return SavedJukeboxSettings(volume = playback.volumeSetting(block),
             loop = playlists.playbackModes(block).first, shuffle = playlists.playbackModes(block).second, stereo = playback.stereoMode(block), crossfade = fade.first, lastCrossfade = fade.second,
             hologram = holograms.getOffset(block).copy(), visualizers = visualizers.instances(block),
-            lamps = lamps.linkedPositions(block), screenName = screens.getScreenForJukebox(block)?.name)
+            lamps = lamps.linkedPositions(block), screenName = screens.getScreenForJukebox(block)?.name, noteBlock = playback.noteLink(block))
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
@@ -102,6 +102,12 @@ class JukeboxSettingsListener(
     private fun apply(block: Block, settings: SavedJukeboxSettings) {
         playback.restoreVolume(block, settings.volume)
         playback.restoreStereo(block, settings.stereo)
+        playback.linkNote(block, settings.noteBlock?.takeIf {
+            it.world == block.world.uid.toString() &&
+                (it.x.toDouble() - block.x).let { x -> (it.y.toDouble() - block.y).let { y ->
+                    (it.z.toDouble() - block.z).let { z -> x*x + y*y + z*z <= 1024 }
+                } }
+        })
         playlists.restoreModes(block, settings.loop, settings.shuffle)
         playlists.restoreCrossfade(block, settings.crossfade, settings.lastCrossfade)
         visualizers.restore(block, settings.visualizers)

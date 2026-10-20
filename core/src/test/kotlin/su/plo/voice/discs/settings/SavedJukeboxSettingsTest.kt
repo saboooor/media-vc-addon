@@ -13,7 +13,8 @@ class SavedJukeboxSettingsTest {
             visualizers = listOf(VisualizerInstance(7, VisualizerKind.SPEAKER, true,
                 VisualizerLayout(1f, 2f, 3f, 1.5f, 0.75f), VisualizerFacing.WEST)),
             lamps = listOf(JukeboxBassLamps.Position("00000000-0000-0000-0000-000000000001", 12, 64, 16)),
-            screenName = "screen-1")
+            screenName = "screen-1",
+            noteBlock = JukeboxBassLamps.Position("00000000-0000-0000-0000-000000000001", 20, 64, 16))
         assertEquals(settings, SavedJukeboxSettings.decode(settings.encode()))
     }
 
@@ -32,6 +33,7 @@ class SavedJukeboxSettingsTest {
 
     @Test fun `old settings default to automatic note block stereo without looping`() {
         val restored = SavedJukeboxSettings.decode("{}")!!
+        assertNull(restored.noteBlock)
         assertFalse(restored.loop)
         assertFalse(restored.shuffle)
         assertEquals(1, restored.stereo)

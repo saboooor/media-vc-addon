@@ -18,7 +18,7 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
     class Session(val baseUrl: String, val userId: String, val token: String, val deviceId: String) {
         override fun toString() = "Jellyfin session"
     }
-    data class Media(val id: String, val title: String, val artist: String, val album: String, val durationMs: Long) {
+    data class Media(val id: String, val title: String, val artist: String, val album: String, val durationMs: Long, val type: String = "Audio") {
         val label get() = if (artist.isBlank()) title else "$artist - $title"
     }
     data class Page(val items: List<Media>, val total: Int)
@@ -35,7 +35,7 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
 
     fun browse(session: Session, page: Int, search: String = ""): Page {
         require(page in 0..100_000 && search.length <= 200)
-        val query = "Items?userId=${session.userId}&recursive=true&includeItemTypes=Audio&sortBy=SortName&sortOrder=Ascending" +
+        val query = "Items?userId=${session.userId}&recursive=true&includeItemTypes=Audio,AudioBook,Movie,Episode,MusicVideo,Video&sortBy=SortName&sortOrder=Ascending" +
             "&startIndex=${page * PAGE_SIZE}&limit=$PAGE_SIZE&enableImages=false&searchTerm=${encode(search)}"
         val json = request(session.baseUrl, query, session.deviceId, session.token)
         val items = json.getAsJsonArray("Items")?.take(PAGE_SIZE)?.map { value ->
@@ -43,15 +43,17 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
             Media(mediaId(item.get("Id").asString), (item.get("Name")?.asString ?: "Untitled").take(256),
                 (item.getAsJsonArray("Artists")?.joinToString(", ") { it.asString } ?: "").take(256),
                 item.get("Album")?.takeUnless { it.isJsonNull }?.asString ?: "",
-                (item.get("RunTimeTicks")?.takeUnless { it.isJsonNull }?.asLong ?: 0L) / 10_000)
+                (item.get("RunTimeTicks")?.takeUnless { it.isJsonNull }?.asLong ?: 0L) / 10_000, item.get("Type")?.takeUnless { it.isJsonNull }?.asString ?: "Audio")
         } ?: emptyList()
         return Page(items, json.get("TotalRecordCount")?.asInt ?: items.size)
     }
 
     fun logout(session: Session) { request(session.baseUrl, "Sessions/Logout", session.deviceId, session.token, JsonObject()) }
 
-    fun streamUrl(session: Session, itemId: String): String =
-        session.baseUrl + "Audio/${mediaId(itemId)}/stream?static=true"
+    fun streamUrl(session: Session, itemId: String, type: String = "Audio"): String =
+        session.baseUrl + "Audio/${mediaId(itemId)}/stream" +
+            if (type in listOf("Audio", "AudioBook")) "?static=true"
+            else "?container=mp3&audioCodec=mp3&audioBitRate=192000&audioChannels=2&static=false"
 
     private fun request(base: String, path: String, device: String, token: String? = null, body: JsonObject? = null): JsonObject {
         try {

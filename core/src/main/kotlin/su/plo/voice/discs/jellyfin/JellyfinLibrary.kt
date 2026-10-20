@@ -11,7 +11,7 @@ class JellyfinLibrary(private val file: Path) {
     class Connection(val id: UUID, val owner: UUID, val session: JellyfinClient.Session) {
         override fun toString() = "Jellyfin connection $id"
     }
-    data class Grant(val id: UUID, val connection: UUID, val mediaId: String, val label: String)
+    data class Grant(val id: UUID, val connection: UUID, val mediaId: String, val label: String, val type: String? = "Audio", val durationMs: Long = 0)
     private class State(val connections: List<Connection> = emptyList(), val grants: List<Grant> = emptyList())
     private val connections = mutableMapOf<UUID, Connection>()
     private val grants = mutableMapOf<UUID, Grant>()
@@ -45,7 +45,7 @@ class JellyfinLibrary(private val file: Path) {
     }
     @Synchronized fun grant(connection: Connection, media: JellyfinClient.Media): String {
         check(connections[connection.owner] === connection) { "Jellyfin connection changed. Open the menu again." }
-        val grant = Grant(UUID.randomUUID(), connection.id, media.id, media.label)
+        val grant = Grant(UUID.randomUUID(), connection.id, media.id, media.label, media.type, media.durationMs)
         grants[grant.id] = grant
         try { save() } catch (e: Exception) { grants.remove(grant.id); throw e }
         return "jellyfin:${grant.id}"

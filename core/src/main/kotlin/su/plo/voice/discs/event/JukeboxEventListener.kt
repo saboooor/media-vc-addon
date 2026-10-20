@@ -74,7 +74,12 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     fun stereoMode(block: Block) = stereoModes[block] ?: 1
     fun restoreStereo(block: Block, mode: Int) { stereoModes[block] = mode.coerceIn(0, 2) }
     fun cycleStereo(block: Block) { restoreStereo(block, (stereoMode(block) + 1) % 3) }
-    fun clearVolume(block: Block) { savedVolumes.remove(block); stereoModes.remove(block) }
+    private val noteLinks = ConcurrentHashMap<Block, JukeboxBassLamps.Position>()
+    fun noteLink(block: Block) = noteLinks[block]
+    fun linkNote(block: Block, position: JukeboxBassLamps.Position?) {
+        if (position == null) noteLinks.remove(block) else noteLinks[block] = position
+    }
+    fun clearVolume(block: Block) { savedVolumes.remove(block); stereoModes.remove(block); noteLinks.remove(block) }
     val controlsByBlock: MutableMap<Block, PlaybackControls> = ConcurrentHashMap()
 
     fun stopPlayback(block: Block) { jobByBlock.remove(block)?.cancel(DiscEjectCause()) }
@@ -318,7 +323,10 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
 
             val stereo = suspendSyncAt(block.location, voiceServer, plugin) {
                 val mode = stereoMode(block)
-                val note = if (mode == 0) null else listOf(BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST)
+                val linked = noteLink(block)
+                val note = if (mode == 0) null else if (linked != null)
+                    linked.loadedBlock()?.takeIf { it.type == Material.NOTE_BLOCK && it.world == block.world }
+                else listOf(BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST)
                     .map { block.getRelative(it) }.firstOrNull { it.type == Material.NOTE_BLOCK }
                 note to mode
             }

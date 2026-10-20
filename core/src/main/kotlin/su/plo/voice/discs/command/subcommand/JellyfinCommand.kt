@@ -150,7 +150,7 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
             val connected = library.connect(player.uniqueId, session)
             if (old != null && old.session.token != session.token) runCatching { client.logout(old.session) }
             suspendSyncFor(player, voiceServer, plugin) {
-                if (player.isOnline) { message(player, "Connected. Hold the disc you want to burn, then select a song."); openPage(player, connected, 0, "") }
+                if (player.isOnline) { message(player, "Connected. Hold the disc you want to burn, then select a media item."); openPage(player, connected, 0, "") }
             }
         }
     }
@@ -172,18 +172,18 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
                     menu.view = Bukkit.createInventory(menu, 54, Component.text("Jellyfin · Page ${page + 1}"))
                     result.items.forEachIndexed { index, media ->
                         menu.view.setItem(index, icon(Material.MUSIC_DISC_CAT, media.label,
-                            listOf(media.album, "${media.durationMs / 60_000}:${(media.durationMs / 1000 % 60).toString().padStart(2, '0')}", "Click to burn the disc in your main hand")))
+                            listOf(media.type, media.album, "${media.durationMs / 60_000}:${(media.durationMs / 1000 % 60).toString().padStart(2, '0')}", "Click to burn the disc in your main hand")))
                     }
                     if (page > 0) menu.view.setItem(45, icon(Material.ARROW, "Previous page"))
-                    menu.view.setItem(47, icon(Material.COMPASS, "Search songs"))
-                    menu.view.setItem(49, icon(Material.BOOK, "${result.total} songs", listOf(search.ifEmpty { "All music" })))
+                    menu.view.setItem(47, icon(Material.COMPASS, "Search media"))
+                    menu.view.setItem(49, icon(Material.BOOK, "${result.total} media items", listOf(search.ifEmpty { "All media" })))
                     menu.view.setItem(51, icon(Material.BARRIER, "Disconnect Jellyfin"))
                     if ((page + 1) * JellyfinClient.PAGE_SIZE < result.total) menu.view.setItem(53, icon(Material.ARROW, "Next page"))
                     player.openInventory(menu.view)
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { suspendSyncFor(player, voiceServer, plugin) {
-                if (player.isOnline && requests[player.uniqueId] == request) message(player, (e as? JellyfinException)?.message ?: "Could not load Jellyfin music.", true)
+                if (player.isOnline && requests[player.uniqueId] == request) message(player, (e as? JellyfinException)?.message ?: "Could not load Jellyfin media.", true)
             } } finally { pageLoading.remove(player.uniqueId) }
         }
     }
@@ -205,7 +205,7 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
                 slot in menu.result.items.indices -> burn(player, menu.connection, menu.result.items[slot])
                 slot == 45 && menu.page > 0 -> openPage(player, menu.connection, menu.page - 1, menu.search)
                 slot == 53 && (menu.page + 1) * JellyfinClient.PAGE_SIZE < menu.result.total -> openPage(player, menu.connection, menu.page + 1, menu.search)
-                slot == 47 -> { player.closeInventory(); prompt(player, Prompt(Step.SEARCH), "Enter a song or artist to search, or cancel.") }
+                slot == 47 -> { player.closeInventory(); prompt(player, Prompt(Step.SEARCH), "Enter a title or artist to search, or cancel.") }
                 slot == 51 -> execute(player, arrayOf("jellyfin", "disconnect"))
             }
         } }
@@ -231,11 +231,11 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
             try {
                 val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
                 if (voicePlayer != null && !suspendSyncFor(player, voiceServer, plugin) { PrePlayerBurnEvent(voicePlayer, identifier).callEvent() }) return@run
-                val track = withTimeout(30_000) { audioPlayerManager.getTrack(identifier).await() }
+                val track = withTimeout(90_000) { audioPlayerManager.getTrack(identifier).await() }
                 suspendSyncFor(player, voiceServer, plugin) {
                     if (!player.isOnline || !checkCanExecute(player) || library.connection(player.uniqueId) !== connection ||
                         player.inventory.heldItemSlot != slot || player.inventory.itemInMainHand != original || !burnable(original)) {
-                        message(player, "Your held disc or Jellyfin connection changed. Select the song again.", true); return@suspendSyncFor
+                        message(player, "Your held disc or Jellyfin connection changed. Select the media item again.", true); return@suspendSyncFor
                     }
                     val item = original.clone()
                     if (voicePlayer != null && !PlayerBurnEvent(voicePlayer, track, item).callEvent()) return@suspendSyncFor

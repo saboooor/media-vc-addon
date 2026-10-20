@@ -18,6 +18,7 @@ data class SavedJukeboxSettings(
     val visualizers: List<VisualizerInstance> = emptyList(),
     val lamps: List<JukeboxBassLamps.Position> = emptyList(),
     val screenName: String? = null,
+    val noteBlock: JukeboxBassLamps.Position? = null,
 ) {
     fun validate(): SavedJukeboxSettings {
         require(stereo in 0..2)
@@ -32,7 +33,7 @@ data class SavedJukeboxSettings(
             require(layout.width in 0.25f..4f && layout.height in 0.25f..4f)
         }
         require(lamps.size <= 1024)
-        for (lamp in lamps) {
+        for (lamp in lamps + listOfNotNull(noteBlock)) {
             java.util.UUID.fromString(lamp.world)
             require(lamp.x in -30_000_000..30_000_000 && lamp.z in -30_000_000..30_000_000 && lamp.y in -4096..4096)
         }

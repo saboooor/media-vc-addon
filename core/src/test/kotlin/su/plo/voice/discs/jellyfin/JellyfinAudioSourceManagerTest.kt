@@ -15,7 +15,7 @@ import java.util.UUID
 
 class JellyfinAudioSourceManagerTest {
     @TempDir lateinit var folder: Path
-    @Test fun `registered disc loads authenticated audio without putting tokens in the track URL`() {
+    @Test fun `registered disc tolerates slow stream startup and keeps authentication out of URLs`() {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         var authorization: String? = null
         var requestedPath: String? = null
@@ -25,6 +25,8 @@ class JellyfinAudioSourceManagerTest {
             put("data".toByteArray()); putInt(16000)
         }.array()
         server.createContext("/jellyfin/Audio/") { exchange ->
+            // Exceed LavaPlayer's default three-second socket timeout.
+            Thread.sleep(3_500)
             authorization = exchange.requestHeaders.getFirst("Authorization")
             requestedPath = exchange.requestURI.toString()
             exchange.responseHeaders.set("Content-Type", "audio/wav")
@@ -46,6 +48,20 @@ class JellyfinAudioSourceManagerTest {
             assertFalse(track.info.uri.contains("private-token"))
             assertFalse(track.identifier.contains("private-token"))
             assertNotNull(track.makeClone())
+            assertTrue(track.isSeekable)
+            val videoRef = library.grant(connection, JellyfinClient.Media(
+                "abcdef0123456789abcdef0123456789", "Movie", "", "", 120_000, "Movie"))
+            val video = source.loadItem(playerManager, AudioReference(videoRef, null)) as AudioTrack
+            assertFalse(video.isSeekable)
+            assertEquals(120_000L, video.duration)
+            video.position = 0
+            video.position = 50_000
+            assertEquals(0L, video.position)
+            val clone = video.makeClone()
+            assertFalse(clone.isSeekable)
+            assertEquals(120_000L, clone.duration)
+            clone.position = 50_000
+            assertEquals(0L, clone.position)
             assertNull(source.loadItem(playerManager, AudioReference("https://example.com/", null)))
             library.disconnect(connection.owner)
             assertThrows(JellyfinException::class.java) { source.loadItem(playerManager, AudioReference(ref, null)) }
