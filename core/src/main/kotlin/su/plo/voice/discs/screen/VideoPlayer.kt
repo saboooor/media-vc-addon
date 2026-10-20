@@ -3,6 +3,7 @@ package su.plo.voice.discs.screen
 import com.github.retrooper.packetevents.PacketEvents
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerMapData
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.bukkit.Bukkit
@@ -227,7 +228,11 @@ class VideoPlayer(
         command.addAll(listOf("-map", "0:v:0", "-an", "-sn", "-dn"))
         command.add("-vf")
         // Drop surplus source frames before scaling and padding.
-        command.add(videoFilter(fps, totalWidth, totalHeight, subtitlePath))
+        val audioClock = playbackPositionMs
+        val frameTimes = Channel<Long>(Channel.UNLIMITED)
+        val filter = videoFilter(fps, totalWidth, totalHeight, subtitlePath)
+        // With linked audio, pace by decoded frame timestamps rather than a second wall clock.
+        command.add(if (audioClock != null) filter.removeSuffix(",realtime") + ",showinfo=checksum=0" else filter)
         // Raw RGB needs no frame-threaded encoder queue; flush each frame to the renderer.
         command.addAll(listOf("-threads:v", "1", "-flush_packets", "1"))
         command.add("-f")
@@ -278,6 +283,7 @@ class VideoPlayer(
                 try {
                     proc.errorStream.bufferedReader().useLines { lines ->
                         lines.forEach { line ->
+                            if (audioClock != null) VideoAudioSync.timestamp(line)?.let { frameTimes.trySend(it) }
                             if (!colorInfoReady.isCompleted) {
                                 if (line.startsWith("Output #0,")) outputStarted = true
                                 val streamColor = VideoColorInfo.fromStreamLine(line)
@@ -292,7 +298,7 @@ class VideoPlayer(
                                 line.substringAfter('=').toLongOrNull()?.let { outputPositionUs.set(it) }
                             }
                             // Progress is machine-readable and must not displace decoder diagnostics.
-                            if (!progressLine.matches(line)) {
+                            if (!progressLine.matches(line) && !line.contains("showinfo")) {
                                 if (stderrLines.size >= 30) stderrLines.poll()
                                 stderrLines.offer(line)
                             }
@@ -300,6 +306,7 @@ class VideoPlayer(
                     }
                 } catch (_: Exception) {
                 } finally {
+                    frameTimes.close()
                     colorInfoReady.complete(inputColor ?: VideoColorInfo())
                 }
             }
@@ -342,6 +349,21 @@ class VideoPlayer(
                 if (!ok) break // End of stream
 
                 framesRendered++
+                if (audioClock != null) {
+                    val relativeMs = frameTimes.receiveCatching().getOrNull()
+                        ?: throw IOException("Missing video frame timestamp for audio synchronization")
+                    val videoMs = startPositionMs + relativeMs
+                    while (!stopped.get() && currentCoroutineContext().isActive) {
+                        if (isPaused) { delay(20L); continue }
+                        val audioMs = audioClock() ?: 0L
+                        val waitMs = VideoAudioSync.waitMillis(videoMs, audioMs)
+                        if (waitMs == 0L) break
+                        delay(waitMs)
+                    }
+                    currentCoroutineContext().ensureActive()
+                    if (stopped.get()) break
+                    if (VideoAudioSync.stale(videoMs, audioClock() ?: 0L)) continue
+                }
                 // Process frame and send packets
                 renderWarning.set(false)
                 renderMonitor.beginRead(System.nanoTime())

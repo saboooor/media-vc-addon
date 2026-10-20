@@ -474,7 +474,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     identifier.contains("music.youtube.com") || (track.info.uri ?: "").contains("music.youtube.com")
                 screenManager?.onJukeboxPlay(block, if (identifier.startsWith("jellyfin:")) identifier else videoIdentifier,
                     artworkUrl = track.info.artworkUrl, isYouTubeMusic = isYouTubeMusic,
-                    playbackPositionMs = { controls.position.takeIf { it > 0 } })
+                    playbackPositionMs = { controls.position })
                 var lastExistenceCheck = System.currentTimeMillis()
                 var lastRecordReset = System.currentTimeMillis()
                 var lastAudioCheck = System.currentTimeMillis()

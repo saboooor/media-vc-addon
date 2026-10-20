@@ -25,6 +25,7 @@ import su.plo.slib.api.permission.PermissionDefault
 import su.plo.voice.discs.PlaybackDialogView
 import su.plo.voice.discs.dialog.PaperPlaybackDialog
 import su.plo.voice.discs.visualizer.LightBand
+import su.plo.voice.discs.visualizer.VisualizerFacing
 import su.plo.voice.discs.visualizer.VisualizerKind
 import su.plo.voice.discs.PlaybackControls
 import su.plo.voice.discs.command.SubCommand
@@ -339,6 +340,11 @@ class ControlCommand(
                 body += Component.text("Offset: ${layout.x}, ${layout.y}, ${layout.z} · Width: ${layout.width}× · Height: ${layout.height}×", NamedTextColor.GRAY)
                 buttons += (if (selected.enabled) "Disable #${selected.id}" else "Enable #${selected.id}") to (prefix + "viz_toggle")
                 buttons += ("Change to " + VisualizerKind.entries[(selected.kind.ordinal + 1) % VisualizerKind.entries.size].label) to (prefix + "viz_type")
+                for (facing in VisualizerFacing.entries) {
+                    val label = facing.name.lowercase().replaceFirstChar { it.uppercase() }
+                    buttons += "${if (selected.facing == facing) "✓ " else ""}Face $label" to
+                        (prefix + "viz_face_${facing.name.lowercase()}")
+                }
                 buttons += "Move / resize in world" to (prefix + "viz_edit")
                 buttons += "Reset position, size and facing" to (prefix + "viz_reset")
                 buttons += "Remove #${selected.id}" to (prefix + "viz_remove")
@@ -386,6 +392,16 @@ class ControlCommand(
         }
         sessions.remove(player.uniqueId, session)
         val controls = session.controls
+        if (arguments[2].startsWith("viz_face_")) {
+            val facing = VisualizerFacing.entries.firstOrNull {
+                arguments[2] == "viz_face_${it.name.lowercase()}"
+            } ?: return
+            val manager = visualizer ?: return
+            val id = session.visualizerId ?: return
+            manager.setFacing(session.block, id, facing)
+            show(player, session.block, visualization = true, selectedVisualizerId = id)
+            return
+        }
         if (arguments[2].startsWith("viz_select_")) {
             val id = arguments[2].removePrefix("viz_select_").toIntOrNull() ?: return
             show(player, session.block, visualization = true, selectedVisualizerId = id)
