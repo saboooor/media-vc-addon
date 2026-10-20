@@ -37,6 +37,9 @@ class ScreenManager : PluginKoinComponent {
 
     private val screens = ConcurrentHashMap<String, Screen>()
     private val activePlayers = ConcurrentHashMap<String, VideoPlayer>()
+    private val playbackLock = Any()
+    private val playbackRequests = mutableMapOf<String, Any>()
+    private var shuttingDown = false
     private val selectionSessions = ConcurrentHashMap<UUID, ScreenSelectionSession>()
 
     private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
@@ -53,8 +56,13 @@ class ScreenManager : PluginKoinComponent {
     }
 
     fun shutdown() {
-        activePlayers.values.forEach { it.stop() }
-        activePlayers.clear()
+        synchronized(playbackLock) {
+            shuttingDown = true
+            playbackRequests.clear()
+            requestedPositions.clear()
+            activePlayers.values.forEach { it.stop() }
+            activePlayers.clear()
+        }
         selectionSessions.clear()
     }
 
@@ -295,8 +303,14 @@ class ScreenManager : PluginKoinComponent {
         isYouTubeMusic: Boolean = false
     ) {
         val lower = screen.name.lowercase(Locale.ROOT)
-        stopVideo(screen)
-        requestedPositions[lower] = startPositionMs
+        val request = synchronized(playbackLock) {
+            if (shuttingDown) return
+            stopVideo(screen)
+            Any().also {
+                playbackRequests[lower] = it
+                requestedPositions[lower] = startPositionMs
+            }
+        }
 
         scope.launch {
             if (!config.screen.enabled) return@launch
@@ -335,6 +349,7 @@ class ScreenManager : PluginKoinComponent {
                 screen = screen,
                 sourceUrl = resolvedUrl,
                 sourceAuthorization = sourceAuthorization,
+                ditherStrength = if (config.screen.dithering) config.screen.ditherStrength.coerceIn(0, 32) else 0,
                 fps = config.screen.fps.coerceIn(5, 30),
                 maxDistance = config.screen.maxDistance.coerceIn(8, 128),
                 ffmpegPath = resolvedFfmpegPath,
@@ -345,20 +360,25 @@ class ScreenManager : PluginKoinComponent {
                 }
             )
 
-            plugin.slF4JLogger.info(
-                "Screen '${screen.name}' playback starting: source='${VideoPlayer.describeSource(resolvedUrl)}', ffmpeg='$resolvedFfmpegPath'"
-            )
-
-            activePlayers[lower] = videoPlayer
-            videoPlayer.start(requestedPositions[lower] ?: startPositionMs)
+            synchronized(playbackLock) {
+                // URL resolution and FFmpeg setup can finish after a stop or newer play request.
+                if (shuttingDown || playbackRequests[lower] !== request) return@launch
+                plugin.slF4JLogger.info(
+                    "Screen '${screen.name}' playback starting: source='${VideoPlayer.describeSource(resolvedUrl)}', ffmpeg='$resolvedFfmpegPath'"
+                )
+                activePlayers[lower] = videoPlayer
+                videoPlayer.start(requestedPositions[lower] ?: startPositionMs)
+            }
         }
     }
 
     fun stopVideo(screen: Screen) {
         val lower = screen.name.lowercase(Locale.ROOT)
-        requestedPositions.remove(lower)
-        val player = activePlayers.remove(lower)
-        player?.stop()
+        synchronized(playbackLock) {
+            playbackRequests.remove(lower)
+            requestedPositions.remove(lower)
+            activePlayers.remove(lower)?.stop()
+        }
     }
 
     fun clearScreen(screen: Screen) {

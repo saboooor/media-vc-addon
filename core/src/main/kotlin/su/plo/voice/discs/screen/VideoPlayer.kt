@@ -32,7 +32,8 @@ class VideoPlayer(
     val fallbackImageUrl: String? = null,
     val coroutineScope: CoroutineScope,
     val onCompletion: (() -> Unit)? = null,
-    private val sourceAuthorization: String? = null
+    private val sourceAuthorization: String? = null,
+    ditherStrength: Int = 12
 ) {
     @Volatile
     private var process: Process? = null
@@ -58,6 +59,10 @@ class VideoPlayer(
 
     // Pre-allocated tile buffers for each item frame map (128x128 = 16,384 bytes)
     private val tileBuffers = Array(rows) { Array(cols) { ByteArray(16384) } }
+
+    private val dither = if (ditherStrength > 0) OrderedMapDither(ditherStrength) else null
+    private val tileDeltas = Array(rows) { Array(cols) { MapTileDelta() } }
+    private var previousViewers: Map<UUID, Player> = emptyMap()
 
     fun start(startPositionMs: Long = 0L) {
         if (stopped.get()) return
@@ -179,7 +184,8 @@ class VideoPlayer(
             command.add(seekProxy?.url ?: sourceUrl)
         }
         command.add("-vf")
-        command.add("scale=${totalWidth}:${totalHeight}:force_original_aspect_ratio=decrease,pad=${totalWidth}:${totalHeight}:(ow-iw)/2:(oh-ih)/2:black,fps=${fps}")
+        // Drop surplus source frames before scaling and padding.
+        command.add("fps=${fps},scale=${totalWidth}:${totalHeight}:force_original_aspect_ratio=decrease,pad=${totalWidth}:${totalHeight}:(ow-iw)/2:(oh-ih)/2:black")
         command.add("-f")
         command.add("rawvideo")
         command.add("-pix_fmt")
@@ -241,9 +247,7 @@ class VideoPlayer(
                 framesRendered++
                 // Process frame and send packets
                 val nearbyPlayers = getNearbyPlayers()
-                if (nearbyPlayers.isNotEmpty()) {
-                    sliceAndSend(rawFrameBuffer, nearbyPlayers)
-                }
+                sliceAndSend(rawFrameBuffer, nearbyPlayers)
             }
 
             currentCoroutineContext().ensureActive()
@@ -324,17 +328,13 @@ class VideoPlayer(
         }
 
         val initialPlayers = getNearbyPlayers()
-        if (initialPlayers.isNotEmpty()) {
-            sliceAndSend(rawFrameBuffer, initialPlayers)
-        }
+        sliceAndSend(rawFrameBuffer, initialPlayers)
 
         while (!stopped.get() && currentCoroutineContext().isActive) {
             delay(1000L)
             if (isPaused) continue
             val nearbyPlayers = getNearbyPlayers()
-            if (nearbyPlayers.isNotEmpty()) {
-                sliceAndSend(rawFrameBuffer, nearbyPlayers)
-            }
+            sliceAndSend(rawFrameBuffer, nearbyPlayers)
         }
     }
 
@@ -451,6 +451,12 @@ class VideoPlayer(
     }
 
     private fun sliceAndSend(rawFrame: ByteArray, players: List<Player>) {
+        if (players.isEmpty()) {
+            previousViewers = emptyMap()
+            return
+        }
+        val newViewers = players.filter { previousViewers[it.uniqueId] !== it }
+        val existingViewers = players.filter { previousViewers[it.uniqueId] === it }
         val playerManager = PacketEvents.getAPI().playerManager
 
         for (r in 0 until rows) {
@@ -469,28 +475,29 @@ class VideoPlayer(
                         val red = rawFrame[p].toInt() and 0xFF
                         val green = rawFrame[p + 1].toInt() and 0xFF
                         val blue = rawFrame[p + 2].toInt() and 0xFF
-                        tileBuffer[tileRowOffset + x] = MapPaletteLookup.lookup(red, green, blue)
+                        tileBuffer[tileRowOffset + x] = dither?.lookup(red, green, blue, startX + x, globalY)
+                            ?: MapPaletteLookup.lookup(red, green, blue)
                     }
                 }
 
-                val packet = WrapperPlayServerMapData(
-                    mapId,
-                    0.toByte(),
-                    false,
-                    false,
-                    emptyList(),
-                    128,
-                    128,
-                    0,
-                    0,
-                    tileBuffer
-                )
-
-                for (player in players) {
-                    playerManager.sendPacketSilently(player, packet)
+                val changed = tileDeltas[r][c].update(tileBuffer)
+                fun send(region: MapTileRegion, viewers: List<Player>) {
+                    val packet = WrapperPlayServerMapData(
+                        mapId, 0.toByte(), false, false, emptyList(),
+                        region.width, region.height, region.x, region.y, region.colors
+                    )
+                    for (player in viewers) playerManager.sendPacketSilently(player, packet)
                 }
+                // New and returning viewers need a complete tile, even if nothing changed.
+                if (newViewers.isNotEmpty()) {
+                    val full = if (changed?.width == 128 && changed.height == 128) changed
+                        else MapTileRegion(0, 0, 128, 128, tileBuffer.copyOf())
+                    send(full, newViewers)
+                }
+                if (changed != null && existingViewers.isNotEmpty()) send(changed, existingViewers)
             }
         }
+        previousViewers = players.associateBy { it.uniqueId }
     }
 
     fun clearScreen() {

@@ -29,6 +29,19 @@ class VisualizerInstancesTest {
         assertNotNull(collection.add(VisualizerKind.SPEAKER))
     }
 
+    @Test fun `unchanged edits retain the published snapshot and changed edits preserve old readers`() {
+        val collection = VisualizerInstances()
+        val original = collection.snapshot
+        collection.update(1) { it.copy(layout = it.layout.adjust(dx = 0f)) }
+        assertSame(original, collection.snapshot)
+        collection.update(999) { error("Unknown IDs must not invoke the edit") }
+        assertSame(original, collection.snapshot)
+        collection.update(1) { it.copy(enabled = true) }
+        assertNotSame(original, collection.snapshot)
+        assertFalse(original.first().enabled)
+        assertTrue(collection.snapshot.first().enabled)
+    }
+
     @Test fun `instance count is bounded`() {
         val collection = VisualizerInstances()
         repeat(7) { assertNotNull(collection.add(VisualizerKind.BARS)) }

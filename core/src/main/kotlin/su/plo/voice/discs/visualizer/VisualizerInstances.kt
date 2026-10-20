@@ -23,7 +23,12 @@ class VisualizerInstances {
         return id
     }
     @Synchronized fun update(id: Int, change: (VisualizerInstance) -> VisualizerInstance) {
-        snapshot = snapshot.map { if (it.id == id) change(it) else it }
+        val current = snapshot
+        val index = current.indexOfFirst { it.id == id }
+        if (index < 0) return
+        val updated = change(current[index])
+        if (updated == current[index]) return
+        snapshot = current.toMutableList().also { it[index] = updated }
     }
     @Synchronized fun remove(id: Int) { snapshot = snapshot.filterNot { it.id == id } }
 }

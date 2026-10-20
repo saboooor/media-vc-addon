@@ -317,6 +317,12 @@ class AddonConfig {
         @ConfigField(comment = "Framerate for video playback on item frame screens (e.g. 10-20 FPS)")
         var fps: Int = 15
 
+        @ConfigField(comment = "Enable stable ordered dithering for smoother screen colors and gradients")
+        var dithering: Boolean = true
+
+        @ConfigField(comment = "Ordered dithering strength in RGB levels (0-32; 0 disables, default 12). Higher values add more visible texture")
+        var ditherStrength: Int = 12
+
         @ConfigField(comment = "Maximum distance in blocks for players to receive video map updates")
         var maxDistance: Int = 48
 

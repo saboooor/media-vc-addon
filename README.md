@@ -80,6 +80,8 @@ Music video screens:
 - Right-click a nearby jukebox to link the screen to it.
 - Whenever a custom music disc or chest queue track plays in that jukebox, the music video streams to the item frames in real time with aspect ratio preservation and black letterboxing.
 - Pausing, resuming, or seeking using the jukebox controls automatically keeps the music video in sync.
+- Screens skip unchanged map tiles and send only the bounding rectangle of changed palette pixels in each tile. New and returning nearby viewers receive full tiles first. Fast-moving scenes may still update an entire tile.
+- Stable ordered dithering improves apparent gradients within Minecraft's map palette. In `[screen]` in `discs.toml`, `dithering = true` and `dither_strength = 12` are the defaults. Strength accepts 0–32; use 0 or `dithering = false` for the original sharp palette matching. Higher strengths add texture and can increase changed-region traffic. Settings apply to newly started playback.
 - Item frames belonging to screens are automatically fixed and protected from rotation or removal.
 
 `/disc cancel [player]` – Cancel user's goat horn playback. You need `pv.addon.discs.cancel.other` permission to cancel for others.

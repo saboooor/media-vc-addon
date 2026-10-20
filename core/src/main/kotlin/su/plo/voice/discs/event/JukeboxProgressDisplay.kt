@@ -136,6 +136,12 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
         val roundedX = Math.round(x * 100.0) / 100.0
         val roundedY = Math.round(y * 100.0) / 100.0
         val roundedZ = Math.round(z * 100.0) / 100.0
+        val current = offsets[key]
+        if ((current?.x ?: 0.0) == roundedX && (current?.y ?: 0.0) == roundedY && (current?.z ?: 0.0) == roundedZ) {
+            // A command may be committing an earlier, unsaved drag position.
+            if (persist) saveOffsets()
+            return
+        }
         if (roundedX == 0.0 && roundedY == 0.0 && roundedZ == 0.0) {
             offsets.remove(key)
         } else {
