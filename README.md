@@ -257,3 +257,19 @@ The existing position and size limits still apply, and edits travel with saved j
 ### Physical stereo speakers
 
 Place a note block directly beside the jukebox (north, east, south, or west). The note block automatically plays the original left channel and the jukebox plays the original right channel. Use the Stereo control to swap them or turn the split off. Channel assignment and speaker placement are read at the start of each song; changes take effect on the next song or after restarting playback. Without a note block, normal jukebox playback is used. If several note blocks touch the jukebox, the first in north/east/south/west order is selected. Mono recordings play from both speakers. Removing either active speaker stops playback. Both Plasmo Voice and Simple Voice Chat use the same channel assignment and shared pause, seek, volume, and crossfade controls.
+
+### Jellyfin music library
+
+Each player can connect their own Jellyfin server/account, browse its music, and burn a selected song onto a held disc:
+
+1. Run `/disc jellyfin` or `/disc jellyfin connect [server-url]`. Include any reverse-proxy base path, for example `https://media.example/jellyfin`.
+2. Follow the private chat prompts for URL, username, and password. Use `<empty>` for a passwordless account, or `cancel` to exit. Prompts expire after two minutes. Do not put your password in a command. The plugin cancels/redacts these chat events; server owners should account for other chat/logging plugins when enabling credential input.
+3. Hold one burnable music disc in your main hand and select a song in the menu. Use Previous/Next to page through music, or Search to filter songs/artists. Existing burn permissions and burnable-disc checks still apply.
+
+`/disc jellyfin browse` reopens the menu; `/disc jellyfin search <text>` opens filtered results. `/disc jellyfin cancel` cancels pending input. `/disc jellyfin disconnect` removes the saved token and requests logout from Jellyfin. Reconnecting to the same URL/account restores playback of its existing discs. Connecting a different URL/account will not give old discs access to the new library.
+
+Requires `pv.addon.discs.jellyfin` (or `vc.addon.discs.jellyfin`, operator by default) and the existing burn permission. Normal play permissions still apply to using discs. Jellyfin must be reachable from the Minecraft server, and the Jellyfin user must have access to the selected music. The URL may point to a local/self-hosted server; HTTPS is recommended for remote servers. Use the final URL because authenticated requests do not follow redirects.
+
+Passwords are exchanged for Jellyfin user tokens and are not saved. Connection tokens and selected-media grants are stored server-side in `plugins/vc-addon-discs/jellyfin.json`; keep that file private. Disc items contain only random `jellyfin:` references, never URLs, passwords, or tokens. A burned disc can be shared and played by other players using its owner's saved connection, including while the owner is offline and after server restarts. Unselected library items cannot be retrieved through the disc reference. Tokens expire if revoked by Jellyfin; reconnect when needed.
+
+Jellyfin songs support chest queues, loop/shuffle, crossfading, pause, seek, volume, and physical stereo through both voice backends. Connection failures preserve the disc reference and stop its queue rather than erasing the song or repeatedly retrying a broken login. This integration browses audio/music items and streams their original supported audio files; Jellyfin videos and screen playback are not included.

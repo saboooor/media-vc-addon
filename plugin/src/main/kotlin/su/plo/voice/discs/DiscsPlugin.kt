@@ -33,6 +33,8 @@ import su.plo.voice.discs.command.subcommand.ControlCommand
 import su.plo.voice.discs.command.subcommand.HologramCommand
 import su.plo.voice.discs.command.subcommand.VisualizerCommand
 import su.plo.voice.discs.command.subcommand.PlaylistCommand
+import su.plo.voice.discs.jellyfin.JellyfinLibrary
+import su.plo.voice.discs.command.subcommand.JellyfinCommand
 import su.plo.voice.discs.command.subcommand.BurnCommand
 import su.plo.voice.discs.command.subcommand.CancelCommand
 import su.plo.voice.discs.command.subcommand.EraseCommand
@@ -184,6 +186,8 @@ class DiscsPlugin : JavaPlugin(), Listener {
         }
     }
 
+    private val jellyfinLibrary by lazy { JellyfinLibrary(dataFolder.toPath().resolve("jellyfin.json")) }
+
     private lateinit var audioPlayerManager: PlasmoAudioPlayerManager
 
     @Volatile
@@ -208,6 +212,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
             factory<PlasmoAudioPlayerManager> { audioPlayerManager }
             single<GoatHornHelper> { goatHornHelper }
             single<GoatHornManager> { goatHornManager }
+            single<JellyfinLibrary> { jellyfinLibrary }
             single<JavaPlugin> { this@DiscsPlugin }
             factory<DebugLogger> { debugLogger }
             single<DiscHelper> { discHelper }
@@ -288,8 +293,11 @@ class DiscsPlugin : JavaPlugin(), Listener {
             server.pluginManager.registerEvents(GoatHornListener(), this)
         }
 
+        val jellyfinCommand = JellyfinCommand(jellyfinLibrary)
+        server.pluginManager.registerEvents(jellyfinCommand, this)
         val handler = CommandHandler()
             .addSubCommand(::BurnCommand)
+            .addSubCommand { jellyfinCommand }
             .addSubCommand { playlistCommand }
             .addSubCommand { controlCommand }
             .addSubCommand { hologramCommand }
@@ -417,3 +425,4 @@ class DiscsPlugin : JavaPlugin(), Listener {
         }
     }
 }
+

@@ -250,11 +250,13 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 controls.fail(message)
                 controls.title = "Failed: $message"
                 suspendSyncAt(block.location, voiceServer, plugin) {
-                    val error = Component.text("Could not play song: $message. Disc unburned; skipping.", NamedTextColor.RED)
+                    val jellyfin = identifier.startsWith("jellyfin:")
+                    val error = Component.text(if (jellyfin) "Could not play Jellyfin media. Check the connection; the disc was kept."
+                        else "Could not play song: $message. Disc unburned; skipping.", NamedTextColor.RED)
                     player?.sendMessage(error)
                     player?.sendActionBar(error)
-                    onFailure?.invoke()
-                    if (!chestQueue) {
+                    if (!jellyfin) onFailure?.invoke()
+                    if (!chestQueue && !jellyfin) {
                         val jukebox = block.asJukebox() ?: return@suspendSyncAt
                         val record = jukebox.record
                         if (record.customDiscIdentifier(discHelper) == identifier && record.itemMeta == itemMeta) {
@@ -373,7 +375,8 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             val videoIdentifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.info.identifier?.takeIf { it.isNotBlank() } ?: identifier
             val isYouTubeMusic = track.info.author.contains("- Topic", ignoreCase = true) ||
                 identifier.contains("music.youtube.com") || (track.info.uri ?: "").contains("music.youtube.com")
-            screenManager?.onJukeboxPlay(block, videoIdentifier, artworkUrl = track.info.artworkUrl, isYouTubeMusic = isYouTubeMusic)
+            if (!identifier.startsWith("jellyfin:"))
+                screenManager?.onJukeboxPlay(block, videoIdentifier, artworkUrl = track.info.artworkUrl, isYouTubeMusic = isYouTubeMusic)
             try {
                 var lastExistenceCheck = System.currentTimeMillis()
                 var lastRecordReset = System.currentTimeMillis()
