@@ -56,19 +56,13 @@ class ScreenSelectionSession(
                     Component.text("First corner selected at (${loc.x}, ${loc.y}, ${loc.z}) facing ${frame.facing}.", NamedTextColor.YELLOW)
                 )
                 player.sendMessage(
-                    Component.text("Now right-click the diagonally opposite corner item frame.", NamedTextColor.GOLD)
+                    Component.text("Now right-click the opposite corner, or click this frame again for a 1x1 screen.", NamedTextColor.GOLD)
                 )
                 return true
             }
 
             State.WAITING_FOR_CORNER_2 -> {
                 val c1 = corner1 ?: return false
-                if (frame.uniqueId == c1.uniqueId) {
-                    player.sendMessage(
-                        Component.text("Please right-click the diagonally opposite corner item frame (different from the first corner).", NamedTextColor.YELLOW)
-                    )
-                    return true
-                }
                 corner2 = frame
 
                 try {

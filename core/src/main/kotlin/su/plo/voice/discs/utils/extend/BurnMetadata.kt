@@ -85,3 +85,22 @@ fun formatTrackDisplay(trackTitle: String, artistName: String): String {
         cleanTitle
     }
 }
+
+/** Remove the custom song without consuming the physical disc. */
+fun ItemStack.eraseBurnMetadata(config: AddonConfig, discHelper: DiscHelper) {
+    editMeta { meta ->
+        meta.removeItemFlags(*ItemFlag.values())
+        meta.persistentDataContainer.remove(AddonKeys.identifierKey)
+        meta.persistentDataContainer.remove(AddonKeys.oldIdentifierKey)
+        if (config.addGlintToCustomDiscs) {
+            meta.allowGrindstone()
+            meta.removeEnchant(Enchantment.MENDING)
+        }
+        when (config.burnLoreMethod) {
+            AddonConfig.LoreMethod.REPLACE -> meta.lore(null)
+            AddonConfig.LoreMethod.APPEND -> meta.lore(meta.lore()?.dropLast(1)?.takeIf { it.isNotEmpty() })
+            AddonConfig.LoreMethod.DISABLE -> {}
+        }
+    }
+    if (org.bukkit.Bukkit.getServer().getMinecraftVersionInt() >= 12103) discHelper.showSongTooltip(this, true)
+}

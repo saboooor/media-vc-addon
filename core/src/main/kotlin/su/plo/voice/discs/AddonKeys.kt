@@ -3,6 +3,7 @@ package su.plo.voice.discs
 import org.bukkit.NamespacedKey
 
 data object AddonKeys {
+    val jukeboxSettingsKey: NamespacedKey = createKeyOrThrow("vc-addon-discs:jukebox_settings")
     // PersistentDataType.STRING
     val identifierKey: NamespacedKey = createKeyOrThrow("vc-addon-discs:identifier")
     // PersistentDataType.BYTE 0 or 1 representing boolean

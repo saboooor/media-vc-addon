@@ -109,6 +109,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         val player = lavaPlayerManager.createPlayer()
         player.addListener(object : AudioEventAdapter() {
             override fun onTrackException(player: AudioPlayer, track: AudioTrack, exception: FriendlyException) {
+                controls?.fail(exception.message ?: "Audio stream failed")
                 plugin.slF4JLogger.error("Disc audio stream failed: ${track.info.title}", exception)
                 val msg = exception.message ?: ""
                 val cause = exception.cause
@@ -128,6 +129,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
             }
 
             override fun onTrackStuck(player: AudioPlayer, track: AudioTrack, thresholdMs: Long) {
+                controls?.fail("Audio stream stalled for ${thresholdMs}ms")
                 plugin.slF4JLogger.warn("Disc audio stream stalled for ${thresholdMs}ms: ${track.info.title}")
             }
         })
@@ -143,7 +145,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
             val frameProvider = object : AudioFrameProvider {
                 override fun provide20ms(): AudioFrameResult =
                     if (
-                        track.state == AudioTrackState.FINISHED ||
+                        controls?.failure != null || track.state == AudioTrackState.FINISHED ||
                         (track.state == AudioTrackState.INACTIVE && track.position > 0)
                     ) {
                         AudioFrameResult.Finished
@@ -174,7 +176,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                     var nextTime = System.nanoTime()
                     while (isActive) {
                         if (
-                            track.state == AudioTrackState.FINISHED ||
+                            controls?.failure != null || track.state == AudioTrackState.FINISHED ||
                             (track.state == AudioTrackState.INACTIVE && track.position > 0)
                         ) {
                             break
@@ -360,6 +362,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     }
 
     fun registerSources() {
+        lavaPlayerManager.configuration.isFilterHotSwapEnabled = true
         val proxyHttpBuilder = proxyHttpBuilder()
         proxyHttpBuilder?.let { lavaPlayerManager.setHttpBuilderConfigurator(it) }
 

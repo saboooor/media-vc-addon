@@ -63,6 +63,10 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     private val svcPlugin: SvcDiscsPlugin? by getterOrNull()
     private val discHelper: DiscHelper by inject()
 
+    private val savedVolumes = ConcurrentHashMap<Block, Int>()
+    fun volumeSetting(block: Block) = controlsByBlock[block]?.volume ?: savedVolumes[block] ?: 100
+    fun restoreVolume(block: Block, volume: Int) { savedVolumes[block] = volume.coerceIn(0, 100) }
+    fun clearVolume(block: Block) { savedVolumes.remove(block) }
     val controlsByBlock: MutableMap<Block, PlaybackControls> = ConcurrentHashMap()
 
     fun stopPlayback(block: Block) { jobByBlock.remove(block)?.cancel(DiscEjectCause()) }
@@ -211,10 +215,10 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     }
 
     fun playChestTrack(identifier: String, block: Block, itemMeta: ItemMeta?, player: Player, chestQueue: Boolean = true,
-                       controls: PlaybackControls = PlaybackControls(), overlap: Boolean = false): Job {
+                       controls: PlaybackControls = PlaybackControls(), overlap: Boolean = false, onFailure: (() -> Unit)? = null): Job {
         check(overlap || !isPlaying(block)) { "Jukebox is already playing" }
         val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
-        val job = playTrack(identifier, block, itemMeta, voicePlayer, player, chestQueue = chestQueue, controls = controls)
+        val job = playTrack(identifier, block, itemMeta, voicePlayer, player, chestQueue = chestQueue, controls = controls, onFailure = onFailure)
         jobByBlock[block] = job
         job.invokeOnCompletion { jobByBlock.remove(block, job) }
         return job
@@ -228,29 +232,40 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         player: Player? = null,
         chestQueue: Boolean = false,
         controls: PlaybackControls = PlaybackControls(),
+        onFailure: (() -> Unit)? = null,
     ): Job {
+        savedVolumes[block]?.let { controls.changeVolume(it - controls.volume) }
+        controls.onVolumeChanged = { savedVolumes[block] = it }
         val playback = scope.launch(start = CoroutineStart.LAZY) {
 
-            val track = try {
-                audioPlayerManager.getTrack(identifier).await()
-            } catch (e: Exception) {
-                val errorMsg = e.message ?: "Unexpected error"
-                if (voicePlayer != null) {
-                    voicePlayer.instance.sendActionBar(
-                        McTextComponent.translatable(
-                            "pv.addon.discs.actionbar.track_not_found",
-                            errorMsg
-                        )
-                            .withStyle(McTextStyle.RED)
-                    )
-                } else {
-                    player?.sendActionBar(Component.text("Track not found: $errorMsg", NamedTextColor.RED))
+            suspend fun failed(message: String) {
+                controls.fail(message)
+                controls.title = "Failed: $message"
+                suspendSyncAt(block.location, voiceServer, plugin) {
+                    val error = Component.text("Could not play song: $message. Disc unburned; skipping.", NamedTextColor.RED)
+                    player?.sendMessage(error)
+                    player?.sendActionBar(error)
+                    onFailure?.invoke()
+                    if (!chestQueue) {
+                        val jukebox = block.asJukebox() ?: return@suspendSyncAt
+                        val record = jukebox.record
+                        if (record.customDiscIdentifier(discHelper) == identifier && record.itemMeta == itemMeta) {
+                            record.eraseBurnMetadata(config, discHelper)
+                            jukebox.setRecord(record)
+                            jukebox.update()
+                            jukebox.eject()
+                        }
+                    }
                 }
-
-                if (e is CancellationException) throw e
+            }
+            val track = try {
+                withTimeout(30_000L) { audioPlayerManager.getTrack(identifier).await() }
+            } catch (e: Exception) {
+                if (e is CancellationException && e !is TimeoutCancellationException) throw e
+                currentCoroutineContext().ensureActive()
+                val errorMsg = if (e is TimeoutCancellationException) "Audio lookup timed out after 30 seconds" else e.message ?: "Unexpected error"
                 plugin.slF4JLogger.error("Failed to load disc track", e)
-
-                if (!chestQueue) suspendSyncAt(block.location, voiceServer, plugin) { block.asJukebox()?.eject() }
+                failed(errorMsg)
                 return@launch
             }
 
@@ -355,9 +370,18 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             try {
                 var lastExistenceCheck = System.currentTimeMillis()
                 var lastRecordReset = System.currentTimeMillis()
+                var lastAudioCheck = System.currentTimeMillis()
+                var loadingMillis = 0L
 
                 while (job.isActive) {
                     val currentTime = System.currentTimeMillis()
+                    if (!controls.paused && controls.position == 0L) loadingMillis += currentTime - lastAudioCheck
+                    else loadingMillis = 0L
+                    lastAudioCheck = currentTime
+                    if (loadingMillis >= 30_000L) {
+                        controls.fail("Audio stream did not start within 30 seconds")
+                    }
+                    if (controls.failure != null) break
                     val timeSinceExistenceCheck = currentTime - lastExistenceCheck
                     val timeSinceRecordReset = currentTime - lastRecordReset
 
@@ -393,6 +417,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
 
                     delay(100L)
                 }
+                controls.failure?.let { failed(it) }
             } catch (e: CancellationException) {
                 debugLogger.log("Track \"$trackName\" at ${block.location} cancelled: ${e.message}")
                 throw e

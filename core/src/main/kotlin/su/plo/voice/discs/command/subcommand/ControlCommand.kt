@@ -21,9 +21,13 @@ import org.bukkit.inventory.EquipmentSlot
 import org.bukkit.inventory.ItemStack
 import su.plo.slib.api.permission.PermissionDefault
 import su.plo.voice.discs.PlaybackDialogView
+import su.plo.voice.discs.visualizer.VisualizerKind
+import su.plo.voice.discs.visualizer.VisualizerFacing
 import su.plo.voice.discs.PlaybackControls
 import su.plo.voice.discs.command.SubCommand
 import su.plo.voice.discs.event.JukeboxEventListener
+import su.plo.voice.discs.event.JukeboxBassLamps
+import su.plo.voice.discs.event.JukeboxVisualizer
 import su.plo.voice.discs.event.JukeboxProgressDisplay
 import su.plo.voice.discs.screen.ScreenManager
 import su.plo.voice.discs.utils.extend.hasIdentifier
@@ -38,10 +42,12 @@ class ControlCommand(
     private val jukeboxes: JukeboxEventListener,
     private val playlists: PlaylistCommand,
 ) : SubCommand(), Listener {
+    private val bassLamps: JukeboxBassLamps? by getterOrNull<JukeboxBassLamps>()
+    private val visualizer: JukeboxVisualizer? by getterOrNull<JukeboxVisualizer>()
     private val screenManager: ScreenManager? by getterOrNull<ScreenManager>()
     private val progressDisplay: JukeboxProgressDisplay? by getterOrNull<JukeboxProgressDisplay>()
     private data class Session(val token: UUID, val block: Block, val controls: PlaybackControls?,
-                               val record: ItemStack, val expires: Long = System.currentTimeMillis() + 120_000)
+                               val record: ItemStack, val visualizerId: Int? = null, val expires: Long = System.currentTimeMillis() + 120_000)
     private val sessions = ConcurrentHashMap<UUID, Session>()
     override val name = "control"
     override val permissions = listOf("control" to PermissionDefault.TRUE)
@@ -52,10 +58,18 @@ class ControlCommand(
 
     @EventHandler(priority = EventPriority.HIGHEST)
     fun onClick(event: PlayerInteractEvent) {
-        if (event.action != Action.RIGHT_CLICK_BLOCK || event.hand != EquipmentSlot.HAND ||
-            event.useInteractedBlock() == Event.Result.DENY) return
+        if (event.action != Action.RIGHT_CLICK_BLOCK || event.useInteractedBlock() == Event.Result.DENY) return
         val block = event.clickedBlock ?: return
         val jukebox = block.asJukebox() ?: return
+        val heldFrame = event.item?.type?.name in setOf("ITEM_FRAME", "GLOW_ITEM_FRAME")
+        val offhandFrame = event.hand == EquipmentSlot.HAND && event.player.inventory.itemInMainHand.type == Material.AIR &&
+            event.player.inventory.itemInOffHand.type.name in setOf("ITEM_FRAME", "GLOW_ITEM_FRAME")
+        if (heldFrame || offhandFrame) {
+            // Skip the jukebox's use action while leaving frame placement to vanilla/protection plugins.
+            event.setUseInteractedBlock(Event.Result.DENY)
+            return
+        }
+        if (event.hand != EquipmentSlot.HAND) return
         val hasCustomDisc = jukebox.record.hasIdentifier()
         val isLinked = screenManager?.getScreenForJukebox(block) != null
         val isEmptyHand = event.item == null || event.item?.type == Material.AIR
@@ -73,10 +87,12 @@ class ControlCommand(
         show(player, block, hologram = true)
     }
 
-    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false) {
+    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null) {
         val record = block.asJukebox()?.record?.clone() ?: return
         val controls = jukeboxes.controlsByBlock[block]
-        val session = Session(UUID.randomUUID(), block, controls, record)
+        val visualizers = visualizer?.instances(block).orEmpty()
+        val selectedVisualizer = visualizers.firstOrNull { it.id == selectedVisualizerId } ?: visualizers.firstOrNull()
+        val session = Session(UUID.randomUUID(), block, controls, record, visualizerId = selectedVisualizer?.id)
         sessions[player.uniqueId] = session
         val prefix = "/disc control ${session.token} "
         val buttons = mutableListOf<Pair<String, String>>()
@@ -103,6 +119,13 @@ class ControlCommand(
         }
         if (record.type != Material.AIR) buttons += "Eject disc" to (prefix + "eject")
 
+        visualizer?.takeIf { it.supported }?.let {
+            buttons += "Visualizer settings" to (prefix + "viz_menu")
+        }
+
+        bassLamps?.let {
+            bodyLampButtons(buttons, prefix, it.count(block))
+        }
         val canManageScreens = player.hasPermission("pv.addon.discs.screen") ||
             player.hasPermission("vc.addon.discs.screen") || player.isOp
         if (screenManager != null && canManageScreens) {
@@ -190,7 +213,35 @@ class ControlCommand(
             }
             buttons += "Back to playback" to (prefix + "refresh")
         }
-        val dialogTitle = if (seek) "Seek" else if (hologram) "Move Hologram" else if (crossfade) "Crossfade settings" else "Jukebox controls"
+        if (visualization) {
+            val manager = visualizer ?: return show(player, block)
+            buttons.clear()
+            queueLabels.clear()
+            body.clear()
+            body += Component.text("Visualizers: ${visualizers.size}/8", NamedTextColor.GOLD)
+            if (visualizers.size < 8) {
+                buttons += "Add frequency bars" to (prefix + "viz_add_bars")
+                buttons += "Add speaker driver" to (prefix + "viz_add_speaker")
+            }
+            selectedVisualizer?.let { selected ->
+                val layout = selected.layout
+                body += Component.text("Editing #${selected.id}: ${selected.kind.label} · ${if (selected.enabled) "On" else "Off"} · Facing ${selected.facing}", NamedTextColor.GOLD)
+                body += Component.text("Offset: ${layout.x}, ${layout.y}, ${layout.z} · Width: ${layout.width}× · Height: ${layout.height}×", NamedTextColor.GRAY)
+                buttons += (if (selected.enabled) "Disable #${selected.id}" else "Enable #${selected.id}") to (prefix + "viz_toggle")
+                buttons += ("Change to " + VisualizerKind.entries[(selected.kind.ordinal + 1) % VisualizerKind.entries.size].label) to (prefix + "viz_type")
+                for ((action, label) in listOf("up" to "Up", "down" to "Down", "north" to "Move North", "south" to "Move South", "east" to "Move East", "west" to "Move West",
+                    "wider" to "Wider", "narrower" to "Narrower", "taller" to "Taller", "shorter" to "Shorter", "reset" to "Reset position, size and facing")) {
+                    buttons += label to (prefix + "viz_$action")
+                }
+                for (facing in VisualizerFacing.entries) buttons += "Face ${facing.name.lowercase()}" to (prefix + "viz_face_${facing.name.lowercase()}")
+                buttons += "Remove #${selected.id}" to (prefix + "viz_remove")
+            }
+            for (instance in visualizers) {
+                buttons += "${if (instance.id == selectedVisualizer?.id) "▶ " else ""}Select #${instance.id} · ${instance.kind.label}" to (prefix + "viz_select_${instance.id}")
+            }
+            buttons += "Back to playback" to (prefix + "refresh")
+        }
+        val dialogTitle = if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Move Hologram" else if (crossfade) "Crossfade settings" else "Jukebox controls"
         try {
             PaperPlaybackDialog.show(player, body, buttons, queueLabels, dialogTitle, 2)
         } catch (_: ClassNotFoundException) {
@@ -203,6 +254,11 @@ class ControlCommand(
             plugin.slF4JLogger.error("Could not open jukebox dialog", e)
             player.sendMessage(Component.text("Could not open playback controls. Check the server console."))
         }
+    }
+
+    private fun bodyLampButtons(buttons: MutableList<Pair<String, String>>, prefix: String, count: Int) {
+        buttons += "Link bass lamp" to (prefix + "lamp_link")
+        if (count > 0) buttons += "Unlink bass lamp ($count linked)" to (prefix + "lamp_unlink")
     }
 
     override fun execute(sender: CommandSender, arguments: Array<out String>) {
@@ -221,9 +277,51 @@ class ControlCommand(
         }
         sessions.remove(player.uniqueId, session)
         val controls = session.controls
+        if (arguments[2].startsWith("viz_select_")) {
+            val id = arguments[2].removePrefix("viz_select_").toIntOrNull() ?: return
+            show(player, session.block, visualization = true, selectedVisualizerId = id)
+            return
+        }
         when (arguments[2]) {
             "play" -> { if (controls == null) jukeboxes.playStoredDisc(session.block, player); return }
             "pause" -> controls?.togglePause()
+            "lamp_link", "lamp_unlink" -> {
+                bassLamps?.beginLink(player, session.block, unlink = arguments[2] == "lamp_unlink")
+                return
+            }
+            "viz_menu" -> { show(player, session.block, visualization = true); return }
+            "viz_add_bars", "viz_add_speaker" -> {
+                val manager = visualizer ?: return
+                val kind = if (arguments[2] == "viz_add_bars") VisualizerKind.BARS else VisualizerKind.SPEAKER
+                val id = manager.add(session.block, kind)
+                show(player, session.block, visualization = true, selectedVisualizerId = id ?: session.visualizerId)
+                return
+            }
+            "viz_toggle", "viz_up", "viz_down", "viz_north", "viz_south", "viz_east", "viz_west",
+            "viz_wider", "viz_narrower", "viz_taller", "viz_shorter", "viz_reset", "viz_remove", "viz_type",
+            "viz_face_north", "viz_face_south", "viz_face_east", "viz_face_west" -> {
+                val manager = visualizer ?: return
+                val id = session.visualizerId ?: return
+                when (arguments[2]) {
+                    "viz_toggle" -> manager.toggle(session.block, id)
+                    "viz_type" -> manager.changeKind(session.block, id)
+                    "viz_remove" -> manager.delete(session.block, id)
+                    "viz_up" -> manager.adjustLayout(session.block, id, dy = 0.25f)
+                    "viz_down" -> manager.adjustLayout(session.block, id, dy = -0.25f)
+                    "viz_north" -> manager.adjustLayout(session.block, id, dz = -0.25f)
+                    "viz_south" -> manager.adjustLayout(session.block, id, dz = 0.25f)
+                    "viz_east" -> manager.adjustLayout(session.block, id, dx = 0.25f)
+                    "viz_west" -> manager.adjustLayout(session.block, id, dx = -0.25f)
+                    "viz_wider" -> manager.adjustLayout(session.block, id, dw = 0.25f)
+                    "viz_narrower" -> manager.adjustLayout(session.block, id, dw = -0.25f)
+                    "viz_taller" -> manager.adjustLayout(session.block, id, dh = 0.25f)
+                    "viz_shorter" -> manager.adjustLayout(session.block, id, dh = -0.25f)
+                    "viz_reset" -> manager.resetLayout(session.block, id)
+                    else -> manager.setFacing(session.block, id, VisualizerFacing.valueOf(arguments[2].removePrefix("viz_face_").uppercase()))
+                }
+                show(player, session.block, visualization = true, selectedVisualizerId = id)
+                return
+            }
             "seek" -> { show(player, session.block, seek = true); return }
             "seek_minus_15", "seek_minus_30", "seek_minus_60", "seek_minus_300",
             "seek_plus_15", "seek_plus_30", "seek_plus_60", "seek_plus_300" -> {
@@ -367,13 +465,16 @@ private object PaperPlaybackDialog {
         "forward", "skip" -> "item/spectral_arrow"
         "quieter" -> "item/echo_shard"
         "louder" -> "item/goat_horn"
+        "viz_menu", "viz_toggle", "viz_wider", "viz_narrower", "viz_taller", "viz_shorter", "viz_reset" -> "item/amethyst_shard"
         "crossfade", "fadeless", "fademore", "fadetoggle" -> "item/repeater"
         "stop" -> "item/redstone"
         "eject" -> "item/iron_pickaxe"
+        "lamp_link", "lamp_unlink" -> "item/glowstone_dust"
         "screen_link" -> "item/item_frame"
         "screen_unlink" -> "item/shears"
         "screen_clear" -> "item/water_bucket"
         else -> when {
+            command?.substringAfterLast(' ')?.startsWith("viz_") == true -> "item/amethyst_shard"
             command?.substringAfterLast(' ')?.startsWith("seek_minus_") == true -> "item/ender_pearl"
             command?.substringAfterLast(' ')?.startsWith("seek_plus_") == true -> "item/spectral_arrow"
             else -> "item/barrier"

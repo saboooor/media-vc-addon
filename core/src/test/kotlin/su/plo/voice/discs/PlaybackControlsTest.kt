@@ -8,6 +8,7 @@ import java.lang.reflect.Proxy
 
 class PlaybackControlsTest {
     private class Decoder(val seekable: Boolean = true) {
+        var filterFactory: su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory? = null
         var paused = false
         var volume = 100
         var position = 30_000L
@@ -22,6 +23,7 @@ class PlaybackControlsTest {
         }
         val player = proxy(AudioPlayer::class.java) { name, args ->
             when (name) {
+                "setFilterFactory" -> { filterFactory = args!![0] as? su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory; null }
                 "getPlayingTrack" -> track
                 "isPaused" -> paused
                 "setPaused" -> { paused = args!![0] as Boolean; null }
@@ -159,6 +161,53 @@ class PlaybackControlsTest {
         controls.onSeek = { called = true }
         controls.seekTo(15_000)
         assertFalse(called)
+    }
+
+    @Test fun `visualizer taps only one backend and passes audio through unchanged`() {
+        val controls = PlaybackControls()
+        val pv = Decoder()
+        val svc = Decoder()
+        controls.attach(pv.player)
+        controls.attach(svc.player)
+        assertNull(pv.filterFactory)
+        controls.setVisualizing(true)
+        assertNotNull(pv.filterFactory)
+        assertNull(svc.filterFactory)
+        var forwarded: Array<FloatArray>? = null
+        val outputType = su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.UniversalPcmAudioFilter::class.java
+        val output = Proxy.newProxyInstance(outputType.classLoader, arrayOf(outputType)) { _, method, args ->
+            if (method.name == "process") {
+                @Suppress("UNCHECKED_CAST")
+                val samples = args!![0] as Array<FloatArray>
+                forwarded = samples
+            }
+            null
+        } as su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.UniversalPcmAudioFilter
+        val filter = pv.filterFactory!!.buildChain(pv.track,
+            su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.format.StandardAudioDataFormats.DISCORD_OPUS, output)
+            .single() as su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.FloatPcmAudioFilter
+        val samples = arrayOf(FloatArray(4800) { 0.2f }, FloatArray(4800) { -0.1f })
+        val original = samples.map { it.clone() }
+        filter.process(samples, 0, 4800)
+        assertSame(samples, forwarded)
+        original.indices.forEach { assertArrayEquals(original[it], samples[it]) }
+        controls.setVisualizing(false)
+        assertNull(pv.filterFactory)
+        assertNull(svc.filterFactory)
+    }
+
+    @Test fun `linked bass lamps and visualizers independently request the shared audio tap`() {
+        val controls = PlaybackControls()
+        val decoder = Decoder()
+        controls.attach(decoder.player)
+        controls.setVisualizing(true, "bass_lamps")
+        assertNotNull(decoder.filterFactory)
+        val filter = decoder.filterFactory
+        controls.setVisualizing(true)
+        controls.setVisualizing(false)
+        assertSame(filter, decoder.filterFactory)
+        controls.setVisualizing(false, "bass_lamps")
+        assertNull(decoder.filterFactory)
     }
 
     @Test fun `volume stays within zero to one hundred percent`() {

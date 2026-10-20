@@ -24,6 +24,7 @@ import org.bukkit.event.entity.EntityExplodeEvent
 import org.bukkit.event.player.PlayerInteractEvent
 import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.event.world.ChunkUnloadEvent
+import org.bukkit.inventory.ItemStack
 import org.bukkit.inventory.EquipmentSlot
 import org.bukkit.persistence.PersistentDataType
 import org.koin.core.component.inject
@@ -52,11 +53,16 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     private val skipping = ConcurrentHashMap.newKeySet<Block>()
     data class QueueItem(val title: String, val sprite: String)
     data class QueueView(val items: List<QueueItem>, val currentIndex: Int, val crossfadeSeconds: Int)
-    private class QueueState(val items: List<QueueItem>) {
+    private class QueueState(@Volatile var items: List<QueueItem>) {
         @Volatile var currentIndex = 0
         @Volatile var crossfadeSeconds = 3
         var lastCrossfadeSeconds = 3
     }
+    private val crossfadeDefaults = ConcurrentHashMap<Block, Pair<Int, Int>>()
+    fun crossfadeSettings(block: Block): Pair<Int, Int> = queueStates[block]?.let { it.crossfadeSeconds to it.lastCrossfadeSeconds }
+        ?: crossfadeDefaults[block] ?: (3 to 3)
+    fun restoreCrossfade(block: Block, seconds: Int, last: Int) { crossfadeDefaults[block] = seconds.coerceIn(0, 30) to last.coerceIn(1, 30) }
+    fun clearSettings(block: Block) { crossfadeDefaults.remove(block) }
     private val queueStates = ConcurrentHashMap<Block, QueueState>()
 
     fun queueView(block: Block): QueueView? = queueStates[block]?.let { QueueView(it.items, it.currentIndex, it.crossfadeSeconds) }
@@ -67,6 +73,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             synchronized(state) {
                 state.crossfadeSeconds = (state.crossfadeSeconds + delta).coerceIn(0, 30)
                 if (state.crossfadeSeconds > 0) state.lastCrossfadeSeconds = state.crossfadeSeconds
+                crossfadeDefaults[block] = state.crossfadeSeconds to state.lastCrossfadeSeconds
             }
         }
     }
@@ -75,6 +82,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         queueStates[block]?.let { state ->
             synchronized(state) {
                 state.crossfadeSeconds = if (state.crossfadeSeconds > 0) 0 else state.lastCrossfadeSeconds
+                crossfadeDefaults[block] = state.crossfadeSeconds to state.lastCrossfadeSeconds
             }
         }
     }
@@ -232,17 +240,23 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         }
         event.setUseInteractedBlock(Event.Result.DENY)
         event.setUseItemInHand(Event.Result.DENY)
-        val state = QueueState(discs.map { disc ->
+        fun queueItems(discs: List<ItemStack>) = discs.map { disc ->
             QueueItem(disc.itemMeta.lore()?.firstOrNull()?.let { PlainTextComponentSerializer.plainText().serialize(it) }
                 ?.takeIf { it.isNotBlank() } ?: disc.customDiscIdentifier(discHelper)!!,
                 "item/${disc.type.name.lowercase(java.util.Locale.ROOT)}")
-        })
+        }
+        val state = QueueState(queueItems(discs))
+        crossfadeSettings(block).let { (seconds, last) -> state.crossfadeSeconds = seconds; state.lastCrossfadeSeconds = last }
         val queue = scope.launch(start = CoroutineStart.LAZY) {
             var current: Job? = null
             var outgoing: Job? = null
             var controls = PlaybackControls()
             var oldControls: PlaybackControls? = null
+            var liveDiscs = discs
             var index = 0
+            var activeDisc = discs.first()
+            var removedNextIndex = 0
+            var refreshTicks = 0
             var transitionMs = 0L
             suspend fun intact() = suspendSyncAt(block.location, voiceServer, plugin) {
                 block.type == Material.JUKEBOX && chest.block.state is Chest &&
@@ -254,9 +268,22 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         block.asJukebox()?.record?.type != Material.AIR || (!overlap && jukeboxes.isPlaying(block))) null
                     else {
                         state.currentIndex = index
-                        val disc = discs[index]
+                        val disc = liveDiscs.getOrNull(index) ?: return@suspendSyncAt null
+                        activeDisc = disc
+                        val occurrence = liveDiscs.take(index).count { it == disc }
                         jukeboxes.playChestTrack(disc.customDiscIdentifier(discHelper)!!, block, disc.itemMeta,
-                            player, controls = nextControls, overlap = overlap)
+                            player, controls = nextControls, overlap = overlap, onFailure = {
+                                val inventory = (chest.block.state as? Chest)?.inventory
+                                if (inventory != null) {
+                                    val matchingSlots = (0 until inventory.size).filter { inventory.getItem(it) == disc }
+                                    val slot = matchingSlots.getOrNull(occurrence) ?: matchingSlots.firstOrNull()
+                                    if (slot != null) {
+                                        val blank = inventory.getItem(slot)!!.clone()
+                                        blank.eraseBurnMetadata(config, discHelper)
+                                        inventory.setItem(slot, blank)
+                                    }
+                                }
+                            })
                     }
                 }
             try {
@@ -264,6 +291,26 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 while (isActive) {
                     delay(50)
                     if (!intact()) break
+                    if (++refreshTicks >= 5 || current?.isActive != true) {
+                        refreshTicks = 0
+                        val updated = suspendSyncAt(block.location, voiceServer, plugin) {
+                            (chest.block.state as? Chest)?.inventory?.contents?.filterNotNull()
+                                ?.filter { it.isCustomDisc(discHelper) }?.map { it.clone() } ?: emptyList()
+                        }
+                        if (updated != liveDiscs) {
+                            val oldIndex = index
+                            index = remapQueueIndex(liveDiscs, updated, oldIndex, activeDisc)
+                            if (index < 0 && oldIndex >= 0) removedNextIndex = oldIndex.coerceAtMost(updated.size)
+                            jumpTargets.computeIfPresent(block) { _, target ->
+                                liveDiscs.getOrNull(target)?.let { disc ->
+                                    remapQueueIndex(liveDiscs, updated, target, disc).takeIf { it >= 0 }
+                                }
+                            }
+                            liveDiscs = updated
+                            state.items = queueItems(updated)
+                            state.currentIndex = index
+                        }
+                    }
                     val playing = current ?: break
                     // Fade progress follows audio time, so pausing freezes both sides of the transition.
                     if (outgoing != null) {
@@ -281,26 +328,27 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     if (!playing.isActive) {
                         playing.join()
                         if (playing.isCancelled && !skipping.remove(block)) break
-                        index = jumpTargets.remove(block) ?: (index + 1)
-                        if (index >= discs.size) break
+                        index = jumpTargets.remove(block) ?: (if (index >= 0) index + 1 else removedNextIndex)
+                        if (index >= liveDiscs.size) break
                         controls = PlaybackControls(initialVolume = controls.volume)
                         current = start(index, controls, false) ?: break
                         continue
                     }
                     val fadeMs = state.crossfadeSeconds * 1000L
                     val remaining = controls.duration - controls.position
-                    if (outgoing == null && index + 1 < discs.size && fadeMs > 0 &&
+                    val nextIndex = if (index >= 0) index + 1 else removedNextIndex
+                    if (outgoing == null && nextIndex < liveDiscs.size && fadeMs > 0 &&
                         controls.seekable && !controls.isStream && !controls.paused &&
                         controls.duration > 0 && remaining in 1..fadeMs) {
                         val nextControls = PlaybackControls(initialVolume = controls.volume, initialGain = 0.0)
-                        val next = start(index + 1, nextControls, true) ?: break
+                        val next = start(nextIndex, nextControls, true) ?: break
                         transitionMs = remaining.coerceAtLeast(1)
                         outgoing = playing
                         oldControls = controls
                         nextControls.transitionPartner = controls
                         controls = nextControls
                         current = next
-                        index++
+                        index = nextIndex
                     }
                 }
             } finally {

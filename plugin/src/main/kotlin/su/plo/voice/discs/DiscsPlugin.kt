@@ -31,6 +31,7 @@ import su.plo.voice.api.server.event.config.VoiceServerConfigReloadedEvent
 import su.plo.voice.discs.command.CommandHandler
 import su.plo.voice.discs.command.subcommand.ControlCommand
 import su.plo.voice.discs.command.subcommand.HologramCommand
+import su.plo.voice.discs.command.subcommand.VisualizerCommand
 import su.plo.voice.discs.command.subcommand.PlaylistCommand
 import su.plo.voice.discs.command.subcommand.BurnCommand
 import su.plo.voice.discs.command.subcommand.CancelCommand
@@ -41,6 +42,9 @@ import su.plo.voice.discs.command.subcommand.OauthCommand
 import su.plo.voice.discs.crafting.BurnableDiscCraft
 import su.plo.voice.discs.crafting.BurnableHornCraft
 import su.plo.voice.discs.event.ForbidGrindstoneListener
+import su.plo.voice.discs.event.JukeboxSettingsListener
+import su.plo.voice.discs.event.JukeboxBassLamps
+import su.plo.voice.discs.event.JukeboxVisualizer
 import su.plo.voice.discs.event.JukeboxProgressDisplay
 import su.plo.voice.discs.event.JukeboxEventListener
 import su.plo.voice.discs.screen.ScreenCommand
@@ -68,6 +72,10 @@ class DiscsPlugin : JavaPlugin(), Listener {
     private val addonName = "discs"
 
     private val voiceServer: PlasmoVoiceServer by injectPlasmoVoice()
+    private var jukeboxSettings: JukeboxSettingsListener? = null
+    private var bassLamps: JukeboxBassLamps? = null
+    private var visualizer: JukeboxVisualizer? = null
+    private var visualizerEditor: VisualizerCommand? = null
     private var progressDisplay: JukeboxProgressDisplay? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var sourceLine: ServerSourceLine
@@ -233,19 +241,41 @@ class DiscsPlugin : JavaPlugin(), Listener {
             it.start()
         }
         progressDisplay = progressDisplayInstance
+        val visualizerInstance = JukeboxVisualizer(jukeboxEventListener).also {
+            server.pluginManager.registerEvents(it, this)
+            it.start()
+        }
+        visualizer = visualizerInstance
+        val bassLampsInstance = JukeboxBassLamps(jukeboxEventListener).also {
+            server.pluginManager.registerEvents(it, this)
+            it.start()
+        }
+        bassLamps = bassLampsInstance
 
         KOIN_INSTANCE.loadModules(listOf(module {
             single<ScreenManager> { screenManagerInstance }
             single<JukeboxProgressDisplay> { progressDisplayInstance }
+            single<JukeboxVisualizer> { visualizerInstance }
+            single<JukeboxBassLamps> { bassLampsInstance }
         }))
         server.pluginManager.registerEvents(ScreenEventListener(), this)
 
         val playlistCommand = PlaylistCommand(jukeboxEventListener)
         val controlCommand = ControlCommand(jukeboxEventListener, playlistCommand)
         val hologramCommand = HologramCommand(jukeboxEventListener, controlCommand)
+        val visualizerCommand = VisualizerCommand(visualizerInstance).also {
+            visualizerEditor = it
+            server.pluginManager.registerEvents(it, this)
+            it.start()
+        }
         server.pluginManager.registerEvents(controlCommand, this)
         server.pluginManager.registerEvents(playlistCommand, this)
         server.pluginManager.registerEvents(jukeboxEventListener, this)
+        jukeboxSettings = JukeboxSettingsListener(jukeboxEventListener, playlistCommand, visualizerInstance,
+            progressDisplayInstance, bassLampsInstance, screenManagerInstance).also {
+            server.pluginManager.registerEvents(it, this)
+            it.start()
+        }
 
         if (Bukkit.getServer().getMinecraftVersionInt() >= 11904) {
             Bukkit.getServer().pluginManager.registerEvents(jukeboxEventListener.HopperEventListener(), this)
@@ -263,6 +293,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
             .addSubCommand { playlistCommand }
             .addSubCommand { controlCommand }
             .addSubCommand { hologramCommand }
+            .addSubCommand { visualizerCommand }
             .addSubCommand(::EraseCommand)
             .addSubCommand(::SearchCommand)
             .addSubCommand(::ScreenCommand)
@@ -318,6 +349,10 @@ class DiscsPlugin : JavaPlugin(), Listener {
     }
 
     override fun onDisable() {
+        visualizerEditor?.shutdown()
+        jukeboxSettings?.shutdown()
+        bassLamps?.shutdown()
+        visualizer?.shutdown()
         progressDisplay?.shutdown()
         screenManager?.shutdown()
         runBlocking {

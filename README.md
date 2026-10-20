@@ -43,14 +43,15 @@ Chest queues:
 - Place a chest (single or double) directly above a jukebox and put music discs inside. Sneak-right-click the chest to open it.
 - Playlist burning skips non-disc items, stacks, and discs that fail the configured burnable-tag requirement. One disc receives one track; extra tracks are left unburned when discs run out. Existing burned discs are overwritten.
 - Right-click the chest to play all its burned discs in slot order, including any existing burned discs. Discs remain in the chest and are never consumed or moved into the jukebox.
-- Tracks crossfade over three seconds by default. Open Crossfade settings from the jukebox dialog and use its -1s/+1s buttons to adjust it from 0–30 seconds, or Enable/Disable crossfade to toggle it. The dialog shows the current setting. Changes apply to upcoming transitions in that queue; an ongoing fade finishes at its original duration. Each new queue starts at three seconds. Live streams use normal transitions. Pause and volume affect both tracks during a fade; skipping or stopping cancels the transition. Network loading delays can shorten the overlap.
-- Playback uses a snapshot of the discs when the queue starts. Chest edits take effect on the next queue. The queue plays once; click the chest again to replay it.
+- Tracks crossfade over three seconds by default. Open Crossfade settings from the jukebox dialog and use its -1s/+1s buttons to adjust it from 0–30 seconds, or Enable/Disable crossfade to toggle it. The dialog shows the current setting. Changes apply to upcoming transitions in that queue; an ongoing fade finishes at its original duration. New jukeboxes default to three seconds; subsequent queues reuse the jukebox’s chosen crossfade setting. Live streams use normal transitions. Pause and volume affect both tracks during a fade; skipping or stopping cancels the transition. Network loading delays can shorten the overlap.
+- The active queue follows chest contents in slot order, including hopper transfers, updating about every quarter second. Added discs join the queue, removed discs leave it, and moving discs changes their order. The current song keeps playing; removing its disc lets it finish before continuing from that position. Refresh an open jukebox dialog to see updated queue buttons. The queue plays once; click the chest again to replay it.
+- If a song cannot be resolved or its audio stream fails/stalls, playback reports the error, removes the failed disc’s custom audio, and skips to the next queued disc. Audio lookup and startup time out after 30 seconds rather than loading indefinitely. Ordinary pauses and manual stops do not erase discs.
 - Right-click the jukebox to open playback controls; choose Stop playback to stop. Breaking the chest or jukebox, unloading the jukebox chunk, or restarting the server stops the queue. Queues do not resume automatically.
 - Normal chest playback needs only `pv.addon.discs.play`. Protection plugins can deny chest interactions to prevent burning and playback.
 
 `/disc search <query>` – Search tracks on YouTube.
 
-`/disc screen create [name]` – Start interactive screen creation. Click two diagonally opposite corner item frames on a wall to define the screen grid, then click a jukebox to link it.
+`/disc screen create [name]` – Start interactive screen creation. Click two diagonally opposite corner item frames on a wall to define the screen grid (click the same frame twice for 1x1), then click a jukebox to link it.
 
 `/disc screen list` – View all registered item frame screens and their linked jukeboxes.
 
@@ -74,8 +75,8 @@ Chest queues:
 
 Music video screens:
 
-- Form a rectangular wall grid of item frames (e.g. 2x2, 3x2, 4x3) and run `/disc screen create [name]`.
-- Right-click the first corner item frame, then right-click the opposite corner item frame. The plugin automatically detects the grid dimensions, facing direction, and orders the tiles.
+- Form a rectangular wall grid of item frames (e.g. 1x1, 2x2, 3x2, 4x3) and run `/disc screen create [name]`.
+- Right-click the first corner item frame, then right-click the opposite corner item frame. For a 1x1 screen, click the same frame twice, pausing briefly between clicks. The plugin automatically detects the grid dimensions, facing direction, and orders the tiles. Item frames and glow item frames can be placed directly on a jukebox, including during playback.
 - Right-click a nearby jukebox to link the screen to it.
 - Whenever a custom music disc or chest queue track plays in that jukebox, the music video streams to the item frames in real time with aspect ratio preservation and black letterboxing.
 - Pausing, resuming, or seeking using the jukebox controls automatically keeps the music video in sync.
@@ -216,3 +217,38 @@ For detailed diagnostics, enable `debug = true` in `discs.toml`, run `/disc relo
 ### Seeking linked video
 
 Open **Seek** in the playback dialog to jump backward or forward by 15 seconds, 30 seconds, 1 minute, or 5 minutes. The dialog stays open for repeated adjustments and has a Back button. Audio and the linked video receive the same position, clamped to the track's bounds. Static artwork is unchanged; live/unseekable tracks do not offer seeking. Video restarts its FFmpeg stream at the selected position, so network video can take time to catch up.
+
+### Block-display visualizer
+
+Open **Visualizer settings** in the jukebox controls and choose **Enable visualizer** to show sixteen colored frequency bars above the jukebox. The bars scale vertically with client interpolation, independently of map screens, at up to twenty updates per second. Choose **Disable visualizer** to remove them. The setting carries across queued tracks and is included in saved jukebox settings. The settings dialog moves the bars north/south/east/west/up/down in quarter-block steps and adjusts width and height independently in 0.25× steps (0.25×–4×). Position offsets are limited to ±16 blocks. Reset restores the default position and size. Changes appear live and are retained in saved jukebox settings.
+
+Audio analysis uses one voice backend's PCM samples without altering the audio. Analysis stops when nobody is within 32 blocks, and paused playback lets bars settle. Enabling analysis can require decoding audio that would otherwise pass through as Opus. Bars are removed on playback end, chunk unload, or plugin shutdown. Requires Minecraft 1.19.4 or newer. CPU and packet costs should be profiled with your expected number of simultaneous jukeboxes.
+
+#### Multiple visualizers and speaker drivers
+
+The Visualizer settings dialog supports up to eight independent visualizers per jukebox. Add **Frequency bars** (16 entities) or **Speaker driver** (one gray square that expands and pushes outward on bass beats). New visualizers start enabled. Select a visualizer by its numbered button before moving, resizing, enabling/disabling, changing its type, or removing it. Each instance can face north, south, east, or west. Position offsets are world directions; facing rotates the visualizer around its own base. Settings are retained in saved jukebox settings. All instances share the same audio analysis; additional instances add entity-update traffic.
+
+#### Linked bass lamps
+
+Place a normal redstone lamp, open the jukebox controls, choose **Link bass lamp**, then right-click the lamp within two minutes. The lamp must be within 32 blocks of that jukebox. Multiple lamps can link to one jukebox; each lamp has one source. To unlink, choose **Unlink bass lamp** and click the lamp. Linking respects cancelled block interactions and requires the playback control/play permissions.
+
+These are ordinary player-placed blocks with actual world lighting. Bass turns them on; pausing, stopping, unloading, and plugin shutdown reset them while respecting normal redstone power. The blocks stay in place and retain normal drops. Breaking the lamp or jukebox removes its link. Links are saved in `bass_lamp_links.json` across restarts. Lamps use the shared audio analysis independently of the visualizer settings menu.
+
+### Carrying jukebox settings
+
+Mining a jukebox saves its volume, crossfade duration/toggle, hologram offset, visualizer instances (type, facing, size, position and enable state), and physical links on the dropped jukebox item. Its lore reads **Saved jukebox settings**. Place that item to restore the setup. Ordinary disc drops are unchanged; playback and queue contents do not travel with the jukebox.
+
+Creative-mode breaks also drop a jukebox carrying its saved settings. Placed jukeboxes also save settings on chunk unload and plugin shutdown and restore them when loaded. Breaking clears the old location's settings. Lamp links reconnect only to available lamps in the same world within 32 blocks, and screen links reconnect only when the original screen exists and has not been linked elsewhere. Lamps and screen frames themselves stay where they were built. Cancelled breaks and placements do not transfer settings.
+
+### Editing visualizers in the world
+
+Hold a **stick**, look at a jukebox (or its chest) within six blocks, and run `/disc visualizer edit`. The selected visualizer glows, and visualizers remain visible as previews even when music is stopped or they are disabled. Editing requires the existing playback and control permissions. One player can edit a jukebox at a time.
+
+- **Right-click** to grab/release the selected visualizer; look around or walk to move it. Scroll while grabbed to bring it closer or farther away. Sneak while moving for quarter-block steps.
+- **Left-click** to select a visualizer you are looking at. Sneak-left-click cycles through them.
+- **Scroll** while released to resize both dimensions. **Sneak-scroll** changes width independently.
+- **Swap-hand key (F by default)** rotates the selected visualizer 90 degrees.
+- `/disc visualizer add bars|speaker`, `remove`, `next`, `type`, `toggle`, `reset`, and `rotate` manage the selected visualizer without opening a menu.
+- **Sneak-right-click** or `/disc visualizer done` finishes and keeps your changes. Selecting another item, leaving the area/world, losing permission, disconnecting, or five minutes of inactivity also ends editing. Previewing a disabled visualizer does not enable it; use `toggle` to change its playback visibility.
+
+The existing position and size limits still apply, and edits travel with saved jukebox settings.
