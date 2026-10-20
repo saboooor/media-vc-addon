@@ -20,6 +20,7 @@ import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.imageio.ImageIO
 
@@ -35,7 +36,8 @@ class VideoPlayer(
     private val sourceAuthorization: String? = null,
     ditherStrength: Int = 12,
     private val companionRgb: Boolean = true,
-    private val companionQuality: Int = 85
+    private val companionQuality: Int = 85,
+    private val playbackPositionMs: (() -> Long?)? = null
 ) {
     @Volatile
     private var process: Process? = null
@@ -46,6 +48,12 @@ class VideoPlayer(
 
     @Volatile
     var isPaused = false
+        set(value) {
+            if (field != value && isPlaying) {
+                logger.info("Video on screen '${screen.name}' ${if (value) "paused" else "resumed"}")
+            }
+            field = value
+        }
 
     @Volatile
     private var isCurrentlyImage = false
@@ -63,9 +71,13 @@ class VideoPlayer(
     private val tileBuffers = Array(rows) { Array(cols) { ByteArray(16384) } }
 
     private val dither = if (ditherStrength > 0) OrderedMapDither(ditherStrength) else null
-    private val rgbEncoders = Array(rows) { arrayOfNulls<CompanionTileEncoder>(cols) }
+    private val rgbEncoder = CompanionFrameEncoder()
     private val tileDeltas = Array(rows) { Array(cols) { MapTileDelta() } }
     private var previousViewers: Map<UUID, Player> = emptyMap()
+    private val mapViewers = ScreenMapViewers(screen.mapIds.flatten())
+
+    internal fun isDisplayingMap(viewerId: UUID, mapId: Int): Boolean =
+        isPlaying && mapViewers.owns(viewerId, mapId)
 
     fun start(startPositionMs: Long = 0L) {
         if (stopped.get()) return
@@ -86,7 +98,21 @@ class VideoPlayer(
                 isCurrentlyImage = false
                 val next = coroutineScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
                     try {
-                        runPlayback(positionMs.coerceAtLeast(0))
+                        var resumePositionMs = positionMs.coerceAtLeast(0)
+                        var recoveries = 0
+                        while (currentCoroutineContext().isActive && !stopped.get()) {
+                            try {
+                                runPlayback(resumePositionMs)
+                                break
+                            } catch (e: StalledPlayback) {
+                                if (++recoveries > 3) {
+                                    logger.error("Video for screen '${screen.name}' stalled repeatedly; stopping playback")
+                                    break
+                                }
+                                resumePositionMs = playbackPositionMs?.invoke()?.coerceAtLeast(0) ?: e.positionMs
+                                logger.warn("Restarting stalled video for screen '${screen.name}' at ${resumePositionMs}ms (attempt $recoveries/3)")
+                            }
+                        }
                     } finally {
                         if (playbackJob === currentCoroutineContext()[Job]) {
                             playbackJob = null
@@ -173,7 +199,7 @@ class VideoPlayer(
         command.add(ffmpegPath)
         command.add("-hide_banner")
         command.add("-nostats")
-        command.add("-re")
+        command.addAll(listOf("-progress", "pipe:2"))
         if (startPositionMs > 0) {
             val sec = startPositionMs / 1000.0
             command.add("-ss")
@@ -183,24 +209,36 @@ class VideoPlayer(
             command.add("-i")
             command.add("pipe:0")
         } else {
+            if (seekProxy != null) {
+                command.addAll(proxiedInputOptions())
+            }
             command.add("-i")
             command.add(seekProxy?.url ?: sourceUrl)
         }
+        command.addAll(listOf("-map", "0:v:0", "-an", "-sn", "-dn"))
         command.add("-vf")
         // Drop surplus source frames before scaling and padding.
-        command.add("fps=${fps},scale=${totalWidth}:${totalHeight}:force_original_aspect_ratio=decrease,pad=${totalWidth}:${totalHeight}:(ow-iw)/2:(oh-ih)/2:black")
+        command.add(videoFilter(fps, totalWidth, totalHeight))
+        // Raw RGB needs no frame-threaded encoder queue; flush each frame to the renderer.
+        command.addAll(listOf("-threads:v", "1", "-flush_packets", "1"))
         command.add("-f")
         command.add("rawvideo")
         command.add("-pix_fmt")
         command.add("rgb24")
         command.add("pipe:1")
 
-        logger.info("Starting FFmpeg video stream for screen '${screen.name}' at $fps FPS using $ffmpegPath")
+        logger.info("Starting FFmpeg video stream for screen '${screen.name}' at up to $fps FPS using $ffmpegPath")
 
         var proc: Process? = null
         val stderrLines = ConcurrentLinkedQueue<String>()
         var framesRendered = 0L
         var stdinJob: Job? = null
+        var watchdogJob: Job? = null
+        val readMonitor = VideoReadMonitor(TimeUnit.SECONDS.toNanos(15))
+        val renderMonitor = VideoReadMonitor(TimeUnit.SECONDS.toNanos(15))
+        val renderWarning = AtomicBoolean(false)
+        val stalled = AtomicBoolean(false)
+        val outputPositionUs = AtomicLong(0L)
 
         try {
             proc = ProcessBuilder(command).start()
@@ -229,14 +267,40 @@ class VideoPlayer(
                 try {
                     proc.errorStream.bufferedReader().useLines { lines ->
                         lines.forEach { line ->
-                            if (stderrLines.size >= 30) stderrLines.poll()
-                            stderrLines.offer(line)
+                            if (line.startsWith("out_time_us=")) {
+                                line.substringAfter('=').toLongOrNull()?.let { outputPositionUs.set(it) }
+                            }
+                            // Progress is machine-readable and must not displace decoder diagnostics.
+                            if (!progressLine.matches(line)) {
+                                if (stderrLines.size >= 30) stderrLines.poll()
+                                stderrLines.offer(line)
+                            }
                         }
                     }
                 } catch (_: Exception) {}
             }
 
             val input = proc.inputStream
+            watchdogJob = coroutineScope.launch(Dispatchers.IO) {
+                while (isActive && proc.isAlive && !stopped.get()) {
+                    delay(1000L)
+                    if (renderMonitor.isStalled(System.nanoTime(), false) &&
+                        renderWarning.compareAndSet(false, true)) {
+                        logger.warn("Video frame rendering or packet delivery has blocked for 15 seconds " +
+                            "on screen '${screen.name}'; frame delivery has not completed")
+                    }
+                    if (readMonitor.isStalled(System.nanoTime(), isPaused) &&
+                        stalled.compareAndSet(false, true)) {
+                        val details = stderrLines.joinToString("\n")
+                            .replace(sourceUrl, describeSource(sourceUrl))
+                        logger.warn("No video frame received for 15 seconds on screen '${screen.name}' " +
+                            "(FFmpeg alive=${proc.isAlive}, position=${startPositionMs + outputPositionUs.get() / 1000}ms). " +
+                            "Restarting decoder. Recent FFmpeg output:\n$details")
+                        proc.destroyForcibly() // Coroutine cancellation alone cannot unblock InputStream.read.
+                        break
+                    }
+                }
+            }
 
             while (!stopped.get() && currentCoroutineContext().isActive) {
                 if (isPaused) {
@@ -244,16 +308,32 @@ class VideoPlayer(
                     continue
                 }
 
-                val ok = readFully(input, rawFrameBuffer)
+                readMonitor.beginRead(System.nanoTime())
+                val ok = try {
+                    readFully(input, rawFrameBuffer)
+                } finally {
+                    readMonitor.endRead()
+                }
+                if (stalled.get()) throw StalledPlayback(startPositionMs + outputPositionUs.get() / 1000)
                 if (!ok) break // End of stream
 
                 framesRendered++
                 // Process frame and send packets
-                val nearbyPlayers = getNearbyPlayers()
-                sliceAndSend(rawFrameBuffer, nearbyPlayers)
+                renderWarning.set(false)
+                renderMonitor.beginRead(System.nanoTime())
+                try {
+                    val nearbyPlayers = getNearbyPlayers()
+                    sliceAndSend(rawFrameBuffer, nearbyPlayers)
+                } finally {
+                    renderMonitor.endRead()
+                }
             }
 
             currentCoroutineContext().ensureActive()
+            if (!stopped.get() && framesRendered > 0L) {
+                logger.info("Video stream ended on screen '${screen.name}' after $framesRendered frames " +
+                    "at ${startPositionMs + outputPositionUs.get() / 1000}ms")
+            }
             if (framesRendered == 0L && !stopped.get()) {
                 withTimeoutOrNull(2000L) {
                     stderrJob.join()
@@ -281,6 +361,7 @@ class VideoPlayer(
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             if (!currentCoroutineContext().isActive || stopped.get()) return
+            if (stalled.get()) throw StalledPlayback(startPositionMs + outputPositionUs.get() / 1000)
             if (e is java.io.IOException && (e.message?.contains("Cannot run program") == true || e.message?.contains("error: 2") == true || e.message?.contains("error: 13") == true)) {
                 ffmpegCache[ffmpegPath] = false
                 if (!warnedNoFfmpeg.getAndSet(true)) {
@@ -299,25 +380,28 @@ class VideoPlayer(
                 logger.error("Error during video playback for screen '${screen.name}': ${e.message}", e)
             }
         } finally {
+            watchdogJob?.cancel()
             stdinJob?.cancel()
-            seekProxy?.close()
-            try { netStream?.close() } catch (_: Exception) {}
-            try { httpConn?.disconnect() } catch (_: Exception) {}
             val p = proc
             if (p != null) {
                 // Inspect the exit BEFORE cleanup kills a still-running process. A seek cancels
                 // this job before terminating FFmpeg and must not look like an external failure.
                 val exit = if (!p.isAlive) runCatching { p.exitValue() }.getOrNull() else null
                 if (p.isAlive) p.destroyForcibly()
-                if (shouldReportExit(exit, !currentCoroutineContext().isActive, stopped.get()) &&
+                if (!stalled.get() && shouldReportExit(exit, !currentCoroutineContext().isActive, stopped.get()) &&
                     framesRendered > 0L && stderrLines.isNotEmpty()) {
                     val details = stderrLines.joinToString("\n").replace(sourceUrl, describeSource(sourceUrl))
                     logger.warn("FFmpeg exited with code $exit for screen '${screen.name}'. Log:\n$details")
                 }
             }
+            seekProxy?.close()
+            try { netStream?.close() } catch (_: Exception) {}
+            try { httpConn?.disconnect() } catch (_: Exception) {}
             if (process === proc) process = null
         }
     }
+
+    private class StalledPlayback(val positionMs: Long) : IOException("Video frame read stalled")
 
     private suspend fun renderImagePlayback(imgUrl: String) {
         val rawFrameBuffer = ByteArray(totalWidth * totalHeight * 3)
@@ -456,6 +540,7 @@ class VideoPlayer(
     @Synchronized
     private fun sliceAndSend(rawFrame: ByteArray, players: List<Player>) {
         if (stopped.get()) return
+        mapViewers.update(players.map { it.uniqueId })
         if (players.isEmpty()) {
             previousViewers = emptyMap()
             return
@@ -463,6 +548,14 @@ class VideoPlayer(
         val newViewers = players.filter { previousViewers[it.uniqueId] !== it }
         val existingViewers = players.filter { previousViewers[it.uniqueId] === it }
         val playerManager = PacketEvents.getAPI().playerManager
+
+        if (companionRgb && players.any(CompanionScreens::capable)) {
+            try {
+                CompanionScreens.frame(screen, rgbEncoder.encode(rawFrame, totalWidth, rows * 128, companionQuality), players)
+            } catch (e: Exception) {
+                logger.debug("RGB screen encoding failed; palette fallback remains available", e)
+            }
+        }
 
         for (r in 0 until rows) {
             val startY = r * 128
@@ -485,15 +578,6 @@ class VideoPlayer(
                     }
                 }
 
-                if (companionRgb && players.any(CompanionScreens::capable)) {
-                    try {
-                        val encoder = rgbEncoders[r][c] ?: CompanionTileEncoder().also { rgbEncoders[r][c] = it }
-                        val jpeg = encoder.encode(rawFrame, totalWidth, startX, startY, companionQuality)
-                        CompanionScreens.frame(mapId, jpeg, players)
-                    } catch (e: Exception) {
-                        logger.debug("RGB tile encoding failed; palette fallback remains available", e)
-                    }
-                }
                 val changed = tileDeltas[r][c].update(tileBuffer)
                 fun send(region: MapTileRegion, viewers: List<Player>) {
                     val packet = WrapperPlayServerMapData(
@@ -516,6 +600,7 @@ class VideoPlayer(
 
     @Synchronized
     fun clearScreen() {
+        mapViewers.update(emptyList())
         // Also release overrides held by clients that have already left viewing range.
         for (row in screen.mapIds) for (mapId in row) CompanionScreens.clear(mapId)
         val players = getNearbyPlayers()
@@ -548,6 +633,23 @@ class VideoPlayer(
     }
 
     companion object {
+        internal fun proxiedInputOptions(): List<String> = listOf(
+            // Buffer compressed packets independently of timestamp-paced frame delivery.
+            "-thread_queue_size", "256",
+            // Skip nearby MKV data by reading ahead rather than opening another HTTP range.
+            "-short_seek_size", "1048576",
+            "-reconnect", "1",
+            "-reconnect_on_network_error", "1",
+            "-reconnect_delay_max", "5"
+        )
+
+        internal fun videoFilter(fps: Int, width: Int, height: Int): String =
+            "fps='if(gt(source_fps,0),min(source_fps,$fps),$fps)'," +
+                "scale=$width:$height:force_original_aspect_ratio=decrease," +
+                "pad=$width:$height:(ow-iw)/2:(oh-ih)/2:black," +
+                // Pace decoded frames by their timestamps instead of throttling MKV input packets.
+                "realtime"
+
         internal fun shouldReportExit(exit: Int?, cancelled: Boolean, stopped: Boolean): Boolean =
             exit != null && exit != 0 && !cancelled && !stopped
 
@@ -556,6 +658,7 @@ class VideoPlayer(
             if (uri.host != null) "${uri.scheme}://${uri.host}${uri.path.orEmpty()}" else File(url).name
         }.getOrDefault("video source")
 
+        private val progressLine = Regex("[a-zA-Z0-9_]+=.*")
         private val logger = org.slf4j.LoggerFactory.getLogger("VideoPlayer")
         private val warnedNoFfmpeg = AtomicBoolean(false)
         private val ffmpegCache = ConcurrentHashMap<String, Boolean>()

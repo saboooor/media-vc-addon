@@ -83,6 +83,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
     private lateinit var sourceLine: ServerSourceLine
     private var svcPlugin: SvcDiscsPlugin? = null
     private var screenManager: ScreenManager? = null
+    private var screenMapPacketListener: com.github.retrooper.packetevents.event.PacketListenerCommon? = null
 
     private val pvServer: PlasmoVoiceServer?
         get() = if (isPvAvailable()) {
@@ -341,6 +342,10 @@ class DiscsPlugin : JavaPlugin(), Listener {
             }
         }
 
+        screenMapPacketListener = PacketEvents.getAPI().eventManager.registerListener(
+            su.plo.voice.discs.screen.ScreenMapPacketListener(screenManagerInstance),
+            PacketListenerPriority.NORMAL
+        )
         PacketEvents.getAPI().eventManager.registerListener(
             CancelJukeboxPlayEvent(jukeboxEventListener),
             PacketListenerPriority.NORMAL
@@ -358,6 +363,8 @@ class DiscsPlugin : JavaPlugin(), Listener {
     }
 
     override fun onDisable() {
+        screenMapPacketListener?.let { PacketEvents.getAPI().eventManager.unregisterListener(it) }
+        screenMapPacketListener = null
         visualizerEditor?.shutdown()
         jukeboxSettings?.shutdown()
         bassLamps?.shutdown()

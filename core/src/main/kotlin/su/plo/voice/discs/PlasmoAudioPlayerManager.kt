@@ -145,13 +145,15 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         val trackTitle = pvSource?.sourceInfo?.name ?: track.info.title
         debugLogger.log("Starting track \"$trackTitle\" on pvSource=$pvSource svcChannel=$svcChannel")
 
+        fun playbackFinished(): Boolean = controls?.failure != null ||
+            player.playingTrack?.let { it.state == AudioTrackState.FINISHED } != false
+
         if (pvSource != null) {
             val enc = encryption
             val frameProvider = object : AudioFrameProvider {
                 override fun provide20ms(): AudioFrameResult =
                     if (
-                        controls?.failure != null || track.state == AudioTrackState.FINISHED ||
-                        (track.state == AudioTrackState.INACTIVE && track.position > 0)
+                        playbackFinished()
                     ) {
                         AudioFrameResult.Finished
                     } else {
@@ -181,8 +183,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                     var nextTime = System.nanoTime()
                     while (isActive) {
                         if (
-                            controls?.failure != null || track.state == AudioTrackState.FINISHED ||
-                            (track.state == AudioTrackState.INACTIVE && track.position > 0)
+                            playbackFinished()
                         ) {
                             break
                         }

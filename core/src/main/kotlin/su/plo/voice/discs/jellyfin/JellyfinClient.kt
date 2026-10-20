@@ -19,7 +19,7 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
         override fun toString() = "Jellyfin session"
     }
     data class Media(val id: String, val title: String, val artist: String, val album: String, val durationMs: Long, val type: String = "Audio") {
-        val label get() = if (artist.isBlank()) title else "$artist - $title"
+        val label get() = su.plo.voice.discs.utils.extend.formatTrackDisplay(title, artist)
     }
     data class Page(val items: List<Media>, val total: Int)
 
@@ -50,10 +50,11 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
 
     fun logout(session: Session) { request(session.baseUrl, "Sessions/Logout", session.deviceId, session.token, JsonObject()) }
 
-    fun streamUrl(session: Session, itemId: String, type: String = "Audio"): String =
+    fun streamUrl(session: Session, itemId: String, type: String = "Audio", startPositionMs: Long = 0): String =
         session.baseUrl + "Audio/${mediaId(itemId)}/stream" +
             if (type in listOf("Audio", "AudioBook")) "?static=true"
-            else "?container=mp3&audioCodec=mp3&audioBitRate=192000&audioChannels=2&static=false"
+            else "?container=mp3&audioCodec=mp3&audioBitRate=192000&audioChannels=2&static=false" +
+                "&startTimeTicks=${startPositionMs.coerceIn(0, Long.MAX_VALUE / 10_000) * 10_000}"
 
     fun videoStreamUrl(session: Session, itemId: String): String =
         session.baseUrl + "Videos/${mediaId(itemId)}/stream?static=true"

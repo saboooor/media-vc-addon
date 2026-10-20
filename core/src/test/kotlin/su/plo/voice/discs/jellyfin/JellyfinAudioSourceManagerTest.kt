@@ -62,6 +62,29 @@ class JellyfinAudioSourceManagerTest {
             assertEquals(120_000L, clone.duration)
             clone.position = 50_000
             assertEquals(0L, clone.position)
+            val controls = su.plo.voice.discs.PlaybackControls(initialVolume = 65)
+            val player = playerManager.createPlayer()
+            try {
+                player.playTrack(video)
+                controls.attach(player)
+                assertTrue(controls.seekable)
+                controls.togglePause()
+                var videoSeek: Long? = null
+                controls.onSeek = { videoSeek = it }
+                controls.seekTo(50_000)
+                assertEquals(50_000L, controls.position)
+                assertEquals(50_000L, videoSeek)
+                assertTrue(player.isPaused)
+                assertEquals(65, player.volume)
+                assertFalse(player.playingTrack.isSeekable) // Native MP3 byte seeking stays disabled.
+                assertEquals(50_000L, player.playingTrack.makeClone().position)
+                val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
+                while (requestedPath?.contains("startTimeTicks=500000000") != true && System.nanoTime() < deadline) {
+                    Thread.sleep(20)
+                }
+                assertTrue(requestedPath!!.contains("startTimeTicks=500000000"))
+                assertTrue(authorization!!.contains("Token=\"private-token\""))
+            } finally { controls.detach(player); player.destroy() }
             assertNull(source.loadItem(playerManager, AudioReference("https://example.com/", null)))
             library.disconnect(connection.owner)
             assertThrows(JellyfinException::class.java) { source.loadItem(playerManager, AudioReference(ref, null)) }

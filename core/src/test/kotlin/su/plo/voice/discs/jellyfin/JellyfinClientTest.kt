@@ -6,6 +6,10 @@ import org.junit.jupiter.api.Test
 import java.net.InetSocketAddress
 
 class JellyfinClientTest {
+    @Test fun `unknown artists do not appear in Jellyfin labels`() {
+        assertEquals("Movie", JellyfinClient.Media("id", "Movie", "Unknown Artist", "", 1000).label)
+        assertEquals("Artist - Song", JellyfinClient.Media("id", "Song", "Artist", "", 1000).label)
+    }
     @Test fun `server URL preserves reverse proxy paths and rejects embedded credentials`() {
         assertEquals("https://example.com/jellyfin/", JellyfinClient.normalizeUrl("https://example.com/jellyfin"))
         for (url in listOf("file:///tmp/media", "ftp://example.com", "https://user:pass@example.com", "https://example.com?api_key=secret", "https://example.com/#token"))
@@ -44,6 +48,7 @@ class JellyfinClientTest {
                 client.videoStreamUrl(session, page.items.single().id))
             assertTrue(videoUrl.contains("container=mp3"))
             assertTrue(videoUrl.contains("static=false"))
+            assertTrue(client.streamUrl(session, page.items.single().id, "Movie", 50_000).contains("startTimeTicks=500000000"))
             assertFalse(videoUrl.contains("test-token"))
             assertTrue(client.streamUrl(session, page.items.single().id).endsWith("static=true"))
             assertTrue(requests[1].first.contains("searchTerm=artist+%26+song"))

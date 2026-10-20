@@ -1,0 +1,41 @@
+package su.plo.voice.discs.screen
+
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Test
+import java.io.ByteArrayInputStream
+import javax.imageio.ImageIO
+import kotlin.random.Random
+
+class CompanionFrameEncoderTest {
+    @Test fun `one JPEG contains the entire multi-frame display`() {
+        val source = ByteArray(256 * 256 * 3)
+        for (y in 0 until 256) for (x in 0 until 256) {
+            val i = (y * 256 + x) * 3
+            source[i] = if (x < 128) 201.toByte() else 19
+            source[i + 1] = if (y < 128) 73 else 170.toByte()
+            source[i + 2] = 121
+        }
+        val encoder = CompanionFrameEncoder()
+        val encoded = encoder.encode(source, 256, 256, 85)
+        val decoded = ImageIO.read(ByteArrayInputStream(encoded))
+        assertEquals(256, decoded.width)
+        assertEquals(256, decoded.height)
+        for (y in listOf(64, 192)) for (x in listOf(64, 192)) {
+            val color = decoded.getRGB(x, y)
+            assertTrue(kotlin.math.abs(((color shr 16) and 255) - if (x < 128) 201 else 19) <= 3)
+            assertTrue(kotlin.math.abs(((color shr 8) and 255) - if (y < 128) 73 else 170) <= 3)
+        }
+        assertSame(encoded, encoder.encode(source, 256, 256, 85))
+        source[(64 * 256 + 192) * 3] = 255.toByte()
+        assertNotSame(encoded, encoder.encode(source, 256, 256, 85))
+    }
+
+    @Test fun `complete JPEG may exceed one plugin message`() {
+        val source = Random(23).nextBytes(512 * 256 * 3)
+        val encoded = CompanionFrameEncoder().encode(source, 512, 256, 95)
+        assertTrue(encoded.size > 32764)
+        val decoded = ImageIO.read(ByteArrayInputStream(encoded))
+        assertEquals(512, decoded.width)
+        assertEquals(256, decoded.height)
+    }
+}

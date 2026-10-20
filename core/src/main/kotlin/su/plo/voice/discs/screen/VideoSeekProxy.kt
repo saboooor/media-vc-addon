@@ -73,13 +73,20 @@ internal class VideoSeekProxy(private val source: String, private val userAgent:
                 return
             }
             exchange.sendResponseHeaders(502, -1)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (e is java.net.SocketTimeoutException) {
+                logger.warn("Video upstream timed out for ${VideoPlayer.describeSource(source)}; FFmpeg may reconnect")
+            }
             // FFmpeg closes outstanding range requests when it seeks again or playback stops.
             runCatching { exchange.sendResponseHeaders(502, -1) }
         } finally {
             connection?.let { connections.remove(it); it.disconnect() }
             exchange.close()
         }
+    }
+
+    companion object {
+        private val logger = org.slf4j.LoggerFactory.getLogger("VideoSeekProxy")
     }
 
     override fun close() {

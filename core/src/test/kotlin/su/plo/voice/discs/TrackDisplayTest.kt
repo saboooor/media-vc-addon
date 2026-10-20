@@ -21,6 +21,15 @@ class TrackDisplayTest {
     }
 
     @Test
+    fun `unknown artist placeholders are omitted`() {
+        for (artist in listOf("Unknown Artist", " unknown artist ", "UNKNOWN ARTIST", "Unknown")) {
+            assertEquals("", artist.cleanArtistName())
+            assertEquals("Movie", formatTrackDisplay("Movie", artist))
+        }
+        assertEquals("Unknown Artist Collective - Movie", formatTrackDisplay("Movie", "Unknown Artist Collective"))
+    }
+
+    @Test
     fun `containsArtist detects artist in title with word boundaries`() {
         assertTrue("Queen - Bohemian Rhapsody".containsArtist("Queen"))
         assertTrue("Bohemian Rhapsody - Queen".containsArtist("Queen"))

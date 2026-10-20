@@ -6,23 +6,25 @@ import javax.imageio.IIOImage
 import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
 
-/** Small independently decodable RGB tiles keep payloads under Bukkit's 32 KiB limit. */
-internal class CompanionTileEncoder {
-    private val pixels = IntArray(128 * 128)
+/** Encodes a complete video display as one JPEG. Transport handles fragmentation. */
+internal class CompanionFrameEncoder {
+    private var pixels = IntArray(0)
     private var cached: ByteArray? = null
-    fun encode(rgb: ByteArray, screenWidth: Int, tileX: Int, tileY: Int, quality: Int): ByteArray {
+    fun encode(rgb: ByteArray, screenWidth: Int, screenHeight: Int, quality: Int): ByteArray {
+        require(screenWidth > 0 && screenHeight > 0 && screenWidth.toLong() * screenHeight <= 256L * 128 * 128)
+        if (pixels.size != screenWidth * screenHeight) { pixels = IntArray(screenWidth * screenHeight); cached = null }
         var changed = cached == null
-        for (y in 0 until 128) for (x in 0 until 128) {
-            val offset = ((tileY + y) * screenWidth + tileX + x) * 3
+        for (y in 0 until screenHeight) for (x in 0 until screenWidth) {
+            val offset = (y * screenWidth + x) * 3
             val color = ((rgb[offset].toInt() and 255) shl 16) or
                 ((rgb[offset + 1].toInt() and 255) shl 8) or (rgb[offset + 2].toInt() and 255)
-            val index = y * 128 + x
+            val index = y * screenWidth + x
             if (pixels[index] != color) changed = true
             pixels[index] = color
         }
         if (!changed) return cached!!
-        val image = BufferedImage(128, 128, BufferedImage.TYPE_INT_RGB)
-        image.setRGB(0, 0, 128, 128, pixels, 0, 128)
+        val image = BufferedImage(screenWidth, screenHeight, BufferedImage.TYPE_INT_RGB)
+        image.setRGB(0, 0, screenWidth, screenHeight, pixels, 0, screenWidth)
         val writer = ImageIO.getImageWritersByFormatName("jpeg").next()
         val bytes = ByteArrayOutputStream()
         try {
@@ -34,6 +36,6 @@ internal class CompanionTileEncoder {
                 writer.write(null, IIOImage(image, null, null), parameters)
             }
         } finally { writer.dispose() }
-        return bytes.toByteArray().also { require(it.size <= 32760); cached = it }
+        return bytes.toByteArray().also { require(it.size <= 4 * 1024 * 1024); cached = it }
     }
 }

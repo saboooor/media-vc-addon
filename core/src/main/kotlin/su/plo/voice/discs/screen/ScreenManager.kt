@@ -230,6 +230,9 @@ class ScreenManager : PluginKoinComponent {
 
     fun getAllScreens(): Collection<Screen> = screens.values
 
+    fun isVideoMapFor(viewerId: UUID, mapId: Int): Boolean =
+        activePlayers.values.any { it.isDisplayingMap(viewerId, mapId) }
+
     fun getScreenForJukebox(block: Block): Screen? {
         return screens.values.firstOrNull { it.isLinkedTo(block) }
     }
@@ -271,10 +274,11 @@ class ScreenManager : PluginKoinComponent {
         block: Block,
         identifier: String,
         artworkUrl: String? = null,
-        isYouTubeMusic: Boolean = false
+        isYouTubeMusic: Boolean = false,
+        playbackPositionMs: (() -> Long?)? = null
     ) {
         val screen = getScreenForJukebox(block) ?: return
-        playVideo(screen, identifier, 0L, artworkUrl, isYouTubeMusic)
+        playVideo(screen, identifier, 0L, artworkUrl, isYouTubeMusic, playbackPositionMs)
     }
 
     fun onJukeboxStop(block: Block) {
@@ -300,7 +304,8 @@ class ScreenManager : PluginKoinComponent {
         identifier: String,
         startPositionMs: Long = 0L,
         artworkUrl: String? = null,
-        isYouTubeMusic: Boolean = false
+        isYouTubeMusic: Boolean = false,
+        playbackPositionMs: (() -> Long?)? = null
     ) {
         val lower = screen.name.lowercase(Locale.ROOT)
         val request = synchronized(playbackLock) {
@@ -349,6 +354,7 @@ class ScreenManager : PluginKoinComponent {
                 screen = screen,
                 sourceUrl = resolvedUrl,
                 sourceAuthorization = sourceAuthorization,
+                playbackPositionMs = playbackPositionMs,
                 companionRgb = config.screen.companionRgb,
                 companionQuality = config.screen.companionQuality,
                 ditherStrength = if (config.screen.dithering) config.screen.ditherStrength.coerceIn(0, 32) else 0,

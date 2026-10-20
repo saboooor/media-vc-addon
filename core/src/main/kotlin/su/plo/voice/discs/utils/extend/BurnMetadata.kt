@@ -57,6 +57,8 @@ fun String.cleanArtistName(): String =
         .replace(Regex("(?i)vevo$"), "")
         .replace(Regex("(?<=\\p{Ll})(?=\\p{Lu})"), " ")
         .trim()
+        .takeUnless { it.equals("unknown artist", ignoreCase = true) || it.equals("unknown", ignoreCase = true) }
+        .orEmpty()
 
 fun String.cleanTrackName(): String =
     replace(Regex("(?i)\\s*-\\s*topic\\b"), "").trim()

@@ -46,7 +46,11 @@ class JellyfinAudioSourceManager(private val library: JellyfinLibrary) : AudioSo
             val track = backend.source.loadItem(manager, AudioReference(url, grant.label)) as? AudioTrack
                 ?: throw JellyfinException("Jellyfin did not return a supported audio file.")
             if ((grant.type ?: "Audio") in listOf("Audio", "AudioBook")) track
-            else JellyfinTranscodedTrack(track as InternalAudioTrack, grant.durationMs)
+            else JellyfinTranscodedTrack(track as InternalAudioTrack, grant.durationMs, { position ->
+                val seekUrl = client.streamUrl(connection.session, grant.mediaId, grant.type ?: "Audio", position)
+                backend.source.loadItem(manager, AudioReference(seekUrl, grant.label)) as? InternalAudioTrack
+                    ?: throw JellyfinException("Jellyfin did not return a supported audio file.")
+            })
         } catch (e: FriendlyException) {
             if (generateSequence<Throwable>(e) { it.cause }.any { it is SocketTimeoutException }) {
                 throw FriendlyException("Jellyfin took too long to start the audio stream. Check the Jellyfin server and its transcoding logs, then try again.",
