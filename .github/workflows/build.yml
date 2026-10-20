@@ -1,0 +1,37 @@
+name: Build artifacts
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Set up JDKs
+        uses: actions/setup-java@v6.0.1
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            16
+            17
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v6.3.0
+      - name: Build and test plugin
+        shell: bash
+        run: |
+          BASE_VERSION=$(sed -n 's/^version=//p' gradle.properties | tr -d '\r')
+          ./gradlew build --no-daemon -Pversion="${BASE_VERSION}+${GITHUB_SHA::7}"
+      - name: Upload plugin JAR
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: vc-addon-discs-${{ github.sha }}
+          path: build/libs/*.jar
+          if-no-files-found: error
+          retention-days: 30
