@@ -237,6 +237,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
 
         loadConfig()
 
+        su.plo.voice.discs.screen.CompanionScreens.start(this)
         val screenManagerInstance = ScreenManager()
         screenManager = screenManagerInstance
 
@@ -363,6 +364,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
         visualizer?.shutdown()
         progressDisplay?.shutdown()
         screenManager?.shutdown()
+        su.plo.voice.discs.screen.CompanionScreens.shutdown()
         runBlocking {
             withTimeoutOrNull(5_000L) { scope.coroutineContext.job.cancelAndJoin() }
         }

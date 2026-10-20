@@ -75,12 +75,15 @@ Chest queues:
 
 Music video screens:
 
+Optional full-color Fabric client: see [`screen-companion`](../screen-companion/README.md). Players without it keep normal item-frame colors.
+
 - Form a rectangular wall grid of item frames (e.g. 1x1, 2x2, 3x2, 4x3) and run `/disc screen create [name]`.
 - Right-click the first corner item frame, then right-click the opposite corner item frame. For a 1x1 screen, click the same frame twice, pausing briefly between clicks. The plugin automatically detects the grid dimensions, facing direction, and orders the tiles. Item frames and glow item frames can be placed directly on a jukebox, including during playback.
 - Right-click a nearby jukebox to link the screen to it.
 - Whenever a custom music disc or chest queue track plays in that jukebox, the music video streams to the item frames in real time with aspect ratio preservation and black letterboxing.
 - Pausing, resuming, or seeking using the jukebox controls automatically keeps the music video in sync.
 - Screens skip unchanged map tiles and send only the bounding rectangle of changed palette pixels in each tile. New and returning nearby viewers receive full tiles first. Fast-moving scenes may still update an entire tile.
+- Screen colors use a 6-bit-per-channel lookup matched against the server's opaque map palette in [Oklab](https://bottosson.github.io/posts/oklab/). The shared table uses 256 KiB and is computed once on first use; per-pixel rendering remains a table lookup. Minecraft's fixed map palette still limits available colors.
 - Stable ordered dithering improves apparent gradients within Minecraft's map palette. In `[screen]` in `discs.toml`, `dithering = true` and `dither_strength = 12` are the defaults. Strength accepts 0–32; use 0 or `dithering = false` for the original sharp palette matching. Higher strengths add texture and can increase changed-region traffic. Settings apply to newly started playback.
 - Item frames belonging to screens are automatically fixed and protected from rotation or removal.
 

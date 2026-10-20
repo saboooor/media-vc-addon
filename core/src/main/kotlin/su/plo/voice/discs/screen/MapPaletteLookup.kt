@@ -3,50 +3,43 @@ package su.plo.voice.discs.screen
 import org.bukkit.map.MapPalette
 import java.util.Arrays
 
-/**
- * High-performance 15-bit RGB to Minecraft Map Color palette lookup table.
- * Precomputes 32,768 RGB color lookups so frame rendering does not incur any
- * runtime distance-search overhead per pixel.
- */
+/** Six bits per RGB channel, matched in Oklab once; rendering uses a 256 KiB byte lookup. */
 object MapPaletteLookup {
-
-    // 15-bit color lookup table: 5 bits Red, 5 bits Green, 5 bits Blue = 32,768 entries
-    private val lookupTable = ByteArray(32768)
-
-    // Standard black color byte on Minecraft map canvas
+    private val quantized = IntArray(256) { (it * 63 + 127) / 255 }
+    private val lookupTable = ByteArray(64 * 64 * 64)
     val BLACK_COLOR_BYTE: Byte
 
     init {
-        BLACK_COLOR_BYTE = MapPalette.matchColor(0, 0, 0)
-        for (r in 0 until 32) {
-            val r8 = (r * 255 / 31)
-            for (g in 0 until 32) {
-                val g8 = (g * 255 / 31)
-                for (b in 0 until 32) {
-                    val b8 = (b * 255 / 31)
-                    val key = (r shl 10) or (g shl 5) or b
-                    lookupTable[key] = MapPalette.matchColor(r8, g8, b8)
+        // The Bukkit palette follows the server version. Skip transparent and unavailable entries.
+        val palette = (4..255).mapNotNull { index ->
+            val color = runCatching { MapPalette.getColor(index.toByte()) }.getOrNull()
+                ?: return@mapNotNull null
+            if (color.alpha == 0) null
+            else index.toByte() to PerceptualColor.fromRgb(color.red, color.green, color.blue)
+        }
+        check(palette.isNotEmpty()) { "No opaque Minecraft map colors available" }
+        for (r in 0 until 64) for (g in 0 until 64) for (b in 0 until 64) {
+            val target = PerceptualColor.fromRgb((r * 255 + 31) / 63, (g * 255 + 31) / 63, (b * 255 + 31) / 63)
+            var best = palette.first().first
+            var bestDistance = Double.POSITIVE_INFINITY
+            for ((index, color) in palette) {
+                val distance = target.distanceSquared(color)
+                if (distance < bestDistance) {
+                    bestDistance = distance
+                    best = index
                 }
             }
+            lookupTable[(r shl 12) or (g shl 6) or b] = best
         }
+        BLACK_COLOR_BYTE = lookupTable[0]
     }
 
-    /**
-     * Looks up the Minecraft map palette byte for an RGB triplet (0..255).
-     */
-    fun lookup(r: Int, g: Int, b: Int): Byte {
-        val r5 = (r and 0xFF) ushr 3
-        val g5 = (g and 0xFF) ushr 3
-        val b5 = (b and 0xFF) ushr 3
-        val key = (r5 shl 10) or (g5 shl 5) or b5
-        return lookupTable[key]
-    }
+    /** RGB channels are unsigned bytes, consistent with the raw FFmpeg frame buffer. */
+    fun lookup(r: Int, g: Int, b: Int): Byte = lookupTable[
+        (quantized[r and 255] shl 12) or (quantized[g and 255] shl 6) or quantized[b and 255]
+    ]
 
-    /**
-     * Fills the given 128x128 byte buffer with a solid map color (default: black).
-     */
     fun fillBlank(buffer: ByteArray, color: Byte = BLACK_COLOR_BYTE) {
         Arrays.fill(buffer, color)
     }
 }
-

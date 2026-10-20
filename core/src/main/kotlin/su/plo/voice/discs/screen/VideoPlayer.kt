@@ -33,7 +33,9 @@ class VideoPlayer(
     val coroutineScope: CoroutineScope,
     val onCompletion: (() -> Unit)? = null,
     private val sourceAuthorization: String? = null,
-    ditherStrength: Int = 12
+    ditherStrength: Int = 12,
+    private val companionRgb: Boolean = true,
+    private val companionQuality: Int = 85
 ) {
     @Volatile
     private var process: Process? = null
@@ -61,6 +63,7 @@ class VideoPlayer(
     private val tileBuffers = Array(rows) { Array(cols) { ByteArray(16384) } }
 
     private val dither = if (ditherStrength > 0) OrderedMapDither(ditherStrength) else null
+    private val rgbEncoders = Array(rows) { arrayOfNulls<CompanionTileEncoder>(cols) }
     private val tileDeltas = Array(rows) { Array(cols) { MapTileDelta() } }
     private var previousViewers: Map<UUID, Player> = emptyMap()
 
@@ -450,7 +453,9 @@ class VideoPlayer(
         return result
     }
 
+    @Synchronized
     private fun sliceAndSend(rawFrame: ByteArray, players: List<Player>) {
+        if (stopped.get()) return
         if (players.isEmpty()) {
             previousViewers = emptyMap()
             return
@@ -480,6 +485,15 @@ class VideoPlayer(
                     }
                 }
 
+                if (companionRgb && players.any(CompanionScreens::capable)) {
+                    try {
+                        val encoder = rgbEncoders[r][c] ?: CompanionTileEncoder().also { rgbEncoders[r][c] = it }
+                        val jpeg = encoder.encode(rawFrame, totalWidth, startX, startY, companionQuality)
+                        CompanionScreens.frame(mapId, jpeg, players)
+                    } catch (e: Exception) {
+                        logger.debug("RGB tile encoding failed; palette fallback remains available", e)
+                    }
+                }
                 val changed = tileDeltas[r][c].update(tileBuffer)
                 fun send(region: MapTileRegion, viewers: List<Player>) {
                     val packet = WrapperPlayServerMapData(
@@ -500,7 +514,10 @@ class VideoPlayer(
         previousViewers = players.associateBy { it.uniqueId }
     }
 
+    @Synchronized
     fun clearScreen() {
+        // Also release overrides held by clients that have already left viewing range.
+        for (row in screen.mapIds) for (mapId in row) CompanionScreens.clear(mapId)
         val players = getNearbyPlayers()
         if (players.isEmpty()) return
 

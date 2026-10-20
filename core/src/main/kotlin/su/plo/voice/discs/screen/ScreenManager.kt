@@ -349,6 +349,8 @@ class ScreenManager : PluginKoinComponent {
                 screen = screen,
                 sourceUrl = resolvedUrl,
                 sourceAuthorization = sourceAuthorization,
+                companionRgb = config.screen.companionRgb,
+                companionQuality = config.screen.companionQuality,
                 ditherStrength = if (config.screen.dithering) config.screen.ditherStrength.coerceIn(0, 32) else 0,
                 fps = config.screen.fps.coerceIn(5, 30),
                 maxDistance = config.screen.maxDistance.coerceIn(8, 128),
