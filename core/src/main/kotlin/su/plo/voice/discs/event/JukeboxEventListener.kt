@@ -384,19 +384,21 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     }
                 }
 
-            val job = audioPlayerManager.startTrackJob(
-                track = track,
-                pvSource = pvSource,
-                distance = distance,
-                svcChannel = svcChannel,
-                controls = controls,
-                pcmChannel = if (noteBlock == null) null else if (mode == 1) 1 else 0
-            )
-            val noteJob = if (noteBlock != null) audioPlayerManager.startTrackJob(
-                track = track.makeClone(), pvSource = notePvSource, distance = distance,
-                svcChannel = noteSvcChannel, controls = controls,
-                pcmChannel = if (mode == 1) 0 else 1
-            ) else null
+            val job = if (noteBlock == null) audioPlayerManager.startTrackJob(
+                track = track, pvSource = pvSource, distance = distance,
+                svcChannel = svcChannel, controls = controls
+            ) else {
+                val primaryIsLeft = mode != 1
+                audioPlayerManager.startStereoTrackJob(
+                    track = track,
+                    leftPvSource = if (primaryIsLeft) pvSource else notePvSource,
+                    rightPvSource = if (primaryIsLeft) notePvSource else pvSource,
+                    distance = distance,
+                    leftSvcChannel = if (primaryIsLeft) svcChannel else noteSvcChannel,
+                    rightSvcChannel = if (primaryIsLeft) noteSvcChannel else svcChannel,
+                    controls = controls
+                )
+            }
             controls.onPauseChanged = { isPaused ->
                 screenManager?.onJukeboxPause(block, isPaused)
             }
@@ -470,7 +472,6 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     debugLogger.log("Track \"$trackName\" at ${block.location} ended")
 
                     job.cancelAndJoin()
-                    noteJob?.cancelAndJoin()
                     notePvSource?.remove()
                     pvSource?.remove()
                     screenManager?.onJukeboxStop(block)
