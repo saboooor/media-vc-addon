@@ -8,6 +8,8 @@ import kotlinx.coroutines.launch
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
+import org.bukkit.NamespacedKey
+import org.bukkit.persistence.PersistentDataType
 import org.bukkit.Material
 import org.bukkit.World
 import org.bukkit.block.Block
@@ -35,6 +37,7 @@ class ScreenManager : PluginKoinComponent {
 
     private val jellyfinLibrary: su.plo.voice.discs.jellyfin.JellyfinLibrary by inject()
 
+    private val frameVisibilityKey by lazy { NamespacedKey(plugin, "screen_frame_visible") }
     private val screens = ConcurrentHashMap<String, Screen>()
     private val activePlayers = ConcurrentHashMap<String, VideoPlayer>()
     private val playbackLock = Any()
@@ -79,6 +82,10 @@ class ScreenManager : PluginKoinComponent {
             screens.clear()
             for ((k, v) in loaded) {
                 screens[k.lowercase(Locale.ROOT)] = v
+            }
+            for (screen in screens.values) for (row in screen.frameUuids) for (id in row) {
+                val frame = Bukkit.getEntity(UUID.fromString(id)) as? ItemFrame ?: continue
+                updateFrameVisibility(frame)
             }
         } catch (e: Exception) {
             plugin.slF4JLogger.error("Failed to load screens from $screensFile", e)
@@ -156,6 +163,7 @@ class ScreenManager : PluginKoinComponent {
             for (c in 0 until result.columns) {
                 val frame = result.orderedFrames[r][c]
                 uuidRow.add(frame.uniqueId.toString())
+                hideFrame(frame)
 
                 val existingMapId = (frame.item.itemMeta as? MapMeta)?.takeIf { it.hasMapId() }?.mapId
                 val mapId = if (existingMapId != null) {
@@ -248,6 +256,25 @@ class ScreenManager : PluginKoinComponent {
         return deleteScreen(screenName)
     }
 
+    private fun hideFrame(frame: ItemFrame) {
+        val data = frame.persistentDataContainer
+        if (!data.has(frameVisibilityKey, PersistentDataType.BYTE))
+            data.set(frameVisibilityKey, PersistentDataType.BYTE, if (frame.isVisible) 1.toByte() else 0.toByte())
+        frame.isVisible = false
+    }
+
+    private fun restoreFrameVisibility(frame: ItemFrame) {
+        val data = frame.persistentDataContainer
+        val original = data.get(frameVisibilityKey, PersistentDataType.BYTE) ?: return
+        frame.isVisible = original != 0.toByte()
+        data.remove(frameVisibilityKey)
+    }
+
+    fun updateFrameVisibility(frame: ItemFrame) {
+        if (getScreenForFrame(frame.uniqueId) != null) hideFrame(frame)
+        else restoreFrameVisibility(frame)
+    }
+
     fun clearItemFrames(screen: Screen) {
         val world = Bukkit.getWorld(screen.worldName) ?: return
         for (r in 0 until screen.rows) {
@@ -256,6 +283,7 @@ class ScreenManager : PluginKoinComponent {
                 val uuid = try { UUID.fromString(uuidStr) } catch (_: Exception) { null } ?: continue
                 val entity = Bukkit.getEntity(uuid) as? ItemFrame ?: continue
                 entity.setItem(ItemStack(Material.AIR), false)
+                restoreFrameVisibility(entity)
                 try {
                     entity.isFixed = false
                 } catch (_: Throwable) {}
@@ -407,6 +435,7 @@ class ScreenManager : PluginKoinComponent {
                 meta?.mapId = mapId
                 mapItem.itemMeta = meta
                 entity.setItem(mapItem, false)
+                hideFrame(entity)
                 try {
                     entity.isFixed = true
                 } catch (_: Throwable) {}

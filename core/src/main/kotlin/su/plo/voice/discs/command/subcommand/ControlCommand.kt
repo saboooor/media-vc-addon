@@ -277,7 +277,7 @@ class ControlCommand(
             body.clear()
             val offset = pd.getOffset(block)
             body += Component.text("Hologram Offset: X: ${offset.x}, Y: ${offset.y}, Z: ${offset.z}", NamedTextColor.GOLD)
-            body += Component.text("Hold a stick, then choose Move in world. Right-click to grab/place; scroll for distance; sneak-right-click to finish.", NamedTextColor.GRAY)
+            body += Component.text("Move in world equips a stick and grabs the hologram. Right-click to place/grab; scroll for distance; sneak-right-click to finish.", NamedTextColor.GRAY)
             buttons += "Move in world" to (prefix + "holo_edit")
             buttons += "Reset Position" to (prefix + "holo_reset")
             buttons += "Back to controls" to (prefix + "refresh")

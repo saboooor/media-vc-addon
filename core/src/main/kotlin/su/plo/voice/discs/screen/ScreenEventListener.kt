@@ -11,6 +11,7 @@ import org.bukkit.event.hanging.HangingBreakByEntityEvent
 import org.bukkit.event.hanging.HangingBreakEvent
 import org.bukkit.event.player.PlayerInteractEntityEvent
 import org.bukkit.event.player.PlayerInteractEvent
+import org.bukkit.event.world.ChunkLoadEvent
 import org.bukkit.event.player.PlayerQuitEvent
 import org.koin.core.component.inject
 import su.plo.voice.discs.utils.PluginKoinComponent
@@ -91,6 +92,11 @@ class ScreenEventListener : Listener, PluginKoinComponent {
                 event.isCancelled = true
             }
         }
+    }
+
+    @EventHandler
+    fun onChunkLoad(event: ChunkLoadEvent) {
+        event.chunk.entities.filterIsInstance<ItemFrame>().forEach(screenManager::updateFrameVisibility)
     }
 
     @EventHandler

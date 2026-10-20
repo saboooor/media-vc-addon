@@ -17,6 +17,7 @@ import org.bukkit.event.player.*
 import org.bukkit.inventory.EquipmentSlot
 import org.bukkit.util.Vector
 import su.plo.slib.api.permission.PermissionDefault
+import su.plo.voice.discs.utils.EditingWand
 import su.plo.voice.discs.command.SubCommand
 import su.plo.voice.discs.event.JukeboxVisualizer
 import su.plo.voice.discs.event.JukeboxProgressDisplay
@@ -30,7 +31,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.round
 
-/** An ordinary stick acts as an editing wand without replacing inventory contents. */
+/** Equip an ordinary stick and grab the selected display when editing starts. */
 class VisualizerCommand(private val visualizers: JukeboxVisualizer) : SubCommand(), Listener {
     override val name = "visualizer"
     override val permissions = listOf("control" to PermissionDefault.TRUE)
@@ -63,34 +64,39 @@ class VisualizerCommand(private val visualizers: JukeboxVisualizer) : SubCommand
 
     fun editHologram(player: Player, block: Block) {
         if (!checkCanExecute(player) || player.gameMode == GameMode.SPECTATOR || holograms?.supported != true) return
-        if (player.inventory.itemInMainHand.type != Material.STICK) {
-            message(player, "Hold a stick, then run /disc hologram edit."); return
-        }
         if (editors.any { it.key != player.uniqueId && it.value.block == block }) {
             message(player, "Someone is already editing this jukebox."); return
         }
         finish(player)
-        editors[player.uniqueId] = Editor(block, 0, hologram = true)
+        if (!equipWand(player)) return
+        val editor = Editor(block, 0, hologram = true)
+        editors[player.uniqueId] = editor
         holograms?.setEditing(block, true)
-        message(player, "Right-click: grab/place hologram. Look around to move. Scroll: distance. Sneak while moving: snap to grid. Sneak-right-click: finish.")
+        holograms?.getDisplayLocation(block)?.toVector()?.let { grab(player, editor, it) }
+        message(player, "Hologram grabbed. Right-click: place/grab. Look around to move. Scroll: distance. Sneak while moving: snap to grid. Sneak-right-click: finish.")
     }
 
     fun editVisualizer(player: Player, block: Block, selectedId: Int? = null) {
         if (!checkCanExecute(player) || player.gameMode == GameMode.SPECTATOR || !visualizers.supported) return
-        if (player.inventory.itemInMainHand.type != Material.STICK) {
-            message(player, "Hold a stick and choose Move in world again, or run /disc visualizer edit."); return
-        }
         if (editors.any { it.key != player.uniqueId && it.value.block == block }) {
             message(player, "Someone is already editing this jukebox's visualizers."); return
         }
         finish(player)
         val id = visualizers.instances(block).firstOrNull { it.id == selectedId }?.id
             ?: visualizers.instances(block).firstOrNull()?.id ?: visualizers.add(block, VisualizerKind.BARS) ?: return
+        if (!equipWand(player)) return
         val editor = Editor(block, id)
         editors[player.uniqueId] = editor
         select(editor, id)
-        message(player, "Right-click: grab/release. Look around to move. Scroll: size (or distance while grabbed). Sneak-scroll: width. Swap hands: rotate.")
-        message(player, "Left-click: select aimed visualizer (sneak-click cycles). Sneak-right-click: finish. /disc visualizer add bars|speaker, remove, type, toggle, reset, next, done.")
+        visualizers.instances(block).firstOrNull { it.id == id }?.let { grab(player, editor, anchor(block, it)) }
+        message(player, "Visualizer grabbed. Right-click: place/grab. Look around to move. Scroll: size (or distance while grabbed). Sneak-scroll: width. Swap hands: rotate.")
+        message(player, "Left-click: select aimed visualizer (sneak-click cycles). Sneak-right-click: finish.")
+    }
+
+    private fun equipWand(player: Player): Boolean {
+        if (EditingWand.equip(player.inventory)) return true
+        message(player, "Free one inventory slot so a stick can be equipped without losing your held item.")
+        return false
     }
 
     fun finishEditing(player: Player) = finish(player)
@@ -112,9 +118,6 @@ class VisualizerCommand(private val visualizers: JukeboxVisualizer) : SubCommand
         val action = arguments.getOrNull(1)?.lowercase() ?: "edit"
         if (action == "done") { finish(player); return }
         if (action == "edit") {
-            if (player.inventory.itemInMainHand.type != Material.STICK) {
-                message(player, "Hold a stick to use as your visualizer editing wand."); return
-            }
             val target = player.getTargetBlockExact(6)
             val block = when {
                 target?.type == Material.JUKEBOX -> target
