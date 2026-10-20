@@ -48,7 +48,7 @@ class ControlCommand(
     private val progressDisplay: JukeboxProgressDisplay? by getterOrNull<JukeboxProgressDisplay>()
     private data class Session(val token: UUID, val block: Block, val controls: PlaybackControls?,
                                val record: ItemStack, val visualizerId: Int? = null, val expires: Long = System.currentTimeMillis() + 120_000)
-    private data class NoteRequest(val block: Block, val expires: Long = System.currentTimeMillis() + 120_000)
+    private data class NoteRequest(val block: Block, val left: Boolean? = null, val expires: Long = System.currentTimeMillis() + 120_000)
     private val noteRequests = ConcurrentHashMap<UUID, NoteRequest>()
     private val sessions = ConcurrentHashMap<UUID, Session>()
     override val name = "control"
@@ -73,7 +73,16 @@ class ControlCommand(
             }
             event.isCancelled = true
             noteRequests.remove(event.player.uniqueId)
-            jukeboxes.linkNote(request.block, JukeboxBassLamps.Position.of(block))
+            val position = JukeboxBassLamps.Position.of(block)
+            if (request.left != null) {
+                if (jukeboxes.channelNoteLink(request.block, !request.left) == position) {
+                    event.player.sendMessage(Component.text("Choose a different note block for each channel."))
+                    noteRequests[event.player.uniqueId] = request
+                    return
+                }
+                jukeboxes.linkChannelNote(request.block, request.left, position)
+                jukeboxes.restoreStereo(request.block, 3)
+            } else jukeboxes.linkNote(request.block, position)
             event.player.sendMessage(Component.text("Note block linked. Stereo changes apply on the next song or after restarting playback."))
             return
         }
@@ -126,9 +135,14 @@ class ControlCommand(
         val stereoLabel = when (jukeboxes.stereoMode(block)) {
             1 -> "Note block L / Jukebox R"
             2 -> "Jukebox L / Note block R"
+            3 -> "Note block L / Note block R"
             else -> "Off"
         }
         buttons += "Stereo: $stereoLabel" to (prefix + "stereo")
+        buttons += "Link left note block" to (prefix + "note_left")
+        buttons += "Link right note block" to (prefix + "note_right")
+        if (jukeboxes.channelNoteLink(block, true) != null) buttons += "Unlink left note block" to (prefix + "note_left_unlink")
+        if (jukeboxes.channelNoteLink(block, false) != null) buttons += "Unlink right note block" to (prefix + "note_right_unlink")
         buttons += "Link note block" to (prefix + "note_link")
         if (jukeboxes.noteLink(block) != null) buttons += "Unlink note block" to (prefix + "note_unlink")
         if (controls != null) {
@@ -353,6 +367,16 @@ class ControlCommand(
             }
             "loop" -> playlists.toggleLoop(session.block)
             "shuffle" -> playlists.toggleShuffle(session.block)
+            "note_left", "note_right" -> {
+                val left = arguments[2] == "note_left"
+                noteRequests[player.uniqueId] = NoteRequest(session.block, left)
+                player.sendMessage(Component.text("Right-click the ${if (left) "left" else "right"} channel note block within 32 blocks (2 minutes)."))
+                return
+            }
+            "note_left_unlink", "note_right_unlink" -> {
+                jukeboxes.linkChannelNote(session.block, arguments[2] == "note_left_unlink", null)
+                player.sendMessage(Component.text("Channel unlinked. Link both channels before restarting two-note-block playback."))
+            }
             "note_link" -> {
                 noteRequests[player.uniqueId] = NoteRequest(session.block)
                 player.sendMessage(Component.text("Right-click a note block within 32 blocks of this jukebox (2 minutes)."))

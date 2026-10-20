@@ -18,10 +18,12 @@ data class SavedJukeboxSettings(
     val visualizers: List<VisualizerInstance> = emptyList(),
     val lamps: List<JukeboxBassLamps.Position> = emptyList(),
     val screenName: String? = null,
+    val leftNoteBlock: JukeboxBassLamps.Position? = null,
+    val rightNoteBlock: JukeboxBassLamps.Position? = null,
     val noteBlock: JukeboxBassLamps.Position? = null,
 ) {
     fun validate(): SavedJukeboxSettings {
-        require(stereo in 0..2)
+        require(stereo in 0..3)
         require(version == 1 && volume in 0..100 && crossfade in 0..30 && lastCrossfade in 1..30)
         require(hologram.x.isFinite() && hologram.y.isFinite() && hologram.z.isFinite())
         require(visualizers.size <= 8 && visualizers.map { it.id }.distinct().size == visualizers.size)
@@ -33,7 +35,7 @@ data class SavedJukeboxSettings(
             require(layout.width in 0.25f..4f && layout.height in 0.25f..4f)
         }
         require(lamps.size <= 1024)
-        for (lamp in lamps + listOfNotNull(noteBlock)) {
+        for (lamp in lamps + listOfNotNull(noteBlock, leftNoteBlock, rightNoteBlock)) {
             java.util.UUID.fromString(lamp.world)
             require(lamp.x in -30_000_000..30_000_000 && lamp.z in -30_000_000..30_000_000 && lamp.y in -4096..4096)
         }

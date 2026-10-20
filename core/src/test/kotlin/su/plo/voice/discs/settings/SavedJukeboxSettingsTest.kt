@@ -37,7 +37,16 @@ class SavedJukeboxSettingsTest {
         assertFalse(restored.loop)
         assertFalse(restored.shuffle)
         assertEquals(1, restored.stereo)
-        assertThrows(IllegalArgumentException::class.java) { SavedJukeboxSettings(stereo = 3).encode() }
+        assertThrows(IllegalArgumentException::class.java) { SavedJukeboxSettings(stereo = 4).encode() }
+    }
+
+    @Test fun `two note block stereo links survive saving`() {
+        val left = JukeboxBassLamps.Position("00000000-0000-0000-0000-000000000001", 1, 64, 0)
+        val right = left.copy(x = -1)
+        val settings = SavedJukeboxSettings(stereo = 3, leftNoteBlock = left, rightNoteBlock = right)
+        assertEquals(settings, SavedJukeboxSettings.decode(settings.encode()))
+        assertNull(SavedJukeboxSettings.decode("{}")!!.leftNoteBlock)
+        assertNull(SavedJukeboxSettings.decode("{}")!!.rightNoteBlock)
     }
 
     @Test fun `restored visualizers keep IDs and new instances receive fresh IDs`() {

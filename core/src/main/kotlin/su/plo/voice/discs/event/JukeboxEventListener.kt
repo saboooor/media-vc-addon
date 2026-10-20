@@ -69,17 +69,24 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     private val savedVolumes = ConcurrentHashMap<Block, Int>()
     fun volumeSetting(block: Block) = controlsByBlock[block]?.volume ?: savedVolumes[block] ?: 100
     fun restoreVolume(block: Block, volume: Int) { savedVolumes[block] = volume.coerceIn(0, 100) }
-    // 0: mono/default, 1: note block left, 2: note block right.
+    // 0: mono/default, 1/2: note block + jukebox, 3: two note blocks.
     private val stereoModes = ConcurrentHashMap<Block, Int>()
     fun stereoMode(block: Block) = stereoModes[block] ?: 1
-    fun restoreStereo(block: Block, mode: Int) { stereoModes[block] = mode.coerceIn(0, 2) }
-    fun cycleStereo(block: Block) { restoreStereo(block, (stereoMode(block) + 1) % 3) }
+    fun restoreStereo(block: Block, mode: Int) { stereoModes[block] = mode.coerceIn(0, 3) }
+    fun cycleStereo(block: Block) { restoreStereo(block, (stereoMode(block) + 1) % 4) }
     private val noteLinks = ConcurrentHashMap<Block, JukeboxBassLamps.Position>()
     fun noteLink(block: Block) = noteLinks[block]
     fun linkNote(block: Block, position: JukeboxBassLamps.Position?) {
         if (position == null) noteLinks.remove(block) else noteLinks[block] = position
     }
-    fun clearVolume(block: Block) { savedVolumes.remove(block); stereoModes.remove(block); noteLinks.remove(block) }
+    private val leftNoteLinks = ConcurrentHashMap<Block, JukeboxBassLamps.Position>()
+    private val rightNoteLinks = ConcurrentHashMap<Block, JukeboxBassLamps.Position>()
+    fun channelNoteLink(block: Block, left: Boolean) = (if (left) leftNoteLinks else rightNoteLinks)[block]
+    fun linkChannelNote(block: Block, left: Boolean, position: JukeboxBassLamps.Position?) {
+        val links = if (left) leftNoteLinks else rightNoteLinks
+        if (position == null) links.remove(block) else links[block] = position
+    }
+    fun clearVolume(block: Block) { savedVolumes.remove(block); stereoModes.remove(block); noteLinks.remove(block); leftNoteLinks.remove(block); rightNoteLinks.remove(block) }
     val controlsByBlock: MutableMap<Block, PlaybackControls> = ConcurrentHashMap()
 
     fun stopPlayback(block: Block) { jobByBlock.remove(block)?.cancel(DiscEjectCause()) }
@@ -321,16 +328,32 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 false -> config.distance.jukeboxDistance
             }
 
-            val stereo = suspendSyncAt(block.location, voiceServer, plugin) {
-                val mode = stereoMode(block)
-                val linked = noteLink(block)
-                val note = if (mode == 0) null else if (linked != null)
-                    linked.loadedBlock()?.takeIf { it.type == Material.NOTE_BLOCK && it.world == block.world }
-                else listOf(BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST)
-                    .map { block.getRelative(it) }.firstOrNull { it.type == Material.NOTE_BLOCK }
-                note to mode
+            val mode = stereoMode(block)
+            val speakers = suspendSyncAt(block.location, voiceServer, plugin) {
+                fun resolve(position: JukeboxBassLamps.Position?) = position?.loadedBlock()?.takeIf {
+                    it.type == Material.NOTE_BLOCK && it.world == block.world &&
+                        it.location.distanceSquared(block.location) <= 1024
+                }
+                if (mode == 3) {
+                    resolve(channelNoteLink(block, true)) to resolve(channelNoteLink(block, false))
+                } else {
+                    val linked = noteLink(block)
+                    val note = if (mode == 0) null else if (linked != null) resolve(linked)
+                    else listOf(BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST)
+                        .map { block.getRelative(it) }.firstOrNull { it.type == Material.NOTE_BLOCK }
+                    block to note
+                }
             }
-            val noteBlock = stereo.first
+            if (mode == 3 && (speakers.first == null || speakers.second == null || speakers.first == speakers.second)) {
+                val message = "Link two distinct, available note blocks for left and right stereo playback"
+                controls.fail(message)
+                suspendSyncAt(block.location, voiceServer, plugin) {
+                    player?.sendMessage(Component.text(message, NamedTextColor.RED))
+                }
+                return@launch
+            }
+            val primarySpeaker = speakers.first ?: block
+            val noteBlock = speakers.second
             fun pvAt(speaker: Block) = if (sourceLine != null && voiceServer != null) {
                 val world = voiceServer?.minecraftServer?.getWorld(speaker.world)
                 val pos = ServerPos3d(world, speaker.x + 0.5, speaker.y + 1.5, speaker.z + 0.5)
@@ -340,8 +363,8 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             fun svcAt(speaker: Block) = svcPlugin?.createLocationalChannel(
                 Location(speaker.world, speaker.x + 0.5, speaker.y + 1.5, speaker.z + 0.5), distance.toFloat()
             )?.apply { setFilter { sp -> svcPlugin?.hasClient(sp.uuid) == true } }
-            val pvSource = pvAt(block)
-            val svcChannel = svcAt(block)
+            val pvSource = pvAt(primarySpeaker)
+            val svcChannel = svcAt(primarySpeaker)
             val notePvSource = noteBlock?.let { pvAt(it) }
             val noteSvcChannel = noteBlock?.let { svcAt(it) }
 
@@ -367,12 +390,12 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 distance = distance,
                 svcChannel = svcChannel,
                 controls = controls,
-                pcmChannel = if (noteBlock == null) null else if (stereo.second == 1) 1 else 0
+                pcmChannel = if (noteBlock == null) null else if (mode == 1) 1 else 0
             )
             val noteJob = if (noteBlock != null) audioPlayerManager.startTrackJob(
                 track = track.makeClone(), pvSource = notePvSource, distance = distance,
                 svcChannel = noteSvcChannel, controls = controls,
-                pcmChannel = if (stereo.second == 1) 0 else 1
+                pcmChannel = if (mode == 1) 0 else 1
             ) else null
             controls.onPauseChanged = { isPaused ->
                 screenManager?.onJukeboxPause(block, isPaused)
@@ -407,7 +430,9 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     // Check if jukebox still exists every 3 seconds
                     if (timeSinceExistenceCheck >= 3_000L) {
                         val stillExists = suspendSyncAt(block.location, voiceServer, plugin) {
-                            block.type == Material.JUKEBOX && (noteBlock == null || noteBlock.type == Material.NOTE_BLOCK)
+                            block.type == Material.JUKEBOX &&
+                                (mode != 3 || primarySpeaker.type == Material.NOTE_BLOCK) &&
+                                (noteBlock == null || noteBlock.type == Material.NOTE_BLOCK)
                         }
 
                         if (!stillExists) {
