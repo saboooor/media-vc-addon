@@ -16,13 +16,11 @@ object LightBlock {
 
     fun supports(data: BlockData): Boolean {
         if (!data.material.isSolid) return false
-        // Match newer optional blocks by name so older servers can still load the plugin.
-        if (data.material == Material.REDSTONE_BLOCK || data.material == Material.BEACON ||
-            data.material.name == "POTENT_SULFUR") return true
+        if (data.material == Material.REDSTONE_BLOCK || data.material == Material.BEACON) return true
         val probe = data.clone()
         if (probe is Lightable) probe.isLit = true
         return if (emission != null) (emission.invoke(probe) as Int) > 0 else
-            data.material.name in setOf("REDSTONE_LAMP", "GLOWSTONE", "SHROOMLIGHT", "SEA_LANTERN", "JACK_O_LANTERN", "MAGMA_BLOCK", "BEACON", "END_PORTAL_FRAME", "CRYING_OBSIDIAN", "RESPAWN_ANCHOR", "POTENT_SULFUR")
+            data.material.name in setOf("REDSTONE_LAMP", "GLOWSTONE", "SHROOMLIGHT", "SEA_LANTERN", "JACK_O_LANTERN", "MAGMA_BLOCK", "BEACON", "END_PORTAL_FRAME", "CRYING_OBSIDIAN", "RESPAWN_ANCHOR")
     }
 
     fun original(saved: String?): BlockData? = saved?.let { runCatching { Bukkit.createBlockData(it) }.getOrNull() }
