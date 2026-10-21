@@ -187,7 +187,7 @@ class ControlCommand(
 
         val body = mutableListOf<Component>()
         if (controls != null) {
-            body += Component.text(controls.title, NamedTextColor.GOLD)
+            body += Component.text(controls.displayTitle, NamedTextColor.GOLD)
             body += PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream)
             body += Component.text("${if (controls.paused) "Paused" else "Playing"} · Volume ${controls.volume}%", NamedTextColor.GRAY)
         } else if (record.type != Material.AIR) {
@@ -323,6 +323,7 @@ class ControlCommand(
             body.clear()
             body += Component.text("Lights: ${lamps.count(block)} linked", NamedTextColor.GOLD)
             body += Component.text("Choose a band, then click a lamp to link it or change its response.")
+            body += Component.text("Deep bass follows low thumps; low mids follow warmth; vocal range follows mids; sparkle follows bright highs. Full spectrum responds across all bands.", NamedTextColor.GRAY)
             bodyLampButtons(buttons, prefix, lamps.count(block))
             buttons += "Back to playback" to (prefix + "refresh")
         }
@@ -391,7 +392,7 @@ class ControlCommand(
             buttons.clear()
             queueLabels.clear()
             body.clear()
-            body += Component.text(controls.title, NamedTextColor.GOLD)
+            body += Component.text(controls.displayTitle, NamedTextColor.GOLD)
             body += PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream)
             body += Component.text("Seek audio and linked video together.", NamedTextColor.GRAY)
             val seekSteps = listOf(15 to "15s", 30 to "30s", 60 to "1m", 300 to "5m")
@@ -529,7 +530,8 @@ class ControlCommand(
                 }
                 return
             }
-            "lamp_link", "lamp_link_bass", "lamp_link_mid", "lamp_link_highs", "lamp_unlink" -> {
+            "lamp_link", "lamp_link_bass", "lamp_link_mid", "lamp_link_highs",
+            "lamp_link_deep_bass", "lamp_link_low_mids", "lamp_link_vocals", "lamp_link_sparkle", "lamp_link_full", "lamp_unlink" -> {
                 bassLamps?.beginLink(player, session.block, unlink = arguments[2] == "lamp_unlink",
                     band = LightBand.entries.firstOrNull { arguments[2] == "lamp_link_${it.name.lowercase()}" } ?: LightBand.BASS)
                 return

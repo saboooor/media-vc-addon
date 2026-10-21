@@ -13,6 +13,16 @@ import java.net.URI
 
 @Config
 class AddonConfig {
+    @Config
+    class PlaylistSourcesConfig {
+        @ConfigField(comment = "Optional Spotify user OAuth access token for full API pagination. Leave empty to read public playlist pages without setup. Environment override: SPOTIFY_ACCESS_TOKEN.")
+        var spotifyAccessToken = ""
+        @ConfigField(comment = "Optional Apple Music developer JWT for API pagination. Leave empty to read public playlist pages without setup. Environment override: APPLE_MUSIC_DEVELOPER_TOKEN.")
+        var appleMusicDeveloperToken = ""
+    }
+    @ConfigField
+    var playlistSources = PlaylistSourcesConfig()
+
     @ConfigField
     var sourceLineWeight = 10
 

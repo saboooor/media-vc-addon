@@ -81,7 +81,7 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
                         val position = controls?.position ?: 0
                         val duration = controls?.duration ?: 0
                         val live = controls?.isStream == true
-                        val state = TextState(controls?.title?.take(80), controls?.paused == true,
+                        val state = TextState(controls?.displayTitle, controls?.paused == true,
                             position / 1000, duration / 1000, live, duration <= 0,
                             if (!live && duration > 0) (position.toDouble() / duration * 100).toInt().coerceIn(0, 100) else 0,
                             if (!live && duration > 0) PlaybackDialogView.filledSegments(position, duration) else 0)

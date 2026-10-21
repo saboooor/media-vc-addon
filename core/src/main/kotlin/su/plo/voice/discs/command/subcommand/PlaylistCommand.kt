@@ -56,8 +56,10 @@ import java.util.concurrent.ConcurrentHashMap
 class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(), Listener {
     private val discHelper: DiscHelper by inject()
     init { jukeboxes.shouldLoop = { playbackModes(it).first } }
-    private class Pending(@Volatile var created: Long = System.currentTimeMillis()) {
+    private class Pending(val overwrite: Boolean = false, @Volatile var created: Long = System.currentTimeMillis()) {
         @Volatile var tracks: List<AudioTrack>? = null
+        @Volatile var songs: List<su.plo.voice.discs.playlist.CatalogPlaylistClient.Song>? = null
+        val matching = java.util.concurrent.atomic.AtomicBoolean(false)
     }
     private val pending = ConcurrentHashMap<UUID, Pending>()
     private val queues = ConcurrentHashMap<Block, Job>()
@@ -156,7 +158,11 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         if (!checkCanExecute(source)) return emptyList()
         return when (arguments.size) {
             2 -> listOf("<playlisturl>")
-            3 -> listOf("shuffle", "reverse").filter { it.startsWith(arguments[2], ignoreCase = true) }
+            3, 4 -> listOf("shuffle", "reverse", "overwrite").filter { option ->
+                option !in arguments.drop(2).dropLast(1).map { it.lowercase(java.util.Locale.ROOT) } &&
+                    !(option in listOf("shuffle", "reverse") && arguments.drop(2).dropLast(1).any { it.equals("shuffle", true) || it.equals("reverse", true) }) &&
+                    option.startsWith(arguments.last(), ignoreCase = true)
+            }
             else -> emptyList()
         }
     }
@@ -165,14 +171,16 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         val player = sender as? Player ?: run { sender.sendMessage("Player only command"); return }
         if (!checkCanExecute(player)) { message(player, "No permission.", true); return }
         val url = arguments.getOrNull(1)
-        val order = arguments.getOrNull(2)?.lowercase(java.util.Locale.ROOT)
-        if (url == null || arguments.size !in 2..3 || (order != null && order !in listOf("shuffle", "reverse"))) {
-            message(player, "Usage: /disc playlist <playlisturl> [shuffle|reverse]", true)
+        val options = arguments.drop(2).map { it.lowercase(java.util.Locale.ROOT) }
+        val order = options.firstOrNull { it == "shuffle" || it == "reverse" }
+        if (url == null || arguments.size !in 2..4 || options.any { it !in listOf("shuffle", "reverse", "overwrite") } ||
+            options.distinct().size != options.size || options.count { it == "shuffle" || it == "reverse" } > 1) {
+            message(player, "Usage: /disc playlist <playlisturl> [shuffle|reverse] [overwrite]", true)
             return
         }
-        val request = Pending()
+        val request = Pending(overwrite = "overwrite" in options)
         pending[player.uniqueId] = request
-        message(player, "Loading playlist...")
+        message(player, if (request.overwrite) "Loading playlist (overwrite enabled: existing disc songs can be replaced)..." else "Loading playlist (existing disc songs will be preserved)...")
         scope.launch {
             try {
                 val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
@@ -182,18 +190,36 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     pending.remove(player.uniqueId, request)
                     return@launch
                 }
-                val loadedTracks = audioPlayerManager.getPlaylist(url).await().tracks
+                val catalog = su.plo.voice.discs.playlist.CatalogPlaylistClient.parse(url)
+                val loadedTracks = if (catalog == null) audioPlayerManager.getPlaylist(url).await().tracks else {
+                    val settings = config.playlistSources
+                    val token = if (catalog.service == "Spotify")
+                        System.getenv("SPOTIFY_ACCESS_TOKEN")?.takeIf { it.isNotBlank() } ?: settings.spotifyAccessToken
+                    else System.getenv("APPLE_MUSIC_DEVELOPER_TOKEN")?.takeIf { it.isNotBlank() } ?: settings.appleMusicDeveloperToken
+                    val imported = withContext(Dispatchers.IO) {
+                        if (token.isBlank()) su.plo.voice.discs.playlist.PublicPlaylistClient().load(catalog)
+                        else su.plo.voice.discs.playlist.PublicPlaylistClient.Result(
+                            su.plo.voice.discs.playlist.CatalogPlaylistClient().load(catalog, token))
+                    }
+                    imported.notice?.let { notice -> suspendSyncFor(player, voiceServer, plugin) { message(player, notice) } }
+                    request.songs = when (order) {
+                        "shuffle" -> imported.songs.shuffled()
+                        "reverse" -> imported.songs.reversed()
+                        else -> imported.songs
+                    }
+                    emptyList()
+                }
                 val tracks = when (order) {
                     "shuffle" -> loadedTracks.shuffled()
                     "reverse" -> loadedTracks.reversed()
                     else -> loadedTracks.toList()
                 }
-                require(tracks.isNotEmpty()) { "Playlist has no tracks." }
+                require(tracks.isNotEmpty() || !request.songs.isNullOrEmpty()) { "Playlist has no tracks." }
                 request.created = System.currentTimeMillis()
                 request.tracks = tracks
                 suspendSyncFor(player, voiceServer, plugin) {
                     if (pending[player.uniqueId] === request) {
-                        message(player, "Loaded ${tracks.size} tracks (${order ?: "playlist order"}). Right-click a chest above a jukebox within 2 minutes to burn blank discs and play. Sneak-click opens the chest.")
+                        message(player, "Loaded ${request.songs?.size ?: tracks.size} tracks (${order ?: "playlist order"}). Right-click a chest above a jukebox within 2 minutes to burn blank discs and play. Sneak-click opens the chest.")
                     }
                 }
             } catch (e: CancellationException) {
@@ -226,7 +252,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         }
         val player = event.player
         val request = pending[player.uniqueId]
-        if (request != null && System.currentTimeMillis() - request.created > 120_000) {
+        if (request != null && !request.matching.get() && System.currentTimeMillis() - request.created > 120_000) {
             pending.remove(player.uniqueId, request)
             message(player, "Playlist selection expired. Run /disc playlist again.", true)
             return
@@ -239,34 +265,96 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         if (request != null) {
             if (!checkCanExecute(player)) { message(player, "No permission to burn playlists.", true); return }
             val tracks = request.tracks ?: run { message(player, "Playlist is still loading.", true); return }
-            var burned = 0
-            val inventory = chest.inventory
-            val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
-            for (slot in 0 until inventory.size) {
-                if (burned >= tracks.size) break
-                val item = inventory.getItem(slot)?.clone() ?: continue
-                if (!discHelper.isRecord(item) || item.amount != 1) continue
-                if (config.burnableTag.requireBurnableTag &&
-                    !item.itemMeta.persistentDataContainer.has(AddonKeys.burnableKey, PersistentDataType.BYTE) &&
-                    !player.allowed("burn.burnable_check_bypass")) continue
-                val track = tracks[burned]
-                val original = item.clone()
-                if (voicePlayer != null && !PlayerBurnEvent(voicePlayer, track, item).callEvent()) continue
-                if (inventory.getItem(slot) != original) continue
-                val identifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.identifier
-                if (Bukkit.getServer().getMinecraftVersionInt() >= 12103) discHelper.showSongTooltip(item, false)
-                val label = formatTrackDisplay(track.info.title, track.info.author)
-                item.burnMetadata(identifier, label, config, discHelper)
-                inventory.setItem(slot, item)
-                burned++
+            val songs = request.songs
+            if (songs != null) {
+                if (!request.matching.compareAndSet(false, true)) {
+                    message(player, "Playlist songs are already being matched.")
+                    return
+                }
+                val slots = (0 until chest.inventory.size).mapNotNull { slot ->
+                    chest.inventory.getItem(slot)?.takeIf { eligibleDisc(player, it, request.overwrite) }?.clone()?.let { slot to it }
+                }.take(songs.size).toMap()
+                if (slots.isEmpty()) {
+                    request.matching.set(false)
+                    message(player, "No eligible blank music discs found.", true)
+                    return
+                }
+                event.isCancelled = true
+                message(player, "Matching ${slots.size} songs for ${slots.size} ${if (request.overwrite) "eligible" else "blank"} discs...")
+                scope.launch {
+                    try {
+                        val matched = songs.take(slots.size).mapIndexed { index, song ->
+                            ensureActive()
+                            if (pending[player.uniqueId] !== request) throw CancellationException("Playlist selection replaced")
+                            withTimeout(30_000L) {
+                                audioPlayerManager.getPlaylist("ytsearch:${song.query}").await().tracks.firstOrNull()
+                                    ?: error("No playable match for song ${index + 1}: ${song.artist} - ${song.title}")
+                            }
+                        }
+                        suspendSyncAt(block.location, voiceServer, plugin) {
+                            if (pending[player.uniqueId] !== request) return@suspendSyncAt
+                            val liveChest = chest.block.state as? Chest ?: return@suspendSyncAt
+                            if (block.type != Material.JUKEBOX || queues.containsKey(block) || jukeboxes.isPlaying(block) ||
+                                block.asJukebox()?.record?.type != Material.AIR || !checkCanExecute(player) || !player.allowed("play")) {
+                                message(player, "Chest or jukebox changed while matching. Try clicking again.", true)
+                                return@suspendSyncAt
+                            }
+                            burnPlaylist(player, block, liveChest, request, matched, slots)
+                        }
+                    } catch (e: TimeoutCancellationException) {
+                        messageOnPlayerThread(player, "Song matching timed out. Try clicking the chest again.")
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        messageOnPlayerThread(player, "Failed to match playlist: ${e.message ?: "Unknown error"}")
+                    } finally {
+                        request.matching.set(false)
+                        request.created = System.currentTimeMillis()
+                    }
+                }
+                return
             }
-            pending.remove(player.uniqueId, request)
-            if (burned > 0) {
-                message(player, "Burned $burned of ${tracks.size} playlist tracks in chest slot order.")
-            } else {
-                message(player, "No eligible music discs found.", true)
-            }
+            burnPlaylist(player, block, chest, request, tracks)
         }
+    }
+
+    private suspend fun messageOnPlayerThread(player: Player, text: String) {
+        suspendSyncFor(player, voiceServer, plugin) { message(player, text, true) }
+    }
+
+    private fun eligibleDisc(player: Player, item: ItemStack, overwrite: Boolean): Boolean =
+        discHelper.isRecord(item) && item.amount == 1 && (overwrite || !item.isCustomDisc(discHelper)) &&
+            (!config.burnableTag.requireBurnableTag ||
+                item.itemMeta.persistentDataContainer.has(AddonKeys.burnableKey, PersistentDataType.BYTE) ||
+                player.allowed("burn.burnable_check_bypass"))
+
+    private fun burnPlaylist(player: Player, block: Block, chest: Chest, request: Pending,
+                             tracks: List<AudioTrack>, slots: Map<Int, ItemStack>? = null) {
+        var burned = 0
+        val inventory = chest.inventory
+        // Matching reserves specific blank discs. If any changed, leave all discs untouched.
+        if (slots != null && slots.any { (slot, original) -> inventory.getItem(slot) != original || !eligibleDisc(player, original, request.overwrite) }) {
+            message(player, "Chest contents changed while matching. Click again to retry.", true)
+            return
+        }
+        val voicePlayer = voiceServer?.let { player.asVoicePlayer(it) }
+        for (slot in slots?.keys ?: (0 until inventory.size).toList()) {
+            if (burned >= tracks.size) break
+            val item = inventory.getItem(slot)?.clone() ?: continue
+            if (!eligibleDisc(player, item, request.overwrite)) continue
+            val track = tracks[burned]
+            val original = item.clone()
+            if (voicePlayer != null && !PlayerBurnEvent(voicePlayer, track, item).callEvent()) continue
+            if (inventory.getItem(slot) != original) continue
+            val identifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.identifier
+            if (Bukkit.getServer().getMinecraftVersionInt() >= 12103) discHelper.showSongTooltip(item, false)
+            item.burnMetadata(identifier, formatTrackDisplay(track.info.title, track.info.author), config, discHelper)
+            inventory.setItem(slot, item)
+            burned++
+        }
+        pending.remove(player.uniqueId, request)
+        if (burned > 0) message(player, "Burned $burned playlist tracks in chest slot order.")
+        else message(player, "No eligible blank music discs found.", true)
         startChestQueue(block, chest, player)
     }
 
@@ -374,6 +462,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 return true
             }
             suspend fun transition(target: Int, plan: MixPlan?, manual: Boolean): Boolean {
+                controls.goodAutoMixUpcoming = false
                 // Repeated skips while loading retain the song that is actually audible.
                 if (controls.sentAudioMs == 0L && outgoing != null) recoverOutgoing()
                 controls.transitionPartner = null
@@ -463,6 +552,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         controls.setGain(AutoMix.gains(progress, fadeOutGain).first)
                     }
                     if (fadeOutStart != null) {
+                        controls.goodAutoMixUpcoming = false
                         if (!playing.isActive || controls.sentAudioMs - fadeOutStart!! >= fadeOutMs) break
                         continue
                     }
@@ -502,16 +592,29 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         if (!transition(target, null, true)) break
                         continue
                     }
-                    if (outgoing != null || haltAtEnd || controls.paused) continue
+                    if (outgoing != null || haltAtEnd) {
+                        controls.goodAutoMixUpcoming = false
+                        continue
+                    }
                     val nextIndex = order.peek(liveDiscs.size, index, playbackModes(block).first,
-                        playbackModes(block).second, removedNextIndex) ?: continue
+                        playbackModes(block).second, removedNextIndex)
+                    if (nextIndex == null) {
+                        controls.goodAutoMixUpcoming = false
+                        continue
+                    }
                     val remaining = controls.duration - controls.position
-                    if (fadeDuration() > 0 && controls.duration > 0 && remaining in 1..45_000) prepare(nextIndex)
+                    // AutoMix previews the next intro from the beginning of this song,
+                    // so listeners can see a promising match before the fade approaches.
+                    if (controls.duration > 0 && remaining > 0 &&
+                        (autoMixEnabled(block) || fadeDuration() > 0 && remaining <= 45_000)) prepare(nextIndex)
                     val ready = prepared(nextIndex)
                     val plan = if (autoMixEnabled(block)) AutoMix.plan(controls.duration,
                         ready?.track?.duration ?: 0L, controls.mixAnalysis.snapshot(), ready?.features, controls.playbackRate,
                         controls.filterConfig.speed * controls.filterConfig.tempo)
                         else MixPlan((controls.duration - fadeDuration()).coerceAtLeast(0), fadeDuration())
+                    controls.goodAutoMixUpcoming = autoMixEnabled(block) && ready != null && plan.beatAligned &&
+                        controls.seekable && !controls.isStream && remaining > 0
+                    if (controls.paused) continue
                     if (plan.durationMs > 0 && controls.seekable && !controls.isStream && controls.duration > 0 &&
                         controls.position >= plan.startMs && remaining > 0) {
                         val target = order.next(liveDiscs.size, index, playbackModes(block).first,
@@ -520,6 +623,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     }
                 }
             } finally {
+                controls.goodAutoMixUpcoming = false
                 controls.transitionPartner = null
                 withContext(NonCancellable) {
                     preparing?.cancelAndJoin()

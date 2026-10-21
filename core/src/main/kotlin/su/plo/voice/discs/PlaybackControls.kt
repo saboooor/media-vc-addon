@@ -92,6 +92,9 @@ class PlaybackControls(
 
     private val players = CopyOnWriteArrayList<AudioPlayer>()
     @Volatile var title: String = "Loading..."
+    /** A confident, beat-aligned transition to the prepared next track is approaching. */
+    @Volatile var goodAutoMixUpcoming = false
+    val displayTitle: String get() = title + if (autoMixAnalysis && goodAutoMixUpcoming) " ✨" else ""
     @Volatile var paused: Boolean = false
         private set
     @Volatile var volume: Int = initialVolume.coerceIn(0, 100)

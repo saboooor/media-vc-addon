@@ -70,8 +70,14 @@ tasks {
                 val root = classes.files.first { file.toPath().startsWith(it.toPath()) }
                 file.relativeTo(root).invariantSeparatorsPath
             }.toSet()
-            check("su/plo/voice/discs/utils/DiscEjectCause.class" in required) {
-                "Core compiler output is incomplete. Run ./gradlew clean build."
+            val essentialClasses = setOf(
+                "su/plo/voice/discs/utils/DiscEjectCause.class",
+                "su/plo/voice/discs/command/subcommand/PlaylistCommand\$Pending.class",
+                "su/plo/voice/discs/playlist/CatalogPlaylistClient.class",
+                "su/plo/voice/discs/playlist/PublicPlaylistClient.class",
+            )
+            check(required.containsAll(essentialClasses)) {
+                "Core compiler output is incomplete: ${essentialClasses - required}. Run ./gradlew clean build."
             }
             ZipFile(archiveFile.get().asFile).use { zip ->
                 val missing = required.filter { zip.getEntry(it) == null }

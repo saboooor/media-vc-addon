@@ -28,6 +28,7 @@ import su.plo.voice.api.logging.DebugLogger
 import su.plo.voice.api.server.PlasmoVoiceServer
 import su.plo.voice.api.server.audio.line.ServerSourceLine
 import su.plo.voice.api.server.event.config.VoiceServerConfigReloadedEvent
+import su.plo.voice.proto.packets.tcp.clientbound.SourceLineRegisterPacket
 import su.plo.voice.discs.command.CommandHandler
 import su.plo.voice.discs.command.subcommand.ControlCommand
 import su.plo.voice.discs.command.subcommand.HologramCommand
@@ -426,6 +427,12 @@ class DiscsPlugin : JavaPlugin(), Listener {
             ).apply {
                 setDefaultVolume(addonConfig.defaultSourceLineVolume)
             }.build()
+
+            // Building a line only registers it on the server. Existing clients received
+            // an unregister packet during unload/reload and need the replacement too.
+            server.playerManager.players.filter { it.hasVoiceChat() }.forEach { player ->
+                player.sendPacket(SourceLineRegisterPacket(sourceLine.getSourceLineForPlayer(player)))
+            }
 
             try {
                 KOIN_INSTANCE.loadModules(listOf(module {
