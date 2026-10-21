@@ -6,6 +6,31 @@ import org.junit.jupiter.api.Test
 import java.net.InetSocketAddress
 
 class JellyfinClientTest {
+    @Test fun `subtitle download uses actual source ID converted SRT and header authentication`() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val paths = mutableListOf<String>()
+        server.createContext("/proxy/") { exchange ->
+            paths += exchange.requestURI.toString()
+            assertTrue(exchange.requestHeaders.getFirst("Authorization").contains("test-token"))
+            val response = (if (exchange.requestURI.path.contains("PlaybackInfo"))
+                """{"MediaSources":[{"Id":"different-source","MediaStreams":[{"Type":"Subtitle","Index":3,"DisplayTitle":"English SDH","Language":"eng","Codec":"subrip","IsTextSubtitleStream":true,"DeliveryUrl":null},{"Type":"Subtitle","Index":4,"Codec":"pgssub","IsTextSubtitleStream":false}]}]}"""
+                else "1\n00:00:01,000 --> 00:00:02,000\nHello").toByteArray()
+            exchange.sendResponseHeaders(200, response.size.toLong())
+            exchange.responseBody.use { it.write(response) }
+        }
+        server.start()
+        try {
+            val session = JellyfinClient.Session("http://127.0.0.1:${server.address.port}/proxy/", "0123456789abcdef0123456789abcdef", "test-token", "device")
+            val client = JellyfinClient()
+            val item = "abcdef0123456789abcdef0123456789"
+            val tracks = client.getSubtitleTracks(session, item)
+            assertEquals(1, tracks.size)
+            assertEquals("different-source", tracks.single().mediaSourceId)
+            assertTrue(client.downloadSubtitle(session, item, tracks.single())!!.contains("Hello"))
+            assertEquals("/proxy/Videos/$item/different-source/Subtitles/3/0/Stream.srt?copyTimestamps=true", paths.last())
+            assertTrue(paths.none { "test-token" in it })
+        } finally { server.stop(0) }
+    }
     @Test fun `unknown artists do not appear in Jellyfin labels`() {
         assertEquals("Movie", JellyfinClient.Media("id", "Movie", "Unknown Artist", "", 1000).label)
         assertEquals("Artist - Song", JellyfinClient.Media("id", "Song", "Artist", "", 1000).label)
@@ -80,3 +105,4 @@ class JellyfinClientTest {
         } finally { server.stop(0) }
     }
 }
+

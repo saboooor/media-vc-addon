@@ -24,7 +24,7 @@ class EffectCommand : SubCommand() {
     private val controlCommand: ControlCommand by inject()
 
     private val validOptions = listOf(
-        "gui", "clear", "8d", "echo", "underwater", "tremolo", "vibrato", "nightcore", "vaporwave"
+        "gui", "clear", "tempo", "pitch", "8d", "echo", "underwater", "tremolo", "vibrato", "nightcore", "vaporwave"
     ) + EqPreset.entries.map { it.id }
 
     override fun execute(sender: CommandSender, arguments: Array<out String>) {
@@ -33,6 +33,10 @@ class EffectCommand : SubCommand() {
             return
         }
 
+        if (!controlCommand.checkCanExecute(player)) {
+            player.sendMessage(Component.text("No permission to control this jukebox.", NamedTextColor.RED))
+            return
+        }
         val targetBlock = player.getTargetBlockExact(8)
         val jukeboxBlock = if (targetBlock?.type == Material.JUKEBOX) {
             targetBlock
@@ -65,6 +69,21 @@ class EffectCommand : SubCommand() {
         }
 
         val current = jukeboxes.filterConfig(jukeboxBlock)
+        if (action == "tempo" || action == "pitch") {
+            val value = arguments.getOrNull(2)?.toDoubleOrNull()
+            val valid = value != null && value.isFinite() &&
+                (if (action == "tempo") value in 0.5..2.0 else value in -12.0..12.0)
+            if (!valid || arguments.size != 3) {
+                player.sendMessage(Component.text(if (action == "tempo") "Usage: /disc effect tempo <0.5-2.0> (preserves pitch)"
+                    else "Usage: /disc effect pitch <-12 to 12 semitones> (preserves tempo)", NamedTextColor.RED))
+                return
+            }
+            val updated = if (action == "tempo") current.copy(tempo = value!!) else current.copy(pitchSemitones = value!!)
+            jukeboxes.setFilterConfig(jukeboxBlock, updated)
+            player.sendMessage(Component.text(if (action == "tempo") "Tempo set to ${value}x; pitch preserved."
+                else "Pitch set to $value semitones; tempo preserved.", NamedTextColor.GREEN))
+            return
+        }
         val preset = EqPreset.fromId(action)
         if (preset != null) {
             val updated = if (preset == EqPreset.FLAT) current.copy(eqPreset = null, bands = null)
@@ -112,10 +131,13 @@ class EffectCommand : SubCommand() {
     }
 
     override fun suggest(source: CommandSender, arguments: Array<out String>): List<String> {
+        if (arguments.size == 3 && arguments[1] == "tempo") return listOf("0.8", "1.0", "1.25")
+        if (arguments.size == 3 && arguments[1] == "pitch") return listOf("-12", "-2", "0", "2", "12")
         if (arguments.size == 2) {
             return validOptions.filter { it.startsWith(arguments[1].lowercase()) }
         }
         return emptyList()
     }
 }
+
 

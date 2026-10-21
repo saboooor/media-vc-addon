@@ -309,13 +309,18 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     }
 
     fun playChestTrack(identifier: String, block: Block, itemMeta: ItemMeta?, player: Player? = null, chestQueue: Boolean = true,
-                       controls: PlaybackControls = PlaybackControls(), overlap: Boolean = false, onFailure: (() -> Unit)? = null): Job {
+                       controls: PlaybackControls = PlaybackControls(), overlap: Boolean = false, onFailure: (() -> Unit)? = null, preparedTrack: su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack? = null): Job {
         check(overlap || !isPlaying(block)) { "Jukebox is already playing" }
         val voicePlayer = player?.let { p -> voiceServer?.let { p.asVoicePlayer(it) } }
-        val job = playTrack(identifier, block, itemMeta, voicePlayer, player, chestQueue = chestQueue, controls = controls, onFailure = onFailure)
+        val job = playTrack(identifier, block, itemMeta, voicePlayer, player, chestQueue = chestQueue, controls = controls, onFailure = onFailure, preparedTrack = preparedTrack)
         jobByBlock[block] = job
         job.invokeOnCompletion { jobByBlock.remove(block, job) }
         return job
+    }
+
+    /** Restore the still-audible song when an incoming decoder fails before producing audio. */
+    fun restorePlayback(block: Block, job: Job, controls: PlaybackControls) {
+        if (job.isActive) { jobByBlock[block] = job; controlsByBlock[block] = controls }
     }
 
     private fun playTrack(
@@ -327,6 +332,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         chestQueue: Boolean = false,
         controls: PlaybackControls = PlaybackControls(),
         onFailure: (() -> Unit)? = null,
+        preparedTrack: su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack? = null,
     ): Job {
         savedVolumes[block]?.let { controls.changeVolume(it - controls.volume) }
         controls.onVolumeChanged = { savedVolumes[block] = it }
@@ -357,7 +363,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 }
             }
             val track = try {
-                withTimeout(30_000L) { audioPlayerManager.getTrack(identifier).await() }
+                preparedTrack ?: withTimeout(30_000L) { audioPlayerManager.getTrack(identifier).await() }
             } catch (e: Exception) {
                 if (e is CancellationException && e !is TimeoutCancellationException) throw e
                 currentCoroutineContext().ensureActive()
@@ -545,7 +551,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     job.cancelAndJoin()
                     notePvSource?.remove()
                     pvSource?.remove()
-                    screenManager?.onJukeboxStop(block)
+                    if (controlsByBlock[block] === controls) screenManager?.onJukeboxStop(block)
 
                     if (!scope.isActive) return@withContext
 
@@ -627,4 +633,5 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         }
     }
 }
+
 

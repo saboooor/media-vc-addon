@@ -24,6 +24,8 @@ data class Screen(
     val centerZ: Double = 0.0,
     var subtitlesEnabled: Boolean = true,
     var subtitleLanguage: String? = null,
+    var subtitleTrackIndex: Int? = null,
+    var subtitleMediaId: String? = null,
 ) {
     val facing: BlockFace
         get() = try {
@@ -79,4 +81,5 @@ data class Screen(
         return false
     }
 }
+
 

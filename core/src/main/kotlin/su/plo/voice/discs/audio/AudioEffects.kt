@@ -3,9 +3,7 @@ package su.plo.voice.discs.audio
 import su.plo.voice.discs.SpeakerChannels
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.FloatPcmAudioFilter
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory
-import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.ResamplingPcmAudioFilter
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.equalizer.Equalizer
-import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.AudioConfiguration
 import java.util.Arrays
 
 enum class EqPreset(val id: String, val label: String, val bands: FloatArray) {
@@ -33,6 +31,8 @@ data class AudioFilterConfig(
     val vibrato: Boolean = false,
     val underwater: Boolean = false,
     val speed: Double = 1.0,
+    val tempo: Double = 1.0,
+    val pitchSemitones: Double = 0.0,
 ) {
     fun hasActiveEq(): Boolean = (bands != null && bands.any { it != 0f }) ||
         (eqPreset != null && !eqPreset.equals("flat", ignoreCase = true) && !eqPreset.equals("off", ignoreCase = true))
@@ -43,7 +43,7 @@ data class AudioFilterConfig(
         return if (preset != null && preset != EqPreset.FLAT) preset.bands else null
     }
 
-    fun hasActiveEffects(): Boolean = rotation || echo || tremolo || vibrato || underwater || speed != 1.0
+    fun hasActiveEffects(): Boolean = rotation || echo || tremolo || vibrato || underwater || speed != 1.0 || tempo != 1.0 || pitchSemitones != 0.0
 
     fun isEmpty(): Boolean = !hasActiveEq() && !hasActiveEffects()
 
@@ -57,7 +57,7 @@ data class AudioFilterConfig(
             tremolo == other.tremolo &&
             vibrato == other.vibrato &&
             underwater == other.underwater &&
-            speed == other.speed
+            speed == other.speed && tempo == other.tempo && pitchSemitones == other.pitchSemitones
     }
 
     override fun hashCode(): Int {
@@ -69,6 +69,8 @@ data class AudioFilterConfig(
         result = 31 * result + vibrato.hashCode()
         result = 31 * result + underwater.hashCode()
         result = 31 * result + speed.hashCode()
+        result = 31 * result + tempo.hashCode()
+        result = 31 * result + pitchSemitones.hashCode()
         return result
     }
 }
@@ -263,11 +265,13 @@ object AudioFilterChain {
         config: AudioFilterConfig,
         channel: Int?,
         onSeek: (() -> Unit)? = null,
+        timescale: (() -> TimescaleParameters)? = null,
+        onTimescaleOutput: ((Int, Double) -> Unit)? = null,
     ): PcmFilterFactory? {
         val bands = config.effectiveBands()
         val hasEq = bands != null && bands.any { it != 0f }
         val hasEffects = config.hasActiveEffects()
-        if (channel == null && !hasEq && !hasEffects) {
+        if (channel == null && !hasEq && !hasEffects && timescale == null) {
             return null
         }
 
@@ -310,19 +314,14 @@ object AudioFilterChain {
             if (hasEq && Equalizer.isCompatible(format)) {
                 current = Equalizer(channelCount, current, bands)
             }
-            if (config.speed != 1.0) {
-                val sourceRate = (sampleRate / config.speed).toInt().coerceIn(8000, 192000)
-                current = ResamplingPcmAudioFilter(
-                    AudioConfiguration(),
-                    channelCount,
-                    current,
-                    sourceRate,
-                    sampleRate
-                )
+            if (timescale != null || config.speed != 1.0 || config.tempo != 1.0 || config.pitchSemitones != 0.0) {
+                current = TimescaleFilter(current, channelCount, sampleRate,
+                    timescale ?: { TimescaleParameters(config.tempo, config.pitchSemitones, config.speed) }, onTimescaleOutput)
             }
 
             listOf(current)
         }
     }
 }
+
 

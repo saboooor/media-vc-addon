@@ -124,7 +124,7 @@ class ControlCommand(
         show(player, block, hologram = true)
     }
 
-    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null, speakers: Boolean = false, visualizerSelection: Boolean = false, queueMenu: Boolean = false, volumeMenu: Boolean = false, lampMenu: Boolean = false, screenMenu: Boolean = false, effectsMenu: Boolean = false, eqMenu: Boolean = false) {
+    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null, speakers: Boolean = false, visualizerSelection: Boolean = false, queueMenu: Boolean = false, volumeMenu: Boolean = false, lampMenu: Boolean = false, screenMenu: Boolean = false, effectsMenu: Boolean = false, eqMenu: Boolean = false, subtitlesMenu: Boolean = false) {
         val record = block.asJukebox()?.record?.clone() ?: return
         val controls = jukeboxes.controlsByBlock[block]
         val visualizers = visualizer?.instances(block).orEmpty()
@@ -246,9 +246,13 @@ class ControlCommand(
             buttons.clear()
             queueLabels.clear()
             body.clear()
+            val autoMix = playlists.autoMixEnabled(block)
+            body += Component.text("AutoMix: ${if (autoMix) "On" else "Off"}", NamedTextColor.GOLD)
+            body += Component.text("AutoMix matches close tempos with pitch-preserving time stretching, then eases back to your chosen tempo. Uncertain matches use a smooth fade.", NamedTextColor.GRAY)
+            buttons += (if (autoMix) "Disable AutoMix" else "Enable AutoMix") to (prefix + "automix")
             if (queue != null) {
                 body += Component.text("Crossfade: ${if (queue.crossfadeSeconds == 0) "Off" else "${queue.crossfadeSeconds}s"}", NamedTextColor.GOLD)
-                body += Component.text("Changes apply to upcoming transitions. An active fade finishes at its original duration.", NamedTextColor.GRAY)
+                body += Component.text("Fixed crossfade applies when AutoMix is off, including skips. AutoMix overrides the fixed duration. Changes apply to upcoming transitions.", NamedTextColor.GRAY)
                 buttons += "Crossfade -1s" to (prefix + "fadeless")
                 buttons += "Crossfade +1s" to (prefix + "fademore")
                 buttons += (if (queue.crossfadeSeconds > 0) "Disable crossfade" else "Enable crossfade") to (prefix + "fadetoggle")
@@ -264,6 +268,7 @@ class ControlCommand(
             val cfg = jukeboxes.filterConfig(block)
             val eqName = cfg.eqPreset?.let { su.plo.voice.discs.audio.EqPreset.fromId(it)?.label } ?: "Flat / Off"
             body += Component.text("Audio Effects & Equalizer", NamedTextColor.GOLD)
+            body += Component.text("Tempo: ${"%.2f".format(cfg.tempo)}x · Pitch: ${cfg.pitchSemitones} semitones", NamedTextColor.GRAY)
             body += Component.text("Equalizer preset: $eqName", NamedTextColor.YELLOW)
             val activeList = mutableListOf<String>()
             if (cfg.rotation) activeList += "8D Audio"
@@ -287,6 +292,11 @@ class ControlCommand(
             buttons += "${if (cfg.underwater) "✓ " else ""}Underwater" to (prefix + "fx_toggle_underwater")
             buttons += "${if (cfg.tremolo) "✓ " else ""}Tremolo" to (prefix + "fx_toggle_tremolo")
             buttons += "${if (cfg.vibrato) "✓ " else ""}Vibrato" to (prefix + "fx_toggle_vibrato")
+            buttons += "Tempo -5%" to (prefix + "fx_tempo_down")
+            buttons += "Tempo +5%" to (prefix + "fx_tempo_up")
+            buttons += "Pitch -1 semitone" to (prefix + "fx_pitch_down")
+            buttons += "Pitch +1 semitone" to (prefix + "fx_pitch_up")
+            buttons += "Reset tempo & pitch" to (prefix + "fx_timescale_reset")
             buttons += "${if (cfg.speed == 1.25) "✓ " else ""}Nightcore" to (prefix + "fx_toggle_nightcore")
             buttons += "${if (cfg.speed == 0.8) "✓ " else ""}Vaporwave" to (prefix + "fx_toggle_vaporwave")
             buttons += "Reset all effects" to (prefix + "fx_clear")
@@ -333,6 +343,24 @@ class ControlCommand(
                 buttons += "Link Screen" to (prefix + "screen_link")
             }
             buttons += "Back to playback" to (prefix + "refresh")
+        }
+        if (subtitlesMenu) {
+            buttons.clear(); queueLabels.clear(); body.clear()
+            val screen = screenManager?.getScreenForJukebox(block)
+            body += Component.text("Choose subtitles for the current video. Refresh after the video loads.", NamedTextColor.GRAY)
+            if (screen != null) {
+                buttons += (if (screen.subtitlesEnabled) "Turn subtitles off" else "Turn subtitles on") to (prefix + "screen_subtoggle")
+                buttons += "Automatic track" to (prefix + "screen_subtrack_auto")
+                val tracks = screenManager?.subtitleTracks(screen).orEmpty()
+                for (track in tracks) {
+                    val selected = screen.subtitlesEnabled && screen.subtitleTrackIndex == track.index
+                    val label = "${if (selected) "✓ " else ""}${track.displayTitle} (${track.language}, #${track.index})${if (track.isForced) " · forced" else ""}"
+                    buttons += label to (prefix + "screen_subtrack_${track.index}")
+                }
+                if (tracks.isEmpty()) body += Component.text("No text subtitle tracks available yet. Image subtitles (PGS/DVD) cannot be shown as text.", NamedTextColor.YELLOW)
+            }
+            buttons += "Refresh tracks" to (prefix + "screen_subtitles")
+            buttons += "Back to screen" to (prefix + "screen_menu")
         }
         if (hologram) {
             val pd = progressDisplay ?: return show(player, block)
@@ -598,6 +626,19 @@ class ControlCommand(
                 show(player, session.block, effectsMenu = true)
                 return
             }
+            "fx_tempo_down", "fx_tempo_up", "fx_pitch_down", "fx_pitch_up", "fx_timescale_reset" -> {
+                val cur = jukeboxes.filterConfig(session.block)
+                val next = when (arguments[2]) {
+                    "fx_tempo_down" -> cur.copy(tempo = (cur.tempo - 0.05).coerceIn(0.5, 2.0))
+                    "fx_tempo_up" -> cur.copy(tempo = (cur.tempo + 0.05).coerceIn(0.5, 2.0))
+                    "fx_pitch_down" -> cur.copy(pitchSemitones = (cur.pitchSemitones - 1.0).coerceIn(-12.0, 12.0))
+                    "fx_pitch_up" -> cur.copy(pitchSemitones = (cur.pitchSemitones + 1.0).coerceIn(-12.0, 12.0))
+                    else -> cur.copy(tempo = 1.0, pitchSemitones = 0.0)
+                }
+                jukeboxes.setFilterConfig(session.block, next)
+                show(player, session.block, effectsMenu = true)
+                return
+            }
             "fx_toggle_nightcore" -> {
                 val cur = jukeboxes.filterConfig(session.block)
                 val next = if (cur.speed == 1.25) 1.0 else 1.25
@@ -615,6 +656,7 @@ class ControlCommand(
             "fadeless" -> playlists.changeCrossfade(session.block, -1)
             "fademore" -> playlists.changeCrossfade(session.block, 1)
             "fadetoggle" -> playlists.toggleCrossfade(session.block)
+            "automix" -> playlists.toggleAutoMix(session.block)
             "holo_menu" -> { show(player, session.block, hologram = true); return }
             "holo_reset" -> {
                 progressDisplay?.resetOffset(session.block)
@@ -644,15 +686,11 @@ class ControlCommand(
                 show(player, session.block, screenMenu = true)
                 return
             }
-            "screen_subtitles" -> {
+            "screen_subtitles" -> { show(player, session.block, subtitlesMenu = true); return }
+            "screen_subtoggle" -> {
                 val sm = screenManager
-                val screen = sm?.getScreenForJukebox(session.block)
-                if (screen != null) {
-                    val enabled = sm.toggleSubtitles(screen)
-                    player.sendMessage(Component.text("Subtitles ${if (enabled) "enabled" else "disabled"} on screen '${screen.name}'.", NamedTextColor.YELLOW))
-                }
-                show(player, session.block, screenMenu = true)
-                return
+                sm?.getScreenForJukebox(session.block)?.let { sm.toggleSubtitles(it) }
+                show(player, session.block, subtitlesMenu = true); return
             }
             "screen_clear" -> {
                 val sm = screenManager
@@ -666,6 +704,14 @@ class ControlCommand(
             }
             "refresh" -> {}
             else -> {
+                if (arguments[2].startsWith("screen_subtrack_")) {
+                    val sm = screenManager ?: return
+                    val screen = sm.getScreenForJukebox(session.block) ?: return
+                    val value = arguments[2].removePrefix("screen_subtrack_")
+                    val index = if (value == "auto") null else value.toIntOrNull() ?: return
+                    sm.selectSubtitle(screen, index)
+                    show(player, session.block, subtitlesMenu = true); return
+                }
                 if (arguments[2].startsWith("fx_set_eq_")) {
                     val presetId = arguments[2].removePrefix("fx_set_eq_")
                     val cur = jukeboxes.filterConfig(session.block)
@@ -679,11 +725,12 @@ class ControlCommand(
                 return
             }
         }
-        show(player, session.block, crossfade = arguments[2] in setOf("fadeless", "fademore", "fadetoggle"), speakers = arguments[2] == "stereo" || arguments[2].startsWith("note_"),
+        show(player, session.block, crossfade = arguments[2] in setOf("fadeless", "fademore", "fadetoggle", "automix"), speakers = arguments[2] == "stereo" || arguments[2].startsWith("note_"),
             queueMenu = arguments[2] in setOf("loop", "shuffle"), volumeMenu = arguments[2] in setOf("quieter", "louder"))
     }
 
     @EventHandler
     fun onQuit(event: PlayerQuitEvent) { sessions.remove(event.player.uniqueId); noteRequests.remove(event.player.uniqueId) }
 }
+
 

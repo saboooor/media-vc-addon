@@ -5,6 +5,8 @@ import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import su.plo.voice.discs.jellyfin.JellyfinClient
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
@@ -45,6 +47,9 @@ class ScreenManager : PluginKoinComponent {
     private val activeIdentifiers = ConcurrentHashMap<String, String>()
     private val activeArtwork = ConcurrentHashMap<String, String>()
     private val activeYouTubeMusic = ConcurrentHashMap<String, Boolean>()
+    private data class SubtitleState(val session: JellyfinClient.Session, val mediaId: String,
+        val tracks: List<JellyfinClient.SubtitleTrack>, val overlay: ScreenSubtitles, var request: Any = Any())
+    private val subtitleStates = ConcurrentHashMap<String, SubtitleState>()
     private var shuttingDown = false
     private val selectionSessions = ConcurrentHashMap<UUID, ScreenSelectionSession>()
 
@@ -64,6 +69,8 @@ class ScreenManager : PluginKoinComponent {
     fun shutdown() {
         synchronized(playbackLock) {
             shuttingDown = true
+            subtitleStates.values.forEach { it.overlay.stop(immediate = true) }
+            subtitleStates.clear()
             playbackRequests.clear()
             requestedPositions.clear()
             activePlayers.values.forEach { it.stop() }
@@ -349,7 +356,7 @@ class ScreenManager : PluginKoinComponent {
             }
         }
 
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             if (!config.screen.enabled) return@launch
 
             val videoId = VideoSourceResolver.extractYouTubeVideoId(identifier)
@@ -365,32 +372,8 @@ class ScreenManager : PluginKoinComponent {
             val sourceAuthorization = jellyfin?.first?.session?.let {
                 su.plo.voice.discs.jellyfin.JellyfinClient.authorization(it.deviceId, it.token)
             }
-            var subtitlePath: String? = null
             val resolvedUrl = if (jellyfin != null) {
-                val jfClient = su.plo.voice.discs.jellyfin.JellyfinClient()
-                if (screen.subtitlesEnabled) {
-                    try {
-                        val tracks = jfClient.getSubtitleTracks(jellyfin.first.session, jellyfin.second.mediaId)
-                        val selectedTrack = if (screen.subtitleLanguage != null) {
-                            tracks.firstOrNull { it.language.equals(screen.subtitleLanguage, ignoreCase = true) }
-                        } else {
-                            tracks.firstOrNull { it.isDefault } ?: tracks.firstOrNull { it.isForced } ?: tracks.firstOrNull()
-                        }
-                        if (selectedTrack != null) {
-                            val subContent = jfClient.downloadSubtitle(jellyfin.first.session, jellyfin.second.mediaId, selectedTrack)
-                            if (!subContent.isNullOrBlank()) {
-                                val tempDir = File(plugin.dataFolder, "temp/subtitles").apply { mkdirs() }
-                                val tempFile = File(tempDir, "sub-${jellyfin.second.mediaId}-${selectedTrack.index}.srt")
-                                tempFile.writeText(subContent, Charsets.UTF_8)
-                                tempFile.deleteOnExit()
-                                subtitlePath = tempFile.absolutePath
-                                plugin.slF4JLogger.info("Loaded Jellyfin subtitle '${selectedTrack.displayTitle}' for screen '${screen.name}'")
-                            }
-                        }
-                    } catch (e: Exception) {
-                        plugin.slF4JLogger.warn("Failed to load Jellyfin subtitles for '${screen.name}': ${e.message}")
-                    }
-                }
+                val jfClient = JellyfinClient()
                 jfClient.videoStreamUrl(jellyfin.first.session, jellyfin.second.mediaId)
             } else VideoSourceResolver.resolveVideoUrl(
                 identifier = identifier,
@@ -412,7 +395,6 @@ class ScreenManager : PluginKoinComponent {
                 sourceUrl = resolvedUrl,
                 sourceAuthorization = sourceAuthorization,
                 playbackPositionMs = playbackPositionMs,
-                subtitlePath = subtitlePath,
                 companionRgb = config.screen.companionRgb,
                 companionQuality = config.screen.companionQuality,
                 ditherStrength = if (config.screen.dithering) config.screen.ditherStrength.coerceIn(0, 32) else 0,
@@ -422,8 +404,9 @@ class ScreenManager : PluginKoinComponent {
                 fallbackImageUrl = fallbackImg,
                 coroutineScope = scope,
                 onCompletion = {
-                    activePlayers.remove(lower, videoPlayer)
-                    if (subtitlePath != null) runCatching { File(subtitlePath).delete() }
+                    synchronized(playbackLock) {
+                        if (activePlayers.remove(lower, videoPlayer)) subtitleStates.remove(lower)?.overlay?.stop()
+                    }
                 }
             )
 
@@ -436,12 +419,24 @@ class ScreenManager : PluginKoinComponent {
                 activePlayers[lower] = videoPlayer
                 videoPlayer.start(requestedPositions[lower] ?: startPositionMs)
             }
+            if (jellyfin != null) {
+                val tracks = try { JellyfinClient().getSubtitleTracks(jellyfin.first.session, jellyfin.second.mediaId) }
+                    catch (_: Exception) { plugin.slF4JLogger.warn("Could not list subtitles for screen '${screen.name}'."); emptyList() }
+                synchronized(playbackLock) {
+                    if (shuttingDown || playbackRequests[lower] !== request || activePlayers[lower] !== videoPlayer) return@launch
+                    val overlay = ScreenSubtitles(screen, videoPlayer)
+                    subtitleStates[lower] = SubtitleState(jellyfin.first.session, jellyfin.second.mediaId, tracks, overlay)
+                    overlay.start()
+                    reloadSubtitles(screen)
+                }
+            }
         }
     }
 
     fun stopVideo(screen: Screen) {
         val lower = screen.name.lowercase(Locale.ROOT)
         synchronized(playbackLock) {
+            subtitleStates.remove(lower)?.overlay?.stop()
             playbackRequests.remove(lower)
             requestedPositions.remove(lower)
             activeIdentifiers.remove(lower)
@@ -454,17 +449,49 @@ class ScreenManager : PluginKoinComponent {
     fun toggleSubtitles(screen: Screen): Boolean {
         screen.subtitlesEnabled = !screen.subtitlesEnabled
         saveScreens()
-        val lower = screen.name.lowercase(Locale.ROOT)
-        val player = activePlayers[lower]
-        val identifier = activeIdentifiers[lower]
-        if (player != null && identifier != null) {
-            val pos = player.playbackPositionMs?.invoke() ?: requestedPositions[lower] ?: 0L
-            val art = activeArtwork[lower]
-            val ytMusic = activeYouTubeMusic[lower] ?: false
-            val cb = player.playbackPositionMs
-            playVideo(screen, identifier, pos, art, ytMusic, cb)
-        }
+        reloadSubtitles(screen)
         return screen.subtitlesEnabled
+    }
+
+    fun subtitleTracks(screen: Screen): List<JellyfinClient.SubtitleTrack> =
+        subtitleStates[screen.name.lowercase(Locale.ROOT)]?.tracks.orEmpty()
+
+    fun selectSubtitle(screen: Screen, index: Int?): Boolean {
+        val state = subtitleStates[screen.name.lowercase(Locale.ROOT)] ?: return false
+        val track = index?.let { wanted -> state.tracks.firstOrNull { it.index == wanted } ?: return false }
+        screen.subtitlesEnabled = true
+        screen.subtitleTrackIndex = index
+        screen.subtitleMediaId = if (index != null) state.mediaId else null
+        screen.subtitleLanguage = track?.language
+        saveScreens()
+        reloadSubtitles(screen)
+        return true
+    }
+
+    private fun reloadSubtitles(screen: Screen) {
+        val lower = screen.name.lowercase(Locale.ROOT)
+        synchronized(playbackLock) {
+            val state = subtitleStates[lower] ?: return
+            val request = Any().also { state.request = it }
+            state.overlay.cues = SubtitleCues.EMPTY
+            if (!screen.subtitlesEnabled) return
+            val track = state.tracks.firstOrNull { screen.subtitleMediaId == state.mediaId && it.index == screen.subtitleTrackIndex }
+                ?: state.tracks.firstOrNull { screen.subtitleLanguage != null && it.language.equals(screen.subtitleLanguage, true) }
+                ?: state.tracks.firstOrNull { it.isDefault } ?: state.tracks.firstOrNull { it.isForced } ?: state.tracks.firstOrNull() ?: return
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val content = JellyfinClient().downloadSubtitle(state.session, state.mediaId, track) ?: return@launch
+                    val cues = SubtitleCues.parse(content)
+                    synchronized(playbackLock) {
+                        if (subtitleStates[lower] === state && state.request === request) state.overlay.cues = cues
+                    }
+                } catch (_: Exception) { plugin.slF4JLogger.warn("Could not load subtitle track ${track.index} for screen '${screen.name}'.") }
+            }
+        }
+    }
+
+    fun onSubtitleChunkUnload(event: org.bukkit.event.world.ChunkUnloadEvent) {
+        subtitleStates.values.forEach { it.overlay.onUnload(event) }
     }
 
     fun clearScreen(screen: Screen) {
@@ -498,3 +525,4 @@ class ScreenManager : PluginKoinComponent {
         }
     }
 }
+
