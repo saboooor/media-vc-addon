@@ -315,6 +315,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
             .addSubCommand { jellyfinCommand }
             .addSubCommand { playlistCommand }
             .addSubCommand { controlCommand }
+            .addSubCommand { su.plo.voice.discs.command.subcommand.PortableCommand(handheldJukeboxes!!) }
             .addSubCommand { hologramCommand }
             .addSubCommand { visualizerCommand }
             .addSubCommand(::EraseCommand)

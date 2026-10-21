@@ -33,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /** Portable devices have their own persistent queue; they never use horn playback state. */
 class HandheldJukeboxes : Listener, PluginKoinComponent {
+    companion object { const val MAX_DISCS = 18 }
     private val plugin: JavaPlugin by inject()
     private val scope: CoroutineScope by inject()
     private val config: AddonConfig by getter()
@@ -44,24 +45,50 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
     private val gson = Gson()
     private val active = ConcurrentHashMap<UUID, Session>()
     private var monitor: Job? = null
+    private data class DialogSession(val token: UUID, val device: Device, val expires: Long = System.currentTimeMillis() + 120_000)
+    private val dialogs = ConcurrentHashMap<UUID, DialogSession>()
 
-    data class Song(val identifier: String, val title: String)
+    data class Song(val identifier: String, val title: String, val itemData: String? = null, val slot: Int = -1)
     data class Device(val id: String = UUID.randomUUID().toString(), val queue: MutableList<Song> = mutableListOf(),
-                      var volume: Int = 100, var selected: Int = 0) {
+                      var volume: Int = 100, var selected: Int = 0,
+                      var loop: Boolean = false, var shuffle: Boolean = false,
+                      var effects: su.plo.voice.discs.audio.AudioFilterConfig = su.plo.voice.discs.audio.AudioFilterConfig()) {
+        @Transient private var played = mutableSetOf<Int>()
+        fun resetOrder() { played.clear() }
+        fun replaceQueue(next: List<Song>, current: Song? = queue.getOrNull(selected)) {
+            val index = if (current == null) -1 else next.indexOfFirst {
+                it.identifier == current.identifier && it.itemData == current.itemData
+            }
+            queue.clear(); queue.addAll(next)
+            selected = if (index >= 0) index else selected.coerceIn(0, (queue.size - 1).coerceAtLeast(0))
+            resetOrder()
+        }
         fun enqueue(song: Song): Boolean {
-            if (queue.size >= 45) return false
+            if (queue.size >= MAX_DISCS) return false
             queue.add(song)
             return true
         }
         fun advance(): Boolean {
+            if (queue.isEmpty()) { selected = 0; return false }
+            if (shuffle) {
+                played.add(selected)
+                var remaining = queue.indices.filterNot { it in played }
+                if (remaining.isEmpty()) {
+                    played.clear()
+                    if (!loop) { selected = 0; return false }
+                    remaining = queue.indices.filter { queue.size == 1 || it != selected }
+                }
+                selected = remaining.random()
+                return true
+            }
             selected++
-            if (selected >= queue.size) { selected = 0; return false }
+            if (selected >= queue.size) { selected = 0; return loop }
             return true
         }
     }
     private class Session(val owner: UUID, val device: Device, val controls: PlaybackControls, var job: Job? = null)
     private class Menu(val device: Device) : InventoryHolder {
-        val view: Inventory = Bukkit.createInventory(this, 54, "Handheld Jukebox")
+        val view: Inventory = Bukkit.createInventory(this, MAX_DISCS, "Handheld Jukebox Queue")
         override fun getInventory(): Inventory = view
     }
 
@@ -71,16 +98,16 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
             plugin.logger.info("Handheld jukebox crafting requires copper nuggets; recipe unavailable on this Minecraft version.")
             return
         }
-        val bundle = Material.matchMaterial("BUNDLE") ?: return
-        val result = ItemStack(bundle)
+        val shard = Material.matchMaterial("AMETHYST_SHARD") ?: return
+        val result = ItemStack(shard)
         write(result, Device())
         // Identity is assigned on first use, so separate crafts never share a device ID.
         result.editMeta { it.persistentDataContainer.set(key, PersistentDataType.STRING, "new") }
         val recipeKey = NamespacedKey(plugin, "handheld_jukebox")
         Bukkit.removeRecipe(recipeKey)
         Bukkit.addRecipe(ShapedRecipe(recipeKey, result).apply {
-            shape("CJC", "CBC", "CCC")
-            setIngredient('C', copper); setIngredient('J', Material.JUKEBOX); setIngredient('B', bundle)
+            shape("CJC", "CSC", "CCC")
+            setIngredient('C', copper); setIngredient('J', Material.JUKEBOX); setIngredient('S', shard)
         })
         monitor = scope.launch {
             while (isActive) {
@@ -89,7 +116,7 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
                     val player = Bukkit.getPlayer(session.owner)
                     if (player == null) stop(id)
                     else suspendSyncFor(player, voiceServer, plugin) {
-                        if (player.isDead || held(player, id) == null) stop(id)
+                        if (player.isDead || carried(player, id) == null) stop(id)
                     }
                 }
             }
@@ -104,6 +131,7 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
         return try {
             if (json == "new") Device() else gson.fromJson(json, Device::class.java).also {
                 UUID.fromString(it.id)
+                // Keep older larger queues accessible so players can remove entries without data loss.
                 require(it.queue.size <= 45 && it.volume in 0..100)
             }
         } catch (_: Exception) { null }
@@ -114,12 +142,12 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
             meta.persistentDataContainer.set(key, PersistentDataType.STRING, gson.toJson(device))
             meta.displayName(Component.text("Handheld Jukebox", NamedTextColor.GOLD))
             meta.lore(listOf(Component.text("Right-click to open your music queue.", NamedTextColor.GRAY),
-                Component.text("Keep in either hand to play. Click burned discs to add tracks.", NamedTextColor.GRAY)))
+                Component.text("Keep in your inventory to play. Open Queue stores real discs.", NamedTextColor.GRAY)))
         }
     }
 
-    private fun held(player: Player, id: UUID): ItemStack? =
-        listOf(player.inventory.itemInMainHand, player.inventory.itemInOffHand).firstOrNull {
+    private fun carried(player: Player, id: UUID): ItemStack? =
+        player.inventory.contents.filterNotNull().firstOrNull {
             marked(it) && read(it)?.id == id.toString()
         }
 
@@ -135,92 +163,290 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
         val saved = read(item) ?: return
         val device = active[UUID.fromString(saved.id)]?.device ?: saved
         write(item, device)
-        later(event.player) { open(event.player, device) }
+        later(event.player) { showControls(event.player, device) }
     }
 
-    // Prevent placing the bundle's contents or nesting items inside the custom device.
+    // Protect legacy bundle devices crafted before the amethyst-shard item change.
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-    fun protectBundle(event: InventoryClickEvent) {
-        if (marked(event.cursor) || marked(event.currentItem)) {
+    fun protectLegacyBundle(event: InventoryClickEvent) {
+        if ((event.cursor?.type?.name == "BUNDLE" && marked(event.cursor)) ||
+            (event.currentItem?.type?.name == "BUNDLE" && marked(event.currentItem))) {
             if (event.isRightClick) event.isCancelled = true
         }
     }
 
-    private fun icon(material: Material, title: String, vararg lore: String): ItemStack = ItemStack(material).apply {
-        editMeta { meta ->
-            meta.displayName(Component.text(title, NamedTextColor.YELLOW))
-            meta.lore(lore.map { Component.text(it, NamedTextColor.GRAY) })
+    private fun isDisc(item: ItemStack?): Boolean = item != null &&
+        item.type.name.startsWith("MUSIC_DISC_") && item.identifier() != null
+
+    private fun encodeDisc(item: ItemStack): String {
+        val bytes = java.io.ByteArrayOutputStream()
+        org.bukkit.util.io.BukkitObjectOutputStream(bytes).use { it.writeObject(item) }
+        return java.util.Base64.getEncoder().encodeToString(bytes.toByteArray())
+    }
+
+    private fun decodeDisc(song: Song): ItemStack {
+        song.itemData?.let { encoded ->
+            val bytes = java.util.Base64.getDecoder().decode(encoded)
+            return org.bukkit.util.io.BukkitObjectInputStream(java.io.ByteArrayInputStream(bytes)).use {
+                it.readObject() as ItemStack
+            }
+        }
+        // Older queues stored only copied track references, without the original disc material.
+        return ItemStack(Material.MUSIC_DISC_CAT).apply {
+            editMeta {
+                it.persistentDataContainer.set(AddonKeys.identifierKey, PersistentDataType.STRING, song.identifier)
+                it.lore(listOf(Component.text(song.title, NamedTextColor.GRAY)))
+            }
         }
     }
 
-    private fun open(player: Player, device: Device) {
+    private fun song(item: ItemStack, slot: Int): Song = Song(item.identifier()!!,
+        item.itemMeta?.lore()?.firstOrNull()?.let {
+            net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(it)
+        } ?: item.type.name, encodeDisc(item), slot)
+
+    private fun openQueue(player: Player, device: Device) {
+        val item = carried(player, UUID.fromString(device.id)) ?: return
+        if (player.openInventory.topInventory.holder is Menu) player.closeInventory()
         val menu = Menu(device)
-        val state = active[UUID.fromString(device.id)]
-        device.queue.forEachIndexed { index, song ->
-            menu.view.setItem(index, icon(Material.MUSIC_DISC_CAT, "${index + 1}. ${song.title}",
-                "Click to play from here", "Shift-click to remove"))
+        // Decode everything before changing the device, so unreadable item data is never erased.
+        val decoded = try { device.queue.map(::decodeDisc) } catch (e: Exception) {
+            plugin.logger.warning("Could not read portable jukebox discs: ${e.message}")
+            player.sendMessage(Component.text("Could not read this jukebox's discs. Nothing was removed.", NamedTextColor.RED))
+            return
         }
-        menu.view.setItem(45, icon(Material.LIME_DYE, "Play / Pause", state?.controls?.displayTitle ?: "Stopped"))
-        menu.view.setItem(46, icon(Material.ARROW, "Next track"))
-        menu.view.setItem(47, icon(Material.RED_DYE, "Stop"))
-        menu.view.setItem(48, icon(Material.REDSTONE, "Volume -10", "Volume: ${device.volume}%"))
-        menu.view.setItem(49, icon(Material.PAPER, "Add music", "Click a burned disc in your inventory to copy its track.", "Queue: ${device.queue.size}/45", "Keep this device in either hand while playing."))
-        menu.view.setItem(50, icon(Material.GLOWSTONE_DUST, "Volume +10", "Volume: ${device.volume}%"))
-        menu.view.setItem(53, icon(Material.BARRIER, "Close"))
+        val overflow = mutableListOf<ItemStack>()
+        device.queue.forEachIndexed { index, entry ->
+            val slot = if (entry.slot in 0 until MAX_DISCS) entry.slot else index
+            if (slot < MAX_DISCS && menu.view.getItem(slot) == null) menu.view.setItem(slot, decoded[index])
+            else overflow += decoded[index]
+        }
+        // Save the migrated, physical inventory before returning legacy overflow.
+        val old = device.queue.getOrNull(device.selected)
+        val updated = (0 until MAX_DISCS).mapNotNull { slot -> menu.view.getItem(slot)?.let { song(it, slot) } }
+        if (updated != device.queue) device.replaceQueue(updated, old)
+        write(item, device)
+        overflow.forEach { disc -> player.inventory.addItem(disc).values.forEach { player.world.dropItemNaturally(player.location, it) } }
         player.openInventory(menu.view)
     }
 
-    @EventHandler
-    fun click(event: InventoryClickEvent) {
-        val menu = event.view.topInventory.holder as? Menu ?: return
-        event.isCancelled = true
-        val player = event.whoClicked as? Player ?: return
-        val device = menu.device
-        val id = UUID.fromString(device.id)
-        val item = held(player, id) ?: return
-        val slot = event.rawSlot
-        if (slot < 0) return
-        if (slot >= 54) {
-            val disc = event.currentItem ?: return
-            if (!disc.type.name.startsWith("MUSIC_DISC_")) return
-            val identifier = disc.identifier() ?: return
-            val song = Song(identifier, disc.itemMeta?.lore()?.firstOrNull()?.let {
-                net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(it)
-            } ?: disc.type.name)
-            if (!device.enqueue(song)) {
-                player.sendMessage(Component.text("This jukebox queue is full (45 tracks).", NamedTextColor.RED)); return
-            }
-            write(item, device)
-        } else when (slot) {
-            in 0..44 -> if (slot < device.queue.size) {
-                if (event.isShiftClick) {
-                    stop(id)
-                    device.queue.removeAt(slot)
-                    device.selected = device.selected.coerceAtMost((device.queue.size - 1).coerceAtLeast(0))
-                    write(item, device)
-                } else { device.selected = slot; write(item, device); play(player, device) }
-            }
-            45 -> active[id]?.controls?.togglePause() ?: play(player, device)
-            46 -> {
-                stop(id)
-                if (device.selected + 1 < device.queue.size) {
-                    device.selected++; write(item, device); play(player, device)
-                }
-            }
-            47 -> stop(id)
-            48, 50 -> {
-                val delta = if (slot == 48) -10 else 10
-                device.volume = (device.volume + delta).coerceIn(0, 100)
-                active[id]?.controls?.changeVolume(delta)
-                write(item, device)
-            }
-            53 -> { later(player) { player.closeInventory() }; return }
+    private fun saveQueue(player: Player, menu: Menu) {
+        val item = carried(player, UUID.fromString(menu.device.id)) ?: return
+        val next = (0 until MAX_DISCS).mapNotNull { slot ->
+            menu.view.getItem(slot)?.takeIf(::isDisc)?.let { song(it, slot) }
         }
-        later(player) { if (held(player, id) != null) open(player, device) }
+        val device = menu.device
+        if (next == device.queue) return
+        val current = device.queue.getOrNull(device.selected)
+        val previousId = current?.identifier
+        device.replaceQueue(next, current)
+        if (active[UUID.fromString(device.id)] != null &&
+            (current == null || next.none { it.identifier == previousId && it.itemData == current.itemData })) {
+            stop(UUID.fromString(device.id))
+        }
+        write(item, device)
     }
 
-    @EventHandler fun drag(event: InventoryDragEvent) {
-        if (event.view.topInventory.holder is Menu || marked(event.oldCursor)) event.isCancelled = true
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun click(event: InventoryClickEvent) {
+        val menu = event.view.topInventory.holder as? Menu ?: return
+        val player = event.whoClicked as? Player ?: return
+        if (carried(player, UUID.fromString(menu.device.id)) == null) { event.isCancelled = true; return }
+        val top = event.rawSlot in 0 until MAX_DISCS
+        val incoming = when (event.action) {
+            org.bukkit.event.inventory.InventoryAction.HOTBAR_SWAP,
+            org.bukkit.event.inventory.InventoryAction.HOTBAR_MOVE_AND_READD ->
+                if (event.hotbarButton >= 0) player.inventory.getItem(event.hotbarButton) else player.inventory.itemInOffHand
+            else -> event.cursor
+        }
+        // Keep the device in place while its contents are open, and never nest devices.
+        if (marked(event.currentItem) || marked(event.cursor) || marked(incoming)) {
+            event.isCancelled = true; return
+        }
+        val placesInTop = top && event.action in setOf(
+            org.bukkit.event.inventory.InventoryAction.PLACE_ALL,
+            org.bukkit.event.inventory.InventoryAction.PLACE_ONE,
+            org.bukkit.event.inventory.InventoryAction.PLACE_SOME,
+            org.bukkit.event.inventory.InventoryAction.SWAP_WITH_CURSOR,
+            org.bukkit.event.inventory.InventoryAction.HOTBAR_SWAP,
+            org.bukkit.event.inventory.InventoryAction.HOTBAR_MOVE_AND_READD)
+        val shiftIntoTop = !top && event.isShiftClick && event.rawSlot >= MAX_DISCS
+        if ((placesInTop && incoming != null && !incoming.type.isAir && !isDisc(incoming)) ||
+            (shiftIntoTop && !isDisc(event.currentItem))) {
+            event.isCancelled = true; return
+        }
+        // Vanilla performs the transfer; persist the resulting real slots on the following tick.
+        later(player) { if (player.openInventory.topInventory === menu.view) saveQueue(player, menu) }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun drag(event: InventoryDragEvent) {
+        val menu = event.view.topInventory.holder as? Menu ?: return
+        val player = event.whoClicked as? Player ?: return
+        if (carried(player, UUID.fromString(menu.device.id)) == null || marked(event.oldCursor) ||
+            (event.rawSlots.any { it < MAX_DISCS } && !isDisc(event.oldCursor))) {
+            event.isCancelled = true; return
+        }
+        later(player) { if (player.openInventory.topInventory === menu.view) saveQueue(player, menu) }
+    }
+
+    @EventHandler
+    fun closeQueue(event: org.bukkit.event.inventory.InventoryCloseEvent) {
+        val menu = event.inventory.holder as? Menu ?: return
+        val player = event.player as? Player ?: return
+        saveQueue(player, menu)
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun dropDevice(event: org.bukkit.event.player.PlayerDropItemEvent) {
+        if (event.player.openInventory.topInventory.holder is Menu && marked(event.itemDrop.itemStack))
+            event.isCancelled = true
+    }
+
+    @EventHandler
+    fun onQuit(event: org.bukkit.event.player.PlayerQuitEvent) {
+        val menu = event.player.openInventory.topInventory.holder as? Menu
+        if (menu != null) saveQueue(event.player, menu)
+        dialogs.remove(event.player.uniqueId)
+        active.entries.filter { it.value.owner == event.player.uniqueId }.forEach { stop(it.key) }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    fun onDeath(event: org.bukkit.event.entity.PlayerDeathEvent) {
+        val menu = event.entity.openInventory.topInventory.holder as? Menu ?: return
+        saveQueue(event.entity, menu)
+        event.drops.filter { marked(it) && read(it)?.id == menu.device.id }.forEach { write(it, menu.device) }
+        event.entity.closeInventory()
+    }
+
+    fun handleControl(player: Player, token: String, action: String) {
+        val dialog = dialogs[player.uniqueId] ?: return
+        if (dialog.token.toString() != token || System.currentTimeMillis() > dialog.expires) return
+        val device = dialog.device
+        val id = UUID.fromString(device.id)
+        val item = carried(player, id) ?: return
+        dialogs.remove(player.uniqueId, dialog)
+        val controls = active[id]?.controls
+        var page = "refresh"
+        when {
+            action == "queue_menu" -> { later(player) { openQueue(player, device) }; return }
+            action in setOf("volume_menu", "effects_menu", "fx_eq_menu", "seek") -> page = action
+            action == "play" -> play(player, device)
+            action == "pause" -> controls?.togglePause()
+            action == "stop" -> stop(id)
+            action == "skip" -> { stop(id); if (device.advance()) play(player, device) }
+            action == "loop" -> device.loop = !device.loop
+            action == "shuffle" -> device.shuffle = !device.shuffle
+            action.startsWith("volume_") -> {
+                val amount = action.substringAfterLast('_').toIntOrNull() ?: return
+                val old = device.volume
+                device.volume = when {
+                    action.startsWith("volume_minus_") -> old - amount
+                    action.startsWith("volume_plus_") -> old + amount
+                    action.startsWith("volume_set_") -> amount
+                    else -> return
+                }.coerceIn(0, 100)
+                controls?.changeVolume(device.volume - old)
+                page = "volume_menu"
+            }
+            action.startsWith("seek_") -> {
+                val seconds = action.substringAfterLast('_').toLongOrNull()?.coerceIn(0, 3600) ?: return
+                val delta = if (action.startsWith("seek_minus_")) -seconds else seconds
+                controls?.seekTo(controls.position + delta * 1000)
+                page = "seek"
+            }
+            action.startsWith("fx_") -> {
+                device.effects = changeEffects(device.effects, action)
+                controls?.applyFilterConfig(device.effects)
+                page = if (action.startsWith("fx_set_eq_")) "fx_eq_menu" else "effects_menu"
+            }
+        }
+        write(item, device)
+        later(player) { showControls(player, device, page) }
+    }
+
+    private fun changeEffects(cur: su.plo.voice.discs.audio.AudioFilterConfig, action: String): su.plo.voice.discs.audio.AudioFilterConfig {
+        if (action.startsWith("fx_set_eq_")) {
+            val preset = su.plo.voice.discs.audio.EqPreset.fromId(action.removePrefix("fx_set_eq_")) ?: return cur
+            return cur.copy(eqPreset = preset.id, bands = null)
+        }
+        return when (action) {
+            "fx_clear" -> su.plo.voice.discs.audio.AudioFilterConfig()
+            "fx_toggle_8d" -> cur.copy(rotation = !cur.rotation)
+            "fx_toggle_echo" -> cur.copy(echo = !cur.echo)
+            "fx_toggle_underwater" -> cur.copy(underwater = !cur.underwater)
+            "fx_toggle_tremolo" -> cur.copy(tremolo = !cur.tremolo)
+            "fx_toggle_vibrato" -> cur.copy(vibrato = !cur.vibrato)
+            "fx_toggle_nightcore" -> cur.copy(speed = if (cur.speed == 1.25) 1.0 else 1.25)
+            "fx_toggle_vaporwave" -> cur.copy(speed = if (cur.speed == 0.8) 1.0 else 0.8)
+            "fx_tempo_down" -> cur.copy(tempo = (cur.tempo - 0.05).coerceIn(0.5, 2.0))
+            "fx_tempo_up" -> cur.copy(tempo = (cur.tempo + 0.05).coerceIn(0.5, 2.0))
+            "fx_pitch_down" -> cur.copy(pitchSemitones = (cur.pitchSemitones - 1.0).coerceIn(-12.0, 12.0))
+            "fx_pitch_up" -> cur.copy(pitchSemitones = (cur.pitchSemitones + 1.0).coerceIn(-12.0, 12.0))
+            "fx_timescale_reset" -> cur.copy(tempo = 1.0, pitchSemitones = 0.0)
+            "fx_lowpass", "fx_highpass" -> {
+                val low = action == "fx_lowpass"
+                val values = if (low) listOf(0.0, 12000.0, 6000.0, 3000.0, 1500.0, 750.0) else listOf(0.0, 80.0, 150.0, 300.0, 600.0, 1200.0)
+                val next = values[(values.indexOf(if (low) cur.lowPassHz else cur.highPassHz) + 1) % values.size]
+                if (low) cur.copy(lowPassHz = next) else cur.copy(highPassHz = next)
+            }
+            else -> cur
+        }
+    }
+
+    private fun showControls(player: Player, device: Device, menu: String = "refresh") {
+        if (carried(player, UUID.fromString(device.id)) == null) return
+        val controls = active[UUID.fromString(device.id)]?.controls
+        val dialog = DialogSession(UUID.randomUUID(), device)
+        dialogs[player.uniqueId] = dialog
+        val prefix = "/disc portable ${dialog.token} "
+        val page = when (menu) {
+            "volume_menu" -> PlaybackMenus.volume(prefix, device.volume, controls != null)
+            "effects_menu" -> PlaybackMenus.effects(prefix, device.effects)
+            "fx_eq_menu" -> PlaybackMenus.equalizer(prefix, device.effects)
+            else -> {
+                val body = mutableListOf<Component>()
+                val buttons = mutableListOf<Pair<String, String>>()
+                if (controls != null) {
+                    body += Component.text(controls.displayTitle, NamedTextColor.GOLD)
+                    body += PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream)
+                    body += Component.text("${if (controls.paused) "Paused" else "Playing"} · Volume ${controls.volume}%", NamedTextColor.GRAY)
+                } else body += Component.text("Jukebox is idle.")
+                if (menu == "seek" && controls?.seekable == true) {
+                    for ((seconds, label) in listOf(15 to "15s", 30 to "30s", 60 to "1m", 300 to "5m")) {
+                        buttons += "−$label" to (prefix + "seek_minus_$seconds")
+                        buttons += "+$label" to (prefix + "seek_plus_$seconds")
+                    }
+                    buttons += "Refresh progress" to (prefix + "seek")
+                    buttons += "Back to playback" to (prefix + "refresh")
+                } else {
+                    if (controls != null) {
+                        buttons += (if (controls.paused) "Resume" else "Pause") to (prefix + "pause")
+                        buttons += "Skip" to (prefix + "skip")
+                    } else buttons += "Play queue" to (prefix + "play")
+                    buttons += "Open Queue" to (prefix + "queue_menu")
+                    buttons += "Volume" to (prefix + "volume_menu")
+                    buttons += "Audio effects" to (prefix + "effects_menu")
+                    buttons += "Loop: ${if (device.loop) "On" else "Off"}" to (prefix + "loop")
+                    buttons += "Shuffle: ${if (device.shuffle) "On" else "Off"}" to (prefix + "shuffle")
+                    buttons += "Refresh" to (prefix + "refresh")
+                    if (controls != null) {
+                        buttons += "Stop playback" to (prefix + "stop")
+                        if (controls.seekable) buttons += "Seek" to (prefix + "seek")
+                    }
+                }
+                PlaybackMenus.Page(if (menu == "seek") "Seek" else "Jukebox controls", body, buttons)
+            }
+        }
+        try {
+            su.plo.voice.discs.dialog.PaperPlaybackDialog.show(player,
+                listOf(Component.join(net.kyori.adventure.text.JoinConfiguration.newlines(), page.body)),
+                page.buttons, title = page.title, columns = 2)
+        } catch (_: ClassNotFoundException) {
+            page.body.forEach { player.sendMessage(it) }
+            page.buttons.forEach { (label, command) -> player.sendMessage(Component.text("[$label]")
+                .clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand(command))) }
+        } catch (e: Exception) { plugin.logger.warning("Could not open handheld jukebox controls: ${e.message}") }
     }
 
     private fun later(player: Player, task: () -> Unit) {
@@ -236,18 +462,19 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
         val id = UUID.fromString(device.id)
         stop(id)
         if (device.queue.isEmpty()) return
-        val session = Session(player.uniqueId, device, PlaybackControls(initialVolume = device.volume))
+        device.resetOrder()
+        val session = Session(player.uniqueId, device, PlaybackControls(initialVolume = device.volume, initialFilterConfig = device.effects))
         active[id] = session
         session.job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 while (isActive) {
                     val song = suspendSyncFor(player, voiceServer, plugin) {
-                        if (held(player, id) == null) null else device.queue.getOrNull(device.selected)
+                        if (carried(player, id) == null) null else device.queue.getOrNull(device.selected)
                     } ?: break
                     val track = manager.getTrack(song.identifier).await()
                     session.controls.title = track.info.title
                     val destinations = suspendSyncFor(player, voiceServer, plugin) {
-                        if (held(player, id) == null) return@suspendSyncFor null
+                        if (carried(player, id) == null) return@suspendSyncFor null
                         val pvPlayer = if (svc?.hasClient(player.uniqueId) != true &&
                             VoiceBridgeCompat.isPlayerListeningOnPv(player.uniqueId, voiceServer)) {
                             voiceServer?.let { player.asVoicePlayer(it) }
@@ -270,7 +497,7 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
                     } finally { pv?.remove() }
                     if (session.controls.failure != null) error(session.controls.failure!!)
                     val more = suspendSyncFor(player, voiceServer, plugin) {
-                        val item = held(player, id) ?: return@suspendSyncFor false
+                        val item = carried(player, id) ?: return@suspendSyncFor false
                         val hasNext = device.advance()
                         write(item, device)
                         hasNext
@@ -289,7 +516,11 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
     }
 
     fun shutdown() {
+        Bukkit.getOnlinePlayers().forEach { player ->
+            if (player.openInventory.topInventory.holder is Menu) player.closeInventory()
+        }
         monitor?.cancel()
+        dialogs.clear()
         active.keys.toList().forEach(::stop)
         Bukkit.removeRecipe(NamespacedKey(plugin, "handheld_jukebox"))
     }

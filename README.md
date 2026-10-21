@@ -372,26 +372,39 @@ Low-pass and high-pass filters are available in **Audio effects** as cutoff-cycl
 
 ## Handheld jukeboxes
 
-Craft a portable jukebox with seven copper nuggets, one bundle, and one jukebox:
+Craft a portable jukebox with seven copper nuggets, one amethyst shard, and one jukebox:
 
 ```text
 Copper Nugget | Jukebox       | Copper Nugget
-Copper Nugget | Bundle        | Copper Nugget
+Copper Nugget | Amethyst Shard | Copper Nugget
 Copper Nugget | Copper Nugget | Copper Nugget
 ```
 
-Right-click the crafted **Handheld Jukebox** to open its own queue and controls.
-Click a burned music disc in your inventory to copy its track into the queue (the disc is
-not consumed). Each device holds up to 45 tracks. Click a queued track to play from that
-entry, or shift-click to remove it. Controls provide play/pause, next, stop, and volume.
-Removing an entry stops current playback. Closing the interface leaves music playing.
+The crafted item is an amethyst shard named **Handheld Jukebox**. Right-click it to open the same playback dialog style as a placed jukebox. Choose **Open Queue** to manage its own track inventory.
+The queue is a plain **18-slot chest inventory** containing real burned music discs. Put discs
+in, take them out, shift-click, use hotbar keys, or drag them just as in a chest. Adding a
+disc moves it out of your inventory; taking it back returns the same item with its original
+material and metadata. There are no queue buttons or placeholder discs. Playback follows
+slot order. Removing the currently playing disc stops playback; moving it to another slot
+preserves the selection. Close the chest and right-click the device again to return to controls.
 
-Keep the device in either hand: audio follows the holder, and putting it away, dropping
-it, dying, or disconnecting stops playback. It has separate playback state from goat
-horns, with no horn duration restriction. Nearby listeners use the installed Plasmo Voice
-or Simple Voice Chat integration and the configured horn listening distance.
+The playback dialog provides play/pause, skip, stop, seeking, loop/shuffle, volume, and the
+same audio-effects and equalizer menus as a placed jukebox. Volume, queue modes, and effects
+are saved on the device. World links belong to placed jukeboxes.
+
+Keep the device **anywhere in your player inventory**, including the offhand: audio follows
+the holder. Dropping it, putting it in an external container, dying, or disconnecting stops
+playback. The device cannot be moved or dropped while its queue is open; close the queue
+first. Closing the interface leaves music playing. Goat horns keep their separate playback
+state and duration rules. Nearby listeners use the installed Plasmo Voice or Simple Voice
+Chat integration and the configured horn listening distance.
+
+Older queues only stored copied track references. On first opening the new chest, those
+entries become burned Cat discs because the original disc materials were not recorded.
+Entries exceeding 18 are returned to your inventory, or dropped at your position if full.
+Newly stored discs always preserve their original items.
 
 Queues, volume, and selected track are saved on each item and travel with it; playback
 does not automatically resume after reconnecting or restarting. Separately crafted devices
 receive independent identities on first use. Separate stacked unused devices before using
-them. Crafting is available only on Minecraft versions with copper nuggets and bundles.
+them. Crafting is available only on Minecraft versions with copper nuggets and amethyst shards.
