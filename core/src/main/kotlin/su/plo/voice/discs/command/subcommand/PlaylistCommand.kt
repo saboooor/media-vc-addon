@@ -22,9 +22,6 @@ import org.bukkit.event.block.Action
 import org.bukkit.event.block.BlockBreakEvent
 import org.bukkit.event.block.BlockExplodeEvent
 import org.bukkit.event.entity.EntityExplodeEvent
-import org.bukkit.event.inventory.InventoryClickEvent
-import org.bukkit.event.inventory.InventoryDragEvent
-import org.bukkit.event.inventory.InventoryCloseEvent
 import org.bukkit.event.inventory.InventoryMoveItemEvent
 import org.bukkit.event.block.BlockPlaceEvent
 import org.bukkit.event.player.PlayerInteractEvent
@@ -80,7 +77,10 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     fun autoMixEnabled(block: Block) = autoMixSettings[block] ?: false
     fun restoreAutoMix(block: Block, enabled: Boolean) { autoMixSettings[block] = enabled }
     fun toggleAutoMix(block: Block) { restoreAutoMix(block, !autoMixEnabled(block)) }
-    private data class PreparedMix(val disc: ItemStack, val track: AudioTrack, val features: MixFeatures?)
+    private data class PreparedMix(val disc: ItemStack, val track: AudioTrack, val sections: List<MixFeatures>)
+    private data class MixCommitKey(val controls: PlaybackControls, val nextIdentifier: String, val occurrence: Int,
+                                    val baseRate: Double)
+
     private val modes = ConcurrentHashMap<Block, Pair<Boolean, Boolean>>()
     fun playbackModes(block: Block) = modes[block] ?: (false to false)
     fun restoreModes(block: Block, loop: Boolean, shuffle: Boolean) { modes[block] = loop to shuffle }
@@ -88,15 +88,12 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         val mode = playbackModes(block)
         val newLoop = !mode.first
         restoreModes(block, newLoop, mode.second)
-        if (!newLoop) {
-            pendingLoopQueues.remove(block)
-            jukeboxes.cancelPendingLoopResume(block)
-        }
     }
     fun toggleShuffle(block: Block) { val mode = playbackModes(block); restoreModes(block, mode.first, !mode.second) }
     fun clearSettings(block: Block) { crossfadeDefaults.remove(block); autoMixSettings.remove(block); modes.remove(block); pendingLoopQueues.remove(block) }
     private val queueStates = ConcurrentHashMap<Block, QueueState>()
-    private val pendingLoopQueues = ConcurrentHashMap<Block, Int>()
+    private data class QueueResume(val index: Int, val disc: ItemStack, val positionMs: Long, val paused: Boolean)
+    private val pendingLoopQueues = ConcurrentHashMap<Block, QueueResume>()
 
     fun queueView(block: Block): QueueView? = queueStates[block]?.let { QueueView(it.items, it.currentIndex, it.crossfadeSeconds) }
 
@@ -359,7 +356,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     }
 
     /** Called only on the inventory's server thread, after the inventory mutation commits. */
-    fun startChestQueue(block: Block, chest: Chest, player: Player? = null, initialIndex: Int? = null) {
+    fun startChestQueue(block: Block, chest: Chest, player: Player? = null, initialIndex: Int? = null, initialPositionMs: Long = 0L, initiallyPaused: Boolean = false) {
         if (block.type != Material.JUKEBOX || isQueued(block) || jukeboxes.isPlaying(block) ||
             block.asJukebox()?.record?.type != Material.AIR) return
         val discs = chest.inventory.contents.filterNotNull()
@@ -377,7 +374,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         val queue = scope.launch(start = CoroutineStart.LAZY) {
             var current: Job? = null
             var outgoing: Job? = null
-            var controls = PlaybackControls(initialFilterConfig = jukeboxes.filterConfig(block))
+            var controls = PlaybackControls(initialFilterConfig = jukeboxes.filterConfig(block), initialPositionMs = initialPositionMs)
+            if (initiallyPaused) controls.togglePause()
             var oldControls: PlaybackControls? = null
             var liveDiscs = discs
             val order = ChestQueueOrder()
@@ -396,24 +394,39 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             var fadeOutStart: Long? = null
             var fadeOutGain = 1.0
             var fadeOutMs = 0L
+            val mixCommitment = su.plo.voice.discs.audio.MixPlanCommitment<MixCommitKey>()
             var preparing: Deferred<PreparedMix?>? = null
             var preparingDisc: ItemStack? = null
+            var preparingForAutoMix = false
+            var preparationFailed = false
+            var preparingTarget = -1
             fun fadeDuration() = if (autoMixEnabled(block)) 2_000L else state.crossfadeSeconds * 1_000L
             fun prepare(target: Int) {
                 val disc = liveDiscs.getOrNull(target) ?: return
-                if (preparing != null && preparingDisc == disc) return
+                val analyze = autoMixEnabled(block)
+                if (preparing != null && preparingDisc == disc && preparingForAutoMix == analyze) return
                 preparing?.cancel()
                 preparingDisc = disc.clone()
+                preparingTarget = target
+                preparingForAutoMix = analyze
+                preparationFailed = false
                 preparing = async(Dispatchers.IO) {
                     try {
-                        withTimeout(15_000L) {
-                            val track = audioPlayerManager.getTrack(disc.customDiscIdentifier(discHelper)!!).await()
-                            PreparedMix(disc, track, if (autoMixEnabled(block)) audioPlayerManager.analyzeMixIntro(track) else null)
+                        val track = withTimeout(15_000L) {
+                            audioPlayerManager.getTrack(disc.customDiscIdentifier(discHelper)!!).await()
                         }
+                        audioPlayerManager.prepareSongEdges(track)
+                        // No beat estimate is a normal fallback; a decoder/load exception is a failed song.
+                        val features = if (analyze) audioPlayerManager.analyzeMixSections(track) else emptyList()
+                        PreparedMix(disc, track, features)
                     } catch (e: CancellationException) {
                         if (e !is TimeoutCancellationException) throw e
+                        preparationFailed = true
                         null
-                    } catch (_: Exception) { null } // Playback reports failures; speculative loading does not erase discs.
+                    } catch (_: Exception) {
+                        preparationFailed = true
+                        null
+                    }
                 }
             }
             suspend fun prepared(target: Int): PreparedMix? =
@@ -457,21 +470,27 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 index = remapQueueIndex(liveDiscs, liveDiscs, outgoingIndex, activeDisc)
                 state.currentIndex = index
                 outgoing = null; oldControls = null; outgoingDisc = null; envelope = null
+                controls.setMixBassGain(1.0)
+                controls.setMixPasses()
                 recoveryGain = controls.currentGain; recoveryTempo = controls.mixTempoFactor; recoveryStart = controls.sentAudioMs
                 suspendSyncAt(block.location, voiceServer, plugin) { jukeboxes.restorePlayback(block, old, controls) }
                 return true
             }
             suspend fun transition(target: Int, plan: MixPlan?, manual: Boolean): Boolean {
                 controls.goodAutoMixUpcoming = false
+                controls.autoMixStatus = null
+                mixCommitment.clear()
                 // Repeated skips while loading retain the song that is actually audible.
                 if (controls.sentAudioMs == 0L && outgoing != null) recoverOutgoing()
                 controls.transitionPartner = null
                 outgoing?.cancelAndJoin(); outgoing = null; oldControls = null
                 val ready = prepared(target)
-                val mixPlan = plan ?: if (autoMixEnabled(block) && ready?.features != null)
-                    AutoMix.plan(controls.duration, ready.track.duration, controls.mixAnalysis.snapshot(), ready.features,
+                val incomingFeatures = ready?.let { AutoMix.chooseSection(controls.mixAnalysis.snapshot(), it.sections,
+                    it.track.duration, controls.filterConfig.speed * controls.filterConfig.tempo) }
+                val mixPlan = plan ?: if (autoMixEnabled(block) && incomingFeatures != null)
+                    AutoMix.plan(controls.duration, ready!!.track.duration, controls.mixAnalysis.snapshot(), incomingFeatures,
                         controls.playbackRate, controls.filterConfig.speed * controls.filterConfig.tempo) else null
-                val fade = if (manual) fadeDuration() else plan?.durationMs ?: fadeDuration()
+                val fade = mixPlan?.durationMs ?: fadeDuration()
                 if (fade <= 0) {
                     current?.cancelAndJoin()
                     controls = PlaybackControls(initialVolume = controls.volume, initialFilterConfig = controls.filterConfig)
@@ -486,11 +505,16 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     val nextControls = PlaybackControls(initialVolume = controls.volume, initialGain = 0.0,
                         initialPositionMs = cue, initialFilterConfig = controls.filterConfig)
                     nextControls.autoMixAnalysis = autoMixEnabled(block)
+                    nextControls.setMixBassGain(if (mixPlan?.beatAligned == true) 0.0 else 1.0)
+                    previousControls.setMixBassGain(1.0)
+                    previousControls.setMixPasses()
+                    nextControls.setMixPasses(highHz = if (mixPlan?.beatAligned == true) 800.0 else 0.0)
                     nextControls.setMixTempoFactor(mixPlan?.tempoFactor ?: 1.0)
                     if (controls.paused) nextControls.togglePause()
                     nextControls.transitionPartner = previousControls
                     val next = start(target, nextControls, true, ready) ?: return false
-                    envelope = MixEnvelope(fade, previousControls.currentGain, plan?.incomingGain ?: 1.0)
+                    envelope = MixEnvelope(fade, previousControls.currentGain, mixPlan?.incomingGain ?: 1.0,
+                        mixPlan?.beatAligned == true, mixPlan?.tempoFactor ?: 1.0, previousControls.mixTempoFactor)
                     outgoing = previous; oldControls = previousControls
                     outgoingDisc = previousDisc; outgoingIndex = previousIndex
                     controls = nextControls; current = next
@@ -506,6 +530,23 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     delay(50)
                     if (!intact()) break
                     controls.autoMixAnalysis = autoMixEnabled(block)
+                    if (!controls.autoMixAnalysis) { controls.autoMixStatus = null; mixCommitment.clear() }
+                    if (preparing?.isCompleted == true && preparationFailed) {
+                        // Consume the completed result before touching inventory on its owning thread.
+                        preparing?.await()
+                        val failedDisc = preparingDisc
+                        val occurrence = liveDiscs.take(preparingTarget.coerceAtLeast(0)).count { it == failedDisc }
+                        if (failedDisc != null) suspendSyncAt(block.location, voiceServer, plugin) {
+                            val inventory = (chest.block.state as? Chest)?.inventory ?: return@suspendSyncAt
+                            val slots = (0 until inventory.size).filter { inventory.getItem(it) == failedDisc }
+                            val slot = slots.getOrNull(occurrence) ?: return@suspendSyncAt
+                            val blank = inventory.getItem(slot)!!.clone()
+                            blank.eraseBurnMetadata(config, discHelper)
+                            inventory.setItem(slot, blank)
+                        }
+                        preparing = null; preparingDisc = null; preparationFailed = false
+                        refreshTicks = 5 // Refresh/remap the queue before selecting the following song.
+                    }
                     if (++refreshTicks >= 5 || current?.isActive != true) {
                         refreshTicks = 0
                         val updated = suspendSyncAt(block.location, voiceServer, plugin) {
@@ -564,11 +605,23 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         if (controls.sentAudioMs > 0L) {
                             val gains = fade.gains(controls.sentAudioMs)
                             oldControls?.setGain(gains.first); controls.setGain(gains.second)
+                            val passes = fade.passCutoffs(controls.sentAudioMs)
+                            oldControls?.setMixPasses(lowHz = passes.first)
+                            controls.setMixPasses(highHz = passes.second)
+                            val bass = fade.bassGains(controls.sentAudioMs)
+                            oldControls?.setMixBassGain(bass.first); controls.setMixBassGain(bass.second)
+                            if (fade.beatMatched) {
+                                val tempos = fade.tempos(controls.sentAudioMs)
+                                oldControls?.setMixTempoFactor(tempos.first)
+                                controls.setMixTempoFactor(tempos.second)
+                            }
                         }
                         // No fade clock advances until incoming audio is transmitted, including live streams.
                         if (fade.complete(controls.sentAudioMs) || outgoing?.isActive != true) {
                             outgoing?.cancelAndJoin(); outgoing = null; oldControls = null; outgoingDisc = null
                             controls.transitionPartner = null
+                            controls.setMixBassGain(1.0)
+                            controls.setMixPasses()
                             recoveryGain = controls.currentGain
                             recoveryTempo = controls.mixTempoFactor
                             recoveryStart = controls.sentAudioMs
@@ -594,11 +647,14 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     }
                     if (outgoing != null || haltAtEnd) {
                         controls.goodAutoMixUpcoming = false
+                        controls.autoMixStatus = if (outgoing != null) "AutoMix: transition in progress" else "AutoMix: no next transition"
                         continue
                     }
                     val nextIndex = order.peek(liveDiscs.size, index, playbackModes(block).first,
                         playbackModes(block).second, removedNextIndex)
                     if (nextIndex == null) {
+                        mixCommitment.clear()
+                        controls.autoMixStatus = "AutoMix: no next song"
                         controls.goodAutoMixUpcoming = false
                         continue
                     }
@@ -608,12 +664,38 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     if (controls.duration > 0 && remaining > 0 &&
                         (autoMixEnabled(block) || fadeDuration() > 0 && remaining <= 45_000)) prepare(nextIndex)
                     val ready = prepared(nextIndex)
-                    val plan = if (autoMixEnabled(block)) AutoMix.plan(controls.duration,
-                        ready?.track?.duration ?: 0L, controls.mixAnalysis.snapshot(), ready?.features, controls.playbackRate,
+                    val incomingFeatures = ready?.let { AutoMix.chooseSection(controls.mixAnalysis.snapshot(), it.sections,
+                        it.track.duration, controls.filterConfig.speed * controls.filterConfig.tempo) }
+                    val candidatePlan = if (autoMixEnabled(block)) AutoMix.plan(controls.duration,
+                        ready?.track?.duration ?: 0L, controls.mixAnalysis.snapshot(), incomingFeatures, controls.playbackRate,
                         controls.filterConfig.speed * controls.filterConfig.tempo)
                         else MixPlan((controls.duration - fadeDuration()).coerceAtLeast(0), fadeDuration())
+                    val context = ready?.takeIf { autoMixEnabled(block) && controls.seekable && !controls.isStream }?.let {
+                        MixCommitKey(controls, it.disc.customDiscIdentifier(discHelper)!!,
+                            liveDiscs.take(nextIndex).count { disc -> disc.customDiscIdentifier(discHelper) == it.disc.customDiscIdentifier(discHelper) },
+                            controls.filterConfig.speed * controls.filterConfig.tempo)
+                    }
+                    val committedPlan = mixCommitment.resolve(context, candidatePlan)
+                    val committedSection = ready?.sections?.minByOrNull {
+                        kotlin.math.abs((it.mixCueMs ?: it.audibleStartMs) - committedPlan.cueMs)
+                    }
+                    val earlierPlan = AutoMix.earlierExit(committedPlan, controls.duration, controls.position,
+                        controls.mixAnalysis.snapshot(), committedSection, controls.playbackRate,
+                        controls.filterConfig.speed * controls.filterConfig.tempo)
+                    val plan = mixCommitment.resolve(context, earlierPlan)
                     controls.goodAutoMixUpcoming = autoMixEnabled(block) && ready != null && plan.beatAligned &&
                         controls.seekable && !controls.isStream && remaining > 0
+                    controls.autoMixStatus = when {
+                        !controls.seekable || controls.isStream -> "AutoMix: unavailable for live/non-seekable audio"
+                        preparationFailed -> "AutoMix: skipping unavailable next song"
+                        ready == null -> "AutoMix: analyzing next song"
+                        plan.beatAligned -> plan.readyDescription
+                        incomingFeatures == null -> "AutoMix: intro analysis unavailable; smooth fade"
+                        controls.mixAnalysis.snapshot().beatMs == null -> "AutoMix: current beat uncertain; listening further"
+                        incomingFeatures.beatMs == null -> "AutoMix: next intro beat uncertain; smooth fade"
+                        !plan.beatAligned -> "AutoMix: tempos too far apart; smooth fade"
+                        else -> plan.readyDescription
+                    }
                     if (controls.paused) continue
                     if (plan.durationMs > 0 && controls.seekable && !controls.isStream && controls.duration > 0 &&
                         controls.position >= plan.startMs && remaining > 0) {
@@ -655,37 +737,6 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 }
             }
         }
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    fun onChestEdit(event: InventoryClickEvent) {
-        val player = event.whoClicked as? Player ?: return
-        if (!player.allowed("play")) return
-        chestHolder(event.view.topInventory.holder)?.let { scheduleChest(it, player) }
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    fun onChestDrag(event: InventoryDragEvent) {
-        val player = event.whoClicked as? Player ?: return
-        if (!player.allowed("play")) return
-        chestHolder(event.view.topInventory.holder)?.let { scheduleChest(it, player) }
-    }
-
-    private fun chestHolder(holder: org.bukkit.inventory.InventoryHolder?): Chest? = when (holder) {
-        is Chest -> holder
-        is DoubleChest -> holder.leftSide as? Chest
-        else -> null
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR)
-    fun onChestClose(event: InventoryCloseEvent) {
-        val chest = when (val holder = event.inventory.holder) {
-            is Chest -> holder
-            is DoubleChest -> holder.leftSide as? Chest
-            else -> null
-        } ?: return
-        val player = event.player as? Player ?: return
-        if (player.allowed("play")) scheduleChest(chest, player)
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -755,8 +806,12 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onUnload(event: ChunkUnloadEvent) {
         queues.keys.filter { it.inChunk(event.chunk) }.forEach { block ->
-            if (playbackModes(block).first) {
-                pendingLoopQueues[block] = queueStates[block]?.currentIndex ?: 0
+            val index = queueStates[block]?.currentIndex ?: 0
+            val discs = (block.getRelative(BlockFace.UP).state as? Chest)?.inventory?.contents
+                ?.filterNotNull()?.filter { it.isCustomDisc(discHelper) }.orEmpty()
+            val controls = jukeboxes.controlsByBlock[block]
+            discs.getOrNull(index)?.let { disc ->
+                pendingLoopQueues[block] = QueueResume(index, disc.clone(), controls?.position ?: 0L, controls?.paused ?: false)
             }
             queues.remove(block)?.cancel()
         }
@@ -770,11 +825,15 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             delay(100)
             suspendSyncAt(Location(event.world, (event.chunk.x shl 4) + 8.0, 64.0, (event.chunk.z shl 4) + 8.0), voiceServer, plugin) {
                 pendingInChunk.forEach { block ->
-                    val resumeIndex = pendingLoopQueues.remove(block) ?: return@forEach
-                    if (!playbackModes(block).first || isQueued(block) || jukeboxes.isPlaying(block)) return@forEach
+                    val resume = pendingLoopQueues.remove(block) ?: return@forEach
+                    if (isQueued(block) || jukeboxes.isPlaying(block)) return@forEach
                     val chest = block.getRelative(BlockFace.UP).state as? Chest ?: return@forEach
                     if (block.type == Material.JUKEBOX && block.asJukebox()?.record?.type == Material.AIR) {
-                        startChestQueue(block, chest, initialIndex = resumeIndex)
+                        val discs = chest.inventory.contents.filterNotNull().filter { it.isCustomDisc(discHelper) }
+                        val index = if (discs.getOrNull(resume.index) == resume.disc) resume.index
+                            else discs.indexOf(resume.disc)
+                        if (index >= 0) startChestQueue(block, chest, initialIndex = index,
+                            initialPositionMs = resume.positionMs, initiallyPaused = resume.paused)
                     }
                 }
             }

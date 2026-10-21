@@ -188,6 +188,7 @@ class ControlCommand(
         val body = mutableListOf<Component>()
         if (controls != null) {
             body += Component.text(controls.displayTitle, NamedTextColor.GOLD)
+            if (controls.autoMixAnalysis) controls.autoMixStatus?.let { body += Component.text(it, NamedTextColor.AQUA) }
             body += PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream)
             body += Component.text("${if (controls.paused) "Paused" else "Playing"} · Volume ${controls.volume}%", NamedTextColor.GRAY)
         } else if (record.type != Material.AIR) {
@@ -248,7 +249,7 @@ class ControlCommand(
             body.clear()
             val autoMix = playlists.autoMixEnabled(block)
             body += Component.text("AutoMix: ${if (autoMix) "On" else "Off"}", NamedTextColor.GOLD)
-            body += Component.text("AutoMix matches close tempos with pitch-preserving time stretching, then eases back to your chosen tempo. Uncertain matches use a smooth fade.", NamedTextColor.GRAY)
+            body += Component.text("AutoMix gradually moves both songs toward a shared tempo without changing pitch, then eases the incoming song back to your chosen tempo. Uncertain matches use a smooth fade.", NamedTextColor.GRAY)
             buttons += (if (autoMix) "Disable AutoMix" else "Enable AutoMix") to (prefix + "automix")
             if (queue != null) {
                 body += Component.text("Crossfade: ${if (queue.crossfadeSeconds == 0) "Off" else "${queue.crossfadeSeconds}s"}", NamedTextColor.GOLD)
@@ -271,6 +272,8 @@ class ControlCommand(
             body += Component.text("Tempo: ${"%.2f".format(cfg.tempo)}x · Pitch: ${cfg.pitchSemitones} semitones", NamedTextColor.GRAY)
             body += Component.text("Equalizer preset: $eqName", NamedTextColor.YELLOW)
             val activeList = mutableListOf<String>()
+            if (cfg.lowPassHz > 0) activeList += "Low-pass ${cfg.lowPassHz.toInt()} Hz"
+            if (cfg.highPassHz > 0) activeList += "High-pass ${cfg.highPassHz.toInt()} Hz"
             if (cfg.rotation) activeList += "8D Audio"
             if (cfg.echo) activeList += "Echo"
             if (cfg.underwater) activeList += "Underwater"
@@ -286,6 +289,8 @@ class ControlCommand(
                 body += Component.text("No audio effects active.", NamedTextColor.GRAY)
             }
 
+            buttons += "Low-pass: ${if (cfg.lowPassHz == 0.0) "Off" else "${cfg.lowPassHz.toInt()} Hz"} (cycle)" to (prefix + "fx_lowpass")
+            buttons += "High-pass: ${if (cfg.highPassHz == 0.0) "Off" else "${cfg.highPassHz.toInt()} Hz"} (cycle)" to (prefix + "fx_highpass")
             buttons += "Equalizer presets" to (prefix + "fx_eq_menu")
             buttons += "${if (cfg.rotation) "✓ " else ""}8D Audio" to (prefix + "fx_toggle_8d")
             buttons += "${if (cfg.echo) "✓ " else ""}Echo" to (prefix + "fx_toggle_echo")
@@ -401,6 +406,7 @@ class ControlCommand(
             queueLabels.clear()
             body.clear()
             body += Component.text(controls.displayTitle, NamedTextColor.GOLD)
+            if (controls.autoMixAnalysis) controls.autoMixStatus?.let { body += Component.text(it, NamedTextColor.AQUA) }
             body += PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream)
             body += Component.text("Seek audio and linked video together.", NamedTextColor.GRAY)
             val seekSteps = listOf(15 to "15s", 30 to "30s", 60 to "1m", 300 to "5m")
@@ -600,6 +606,16 @@ class ControlCommand(
                 return
             }
             "audio_menu", "crossfade" -> { show(player, session.block, crossfade = true); return }
+            "fx_lowpass", "fx_highpass" -> {
+                val cur = jukeboxes.filterConfig(session.block)
+                val low = arguments[2] == "fx_lowpass"
+                val values = if (low) listOf(0.0, 12000.0, 6000.0, 3000.0, 1500.0, 750.0) else listOf(0.0, 80.0, 150.0, 300.0, 600.0, 1200.0)
+                val current = if (low) cur.lowPassHz else cur.highPassHz
+                val next = values[(values.indexOf(current) + 1).coerceAtLeast(0) % values.size]
+                jukeboxes.setFilterConfig(session.block, if (low) cur.copy(lowPassHz = next) else cur.copy(highPassHz = next))
+                show(player, session.block, effectsMenu = true)
+                return
+            }
             "effects_menu" -> { show(player, session.block, effectsMenu = true); return }
             "fx_eq_menu" -> { show(player, session.block, eqMenu = true); return }
             "fx_clear" -> {

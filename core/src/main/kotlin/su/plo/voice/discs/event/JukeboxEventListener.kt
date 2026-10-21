@@ -128,7 +128,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
 
                 val block = jukebox.block
                 val pending = pendingLoopResumes.remove(block)
-                if (pending != null && shouldLoop(block)) {
+                if (pending != null) {
                     val record = jukebox.record
                     val identifier = record.customDiscIdentifier(discHelper)
                     if (identifier != null && identifier == pending.identifier && !isPlaying(block)) {
@@ -137,11 +137,12 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                             suspendSyncAt(block.location, voiceServer, plugin) {
                                 val currentJukebox = block.asJukebox() ?: return@suspendSyncAt
                                 val currentRecord = currentJukebox.record
-                                if (shouldLoop(block) && !isPlaying(block) &&
+                                if (!isPlaying(block) &&
                                     currentRecord.customDiscIdentifier(discHelper) == pending.identifier) {
                                     val controls = PlaybackControls(
                                         initialPositionMs = pending.positionMs,
-                                        initialVolume = savedVolumes[block] ?: 100
+                                        initialVolume = savedVolumes[block] ?: 100,
+                                        initialFilterConfig = filterConfig(block)
                                     )
                                     savedVolumes[block]?.let { controls.changeVolume(it - controls.volume) }
                                     if (pending.paused) controls.togglePause()
@@ -161,18 +162,17 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             }
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onChunkUnload(event: ChunkUnloadEvent) {
         val chunk = event.chunk
 
         jobByBlock.keys
             .filter { it.inChunk(chunk) }
             .forEach { block ->
-                val looping = shouldLoop(block)
                 val controls = controlsByBlock[block]
                 val record = block.asJukebox()?.record
                 val identifier = record?.takeIf { it.isCustomDisc(discHelper) }?.customDiscIdentifier(discHelper)
-                if (looping && identifier != null) {
+                if (identifier != null) {
                     pendingLoopResumes[block] = PendingLoopResume(
                         identifier = identifier,
                         itemMeta = record.itemMeta,

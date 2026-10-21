@@ -87,26 +87,77 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         stereoPlayerManager.shutdown()
     }
 
-    /** At most eight seconds of the next intro, one extra decoder per queue, bounded by ten wall seconds. */
-    suspend fun analyzeMixIntro(track: AudioTrack): su.plo.voice.discs.audio.MixFeatures? {
-        if (track.info.isStream || !track.isSeekable) return null
+    /** Compare sections in the first minute, bounded by twenty wall seconds and one decoder. */
+    suspend fun analyzeMixSections(track: AudioTrack): List<su.plo.voice.discs.audio.MixFeatures> {
+        if (track.info.isStream || !track.isSeekable) return emptyList()
         val player = stereoPlayerManager.createPlayer()
         val analysis = su.plo.voice.discs.audio.MixAnalysis()
+        songEdges(track)
+        val sections = mutableListOf<su.plo.voice.discs.audio.MixFeatures>()
         var tap: PlaybackSpectrumTap? = null
         try {
             player.playTrack(track.makeClone())
-            return kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+            kotlinx.coroutines.withTimeoutOrNull(20_000L) {
                 var decodedMs = 0L
-                while (decodedMs < 8_000 && player.playingTrack != null) {
+                var windowStartMs = 0L
+                fun capture() {
+                    val features = analysis.snapshot()
+                    sections += if (windowStartMs == 0L) features else
+                        features.copy(mixCueMs = features.beatAnchorMs.coerceAtLeast(windowStartMs))
+                }
+                while (decodedMs < 60_000 && player.playingTrack != null) {
                     val frame = player.provide()
                     if (frame == null) { delay(2); continue }
                     val reader = tap ?: PlaybackSpectrumTap(frame.format).also { tap = it }
                     reader.accept(frame.data, null, analysis, frame.timecode)
                     decodedMs += 20
+                    if (decodedMs - windowStartMs >= 8_000) {
+                        capture()
+                        analysis.reset()
+                        windowStartMs = decodedMs
+                    }
                 }
-                analysis.snapshot()
+                if (decodedMs > windowStartMs) capture()
             }
+            return sections.toList()
         } finally { tap?.close(); player.destroy() }
+    }
+
+    suspend fun prepareSongEdges(track: AudioTrack) { songEdges(track) }
+
+    private val edgeCache = java.util.concurrent.ConcurrentHashMap<Pair<String, Long>, su.plo.voice.discs.audio.SongEdges>()
+    private suspend fun songEdges(track: AudioTrack): su.plo.voice.discs.audio.SongEdges? {
+        if (!track.isSeekable || track.info.isStream || track.duration <= 0) return null
+        val key = track.identifier to track.duration
+        edgeCache[key]?.let { return it }
+        val probe = stereoPlayerManager.createPlayer()
+        val scan = su.plo.voice.discs.audio.EdgeSilenceScan(track.duration)
+        var tap: PlaybackSpectrumTap? = null
+        try {
+            probe.playTrack(track.makeClone())
+            kotlinx.coroutines.withTimeoutOrNull(8_000L) {
+                while (!scan.headComplete && probe.playingTrack != null) {
+                    val frame = probe.provide()
+                    if (frame == null) { delay(2); continue }
+                    val reader = tap ?: PlaybackSpectrumTap(frame.format).also { tap = it }
+                    scan.head(frame.timecode, reader.accept(frame.data, null))
+                }
+                probe.playingTrack?.position = (track.duration - scan.limitMs).coerceAtLeast(0L)
+                tap?.close(); tap = null
+                while (probe.playingTrack != null) {
+                    val frame = probe.provide()
+                    if (frame == null) { delay(2); continue }
+                    val reader = tap ?: PlaybackSpectrumTap(frame.format).also { tap = it }
+                    scan.tail(frame.timecode, reader.accept(frame.data, null))
+                }
+            }
+            val result = scan.result()
+            if (edgeCache.size >= 256) edgeCache.clear()
+            edgeCache[key] = result
+            return result
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { return null }
+        finally { tap?.close(); probe.destroy() }
     }
 
     fun getYoutubeSourceManager(): YoutubeAudioSourceManager? {
@@ -224,9 +275,11 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 val right = format.createEncoder(manager.configuration).also { rightEncoder = it }
                 StereoPcmFrameEncoder(left, right)
             } else null
+            songEdges(track)?.let { controls.setSongEdges(it.startMs, it.endMs) }
             val playbackPlayer = createPlaybackPlayer(manager, track, controls, pcmChannel).also { player = it }
             var nextFrameTime = System.nanoTime()
             while (isActive && controls.failure == null) {
+                if (!controls.isStream && controls.duration > 0 && controls.position >= controls.duration) break
                 if (controls.paused) {
                     endStream()
                     delay(5)

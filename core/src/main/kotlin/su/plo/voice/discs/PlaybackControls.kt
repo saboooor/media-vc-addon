@@ -32,12 +32,20 @@ class PlaybackControls(
         if (!autoMixAnalysis && wasActive != (mixTempoFactor != 1.0)) refreshTimescaleFilters()
     }
     val playbackRate: Double get() = filterConfig.speed * filterConfig.tempo * mixTempoFactor
-    val mixAnalysis = su.plo.voice.discs.audio.MixAnalysis()
+    val mixAnalysis = su.plo.voice.discs.audio.MixAnalysis(scanPastUncertainSections = true)
     @Volatile var autoMixAnalysis = false
         set(value) { if (field != value) { field = value; refreshTimescaleFilters() } }
     @Synchronized private fun refreshTimescaleFilters() { players.forEach { updateFilter(it) } }
     @Volatile var sentAudioMs = 0L
         private set
+    @Volatile var mixBassGain = 1.0
+        private set
+    fun setMixBassGain(value: Double) { mixBassGain = value.coerceIn(0.0, 1.0) }
+    @Volatile private var mixLowPassHz = 0.0
+    @Volatile private var mixHighPassHz = 0.0
+    fun setMixPasses(lowHz: Double = 0.0, highHz: Double = 0.0) {
+        mixLowPassHz = lowHz; mixHighPassHz = highHz
+    }
     val currentGain: Double get() = gain
     val analysisScale: Double get() = if (volume * gain > 0.01) 100.0 / (volume * gain) else 1.0
     @Volatile var visualizing = false
@@ -65,7 +73,10 @@ class PlaybackControls(
         player.setFilterFactory(AudioFilterChain.buildFactory(filterConfig, channel, onSeek = { spectrum.reset() },
             timescale = if (autoMixAnalysis || mixTempoFactor != 1.0 || filterConfig.tempo != 1.0 ||
                 filterConfig.speed != 1.0 || filterConfig.pitchSemitones != 0.0) ({ su.plo.voice.discs.audio.TimescaleParameters(
-                filterConfig.tempo * mixTempoFactor, filterConfig.pitchSemitones, filterConfig.speed) }) else null, onTimescaleOutput = timescaleClock::decoded))
+                filterConfig.tempo * mixTempoFactor, filterConfig.pitchSemitones, filterConfig.speed) }) else null, onTimescaleOutput = timescaleClock::decoded,
+            mixBass = if (autoMixAnalysis) ({ mixBassGain }) else null,
+            mixLowPass = if (autoMixAnalysis) ({ mixLowPassHz }) else null,
+            mixHighPass = if (autoMixAnalysis) ({ mixHighPassHz }) else null))
     }
     @Volatile var sourceFormatDescription: String? = null
     @Volatile var sourceAvailableFormats: String? = null
@@ -93,6 +104,7 @@ class PlaybackControls(
     private val players = CopyOnWriteArrayList<AudioPlayer>()
     @Volatile var title: String = "Loading..."
     /** A confident, beat-aligned transition to the prepared next track is approaching. */
+    @Volatile var autoMixStatus: String? = null
     @Volatile var goodAutoMixUpcoming = false
     val displayTitle: String get() = title + if (autoMixAnalysis && goodAutoMixUpcoming) " ✨" else ""
     @Volatile var paused: Boolean = false
@@ -112,7 +124,17 @@ class PlaybackControls(
         transmittedPositionMs = timescaleClock.sent(rawPosition)
     }
     val position: Long get() = transmittedPositionMs ?: players.firstOrNull()?.playingTrack?.position?.takeIf { it > 0 } ?: initialPositionMs
-    val duration: Long get() = players.firstOrNull()?.playingTrack?.duration ?: 0
+    @Volatile private var trimmedEndMs: Long? = null
+    @Volatile private var trimmedStartMs = 0L
+    internal fun setSongEdges(startMs: Long, endMs: Long) {
+        trimmedStartMs = startMs
+        trimmedEndMs = endMs
+        initialPositionMs = maxOf(initialPositionMs, startMs).coerceAtMost((endMs - 1).coerceAtLeast(0))
+        timescaleClock.reset(initialPositionMs)
+    }
+    val duration: Long get() = (players.firstOrNull()?.playingTrack?.duration ?: 0).let { raw ->
+        trimmedEndMs?.let { minOf(raw, it) } ?: raw
+    }
     val isStream: Boolean get() = players.firstOrNull()?.playingTrack?.let {
         it.info.isStream && (it as? JellyfinTranscodedTrack)?.canRestart != true
     } == true
@@ -163,7 +185,7 @@ class PlaybackControls(
 
     @Synchronized fun seekTo(positionMs: Long) {
         if (!seekable) return
-        val target = positionMs.coerceIn(0, (duration - 1).coerceAtLeast(0))
+        val target = positionMs.coerceIn(trimmedStartMs.coerceAtMost((duration - 1).coerceAtLeast(0)), (duration - 1).coerceAtLeast(0))
         transmittedPositionMs = null
         timescaleClock.reset(target)
         initialPositionMs = target

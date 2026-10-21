@@ -33,6 +33,8 @@ data class AudioFilterConfig(
     val speed: Double = 1.0,
     val tempo: Double = 1.0,
     val pitchSemitones: Double = 0.0,
+    val lowPassHz: Double = 0.0,
+    val highPassHz: Double = 0.0,
 ) {
     fun hasActiveEq(): Boolean = (bands != null && bands.any { it != 0f }) ||
         (eqPreset != null && !eqPreset.equals("flat", ignoreCase = true) && !eqPreset.equals("off", ignoreCase = true))
@@ -43,7 +45,7 @@ data class AudioFilterConfig(
         return if (preset != null && preset != EqPreset.FLAT) preset.bands else null
     }
 
-    fun hasActiveEffects(): Boolean = rotation || echo || tremolo || vibrato || underwater || speed != 1.0 || tempo != 1.0 || pitchSemitones != 0.0
+    fun hasActiveEffects(): Boolean = lowPassHz > 0 || highPassHz > 0 || rotation || echo || tremolo || vibrato || underwater || speed != 1.0 || tempo != 1.0 || pitchSemitones != 0.0
 
     fun isEmpty(): Boolean = !hasActiveEq() && !hasActiveEffects()
 
@@ -57,7 +59,8 @@ data class AudioFilterConfig(
             tremolo == other.tremolo &&
             vibrato == other.vibrato &&
             underwater == other.underwater &&
-            speed == other.speed && tempo == other.tempo && pitchSemitones == other.pitchSemitones
+            speed == other.speed && tempo == other.tempo && pitchSemitones == other.pitchSemitones &&
+            lowPassHz == other.lowPassHz && highPassHz == other.highPassHz
     }
 
     override fun hashCode(): Int {
@@ -71,6 +74,8 @@ data class AudioFilterConfig(
         result = 31 * result + speed.hashCode()
         result = 31 * result + tempo.hashCode()
         result = 31 * result + pitchSemitones.hashCode()
+        result = 31 * result + lowPassHz.hashCode()
+        result = 31 * result + highPassHz.hashCode()
         return result
     }
 }
@@ -267,11 +272,14 @@ object AudioFilterChain {
         onSeek: (() -> Unit)? = null,
         timescale: (() -> TimescaleParameters)? = null,
         onTimescaleOutput: ((Int, Double) -> Unit)? = null,
+        mixBass: (() -> Double)? = null,
+        mixLowPass: (() -> Double)? = null,
+        mixHighPass: (() -> Double)? = null,
     ): PcmFilterFactory? {
         val bands = config.effectiveBands()
         val hasEq = bands != null && bands.any { it != 0f }
         val hasEffects = config.hasActiveEffects()
-        if (channel == null && !hasEq && !hasEffects && timescale == null) {
+        if (channel == null && !hasEq && !hasEffects && timescale == null && mixBass == null && mixLowPass == null && mixHighPass == null) {
             return null
         }
 
@@ -314,6 +322,15 @@ object AudioFilterChain {
             if (hasEq && Equalizer.isCompatible(format)) {
                 current = Equalizer(channelCount, current, bands)
             }
+            if (config.lowPassHz > 0 || mixLowPass != null) current = PassFilter(current, channelCount, sampleRate, false) {
+                val automatic = mixLowPass?.invoke() ?: 0.0
+                if (config.lowPassHz > 0 && automatic > 0) minOf(config.lowPassHz, automatic)
+                else maxOf(config.lowPassHz, automatic)
+            }
+            if (config.highPassHz > 0 || mixHighPass != null) current = PassFilter(current, channelCount, sampleRate, true) {
+                maxOf(config.highPassHz, mixHighPass?.invoke() ?: 0.0)
+            }
+            if (mixBass != null) current = MixBassFilter(current, channelCount, sampleRate, mixBass)
             if (timescale != null || config.speed != 1.0 || config.tempo != 1.0 || config.pitchSemitones != 0.0) {
                 current = TimescaleFilter(current, channelCount, sampleRate,
                     timescale ?: { TimescaleParameters(config.tempo, config.pitchSemitones, config.speed) }, onTimescaleOutput)
@@ -325,3 +342,70 @@ object AudioFilterChain {
 }
 
 
+
+/** Dynamic low-shelf cut used only during beat-matched overlaps; user EQ remains separate. */
+internal class MixBassFilter(private val downstream: FloatPcmAudioFilter, channels: Int, sampleRate: Int,
+                             private val targetGain: () -> Double) : FloatPcmAudioFilter {
+    private val lows = DoubleArray(channels)
+    private val alpha = 1.0 - kotlin.math.exp(-2.0 * Math.PI * 180.0 / sampleRate)
+    private val smoothing = 1.0 - kotlin.math.exp(-1.0 / (sampleRate * 0.02))
+    private var gain = targetGain().coerceIn(0.0, 1.0)
+    override fun process(input: Array<FloatArray>, offset: Int, length: Int) {
+        val target = targetGain().coerceIn(0.0, 1.0)
+        for (i in offset until offset + length) {
+            gain += (target - gain) * smoothing
+            for (channel in input.indices) {
+                val value = input[channel][i].toDouble()
+                lows[channel] += alpha * (value - lows[channel])
+                input[channel][i] = (value - lows[channel] * (1.0 - gain)).toFloat()
+            }
+        }
+        downstream.process(input, offset, length)
+    }
+    override fun seekPerformed(requested: Long, provided: Long) {
+        lows.fill(0.0); gain = targetGain().coerceIn(0.0, 1.0)
+        downstream.seekPerformed(requested, provided)
+    }
+    override fun flush() = downstream.flush()
+    override fun close() = downstream.close()
+}
+
+/** Two-pole Butterworth low/high-pass; each channel owns independent delay state. Zero bypasses. */
+internal class PassFilter(private val downstream: FloatPcmAudioFilter, channels: Int, private val sampleRate: Int,
+                          private val highPass: Boolean, private val cutoff: () -> Double) : FloatPcmAudioFilter {
+    private val z1 = DoubleArray(channels)
+    private val z2 = DoubleArray(channels)
+    private var bypassed = true
+    override fun process(input: Array<FloatArray>, offset: Int, length: Int) {
+        val hz = cutoff()
+        if (hz <= 0.0 || !hz.isFinite()) {
+            if (!bypassed) { z1.fill(0.0); z2.fill(0.0) }
+            bypassed = true
+            downstream.process(input, offset, length)
+            return
+        }
+        bypassed = false
+        val omega = 2.0 * Math.PI * hz.coerceIn(20.0, sampleRate * 0.45) / sampleRate
+        val c = kotlin.math.cos(omega)
+        val alpha = kotlin.math.sin(omega) / kotlin.math.sqrt(2.0)
+        val a0 = 1.0 + alpha
+        val b0 = (if (highPass) 1.0 + c else 1.0 - c) / (2.0 * a0)
+        val b1 = (if (highPass) -(1.0 + c) else 1.0 - c) / a0
+        val a1 = -2.0 * c / a0
+        val a2 = (1.0 - alpha) / a0
+        for (channel in input.indices) for (i in offset until offset + length) {
+            val value = input[channel][i].toDouble()
+            val out = b0 * value + z1[channel]
+            z1[channel] = b1 * value - a1 * out + z2[channel]
+            z2[channel] = b0 * value - a2 * out
+            input[channel][i] = out.toFloat()
+        }
+        downstream.process(input, offset, length)
+    }
+    override fun seekPerformed(requested: Long, provided: Long) {
+        z1.fill(0.0); z2.fill(0.0)
+        downstream.seekPerformed(requested, provided)
+    }
+    override fun flush() = downstream.flush()
+    override fun close() = downstream.close()
+}

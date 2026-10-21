@@ -31,6 +31,8 @@ data class SavedJukeboxSettings(
         requireNotNull(hologramVisibility)
         require(stereo in 0..3)
         require(version == 1 && volume in 0..100 && crossfade in 0..30 && lastCrossfade in 1..30)
+        require(filterConfig.lowPassHz == 0.0 || filterConfig.lowPassHz in 20.0..20000.0)
+        require(filterConfig.highPassHz == 0.0 || filterConfig.highPassHz in 20.0..20000.0)
         require(filterConfig.speed in 0.25..4.0)
         require(filterConfig.tempo in 0.5..2.0 && filterConfig.pitchSemitones in -12.0..12.0)
         require(queueHologram.x.isFinite() && queueHologram.y.isFinite() && queueHologram.z.isFinite())

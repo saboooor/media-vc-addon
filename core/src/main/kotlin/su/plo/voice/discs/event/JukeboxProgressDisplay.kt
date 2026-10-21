@@ -67,7 +67,7 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
     private val queueEditing = ConcurrentHashMap.newKeySet<Block>()
     private val editing = ConcurrentHashMap.newKeySet<Block>()
     private data class TextState(val title: String?, val paused: Boolean, val seconds: Long,
-        val durationSeconds: Long, val live: Boolean, val loading: Boolean, val percent: Int, val filled: Int)
+        val durationSeconds: Long, val live: Boolean, val loading: Boolean, val percent: Int, val filled: Int, val autoMixStatus: String?)
     private val textStates = ConcurrentHashMap<Block, Pair<Entity, TextState>>()
     private val textMethod by lazy { Class.forName("org.bukkit.entity.TextDisplay").getMethod("text", Component::class.java) }
     val supported get() = displayType != null
@@ -120,13 +120,15 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
                         val state = TextState(controls?.displayTitle, controls?.paused == true,
                             position / 1000, duration / 1000, live, duration <= 0,
                             if (!live && duration > 0) (position.toDouble() / duration * 100).toInt().coerceIn(0, 100) else 0,
-                            if (!live && duration > 0) PlaybackDialogView.filledSegments(position, duration) else 0)
+                            if (!live && duration > 0) PlaybackDialogView.filledSegments(position, duration) else 0,
+                            controls?.autoMixStatus?.takeIf { controls.autoMixAnalysis })
                         val previous = textStates[block]
                         if (previous?.first !== display || previous.second != state) {
                             val text = if (controls == null) Component.text("Playback hologram\nPreview", NamedTextColor.AQUA)
                                 else Component.text(state.title!!, NamedTextColor.GOLD)
                                     .append(Component.text(if (state.paused) "\nPaused\n" else "\n", NamedTextColor.GRAY))
                                     .append(PlaybackDialogView.progress(position, duration, live))
+                                    .append(state.autoMixStatus?.let { Component.text("\n$it", NamedTextColor.AQUA) } ?: Component.empty())
                             textMethod.invoke(display, text)
                             textStates[block] = display to state
                         }

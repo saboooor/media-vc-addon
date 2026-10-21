@@ -24,7 +24,7 @@ class EffectCommand : SubCommand() {
     private val controlCommand: ControlCommand by inject()
 
     private val validOptions = listOf(
-        "gui", "clear", "tempo", "pitch", "8d", "echo", "underwater", "tremolo", "vibrato", "nightcore", "vaporwave"
+        "gui", "clear", "tempo", "pitch", "lowpass", "highpass", "8d", "echo", "underwater", "tremolo", "vibrato", "nightcore", "vaporwave"
     ) + EqPreset.entries.map { it.id }
 
     override fun execute(sender: CommandSender, arguments: Array<out String>) {
@@ -82,6 +82,16 @@ class EffectCommand : SubCommand() {
             jukeboxes.setFilterConfig(jukeboxBlock, updated)
             player.sendMessage(Component.text(if (action == "tempo") "Tempo set to ${value}x; pitch preserved."
                 else "Pitch set to $value semitones; tempo preserved.", NamedTextColor.GREEN))
+            return
+        }
+        if (action == "lowpass" || action == "highpass") {
+            val value = if (arguments.getOrNull(2).equals("off", true)) 0.0 else arguments.getOrNull(2)?.toDoubleOrNull()
+            if (arguments.size != 3 || value == null || !value.isFinite() || (value != 0.0 && value !in 20.0..20000.0)) {
+                player.sendMessage(Component.text("Usage: /disc effect $action <20-20000 Hz|off>", NamedTextColor.RED))
+                return
+            }
+            jukeboxes.setFilterConfig(jukeboxBlock, if (action == "lowpass") current.copy(lowPassHz = value) else current.copy(highPassHz = value))
+            player.sendMessage(Component.text("$action: ${if (value == 0.0) "Off" else "$value Hz"}", NamedTextColor.GREEN))
             return
         }
         val preset = EqPreset.fromId(action)
