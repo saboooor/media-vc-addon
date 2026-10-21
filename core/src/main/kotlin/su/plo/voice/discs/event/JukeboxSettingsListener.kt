@@ -39,7 +39,7 @@ class JukeboxSettingsListener(
     private fun capture(block: Block): SavedJukeboxSettings {
         val fade = playlists.crossfadeSettings(block)
         return SavedJukeboxSettings(volume = playback.volumeSetting(block),
-            loop = playlists.playbackModes(block).first, shuffle = playlists.playbackModes(block).second, stereo = playback.stereoMode(block), crossfade = fade.first, lastCrossfade = fade.second,
+            loop = playlists.playbackModes(block).first, shuffle = playlists.playbackModes(block).second, stereo = playback.stereoMode(block), autoMix = playlists.autoMixEnabled(block), crossfade = fade.first, lastCrossfade = fade.second,
             hologram = holograms.getOffset(block).copy(), visualizers = visualizers.instances(block),
             lamps = lamps.linkedPositions(block), lampBands = lamps.linkedBands(block), screenName = screens.getScreenForJukebox(block)?.name, noteBlock = playback.noteLink(block),
             leftNoteBlock = playback.channelNoteLink(block, true), rightNoteBlock = playback.channelNoteLink(block, false),
@@ -116,6 +116,7 @@ class JukeboxSettingsListener(
         playback.setFilterConfig(block, settings.filterConfig)
         playlists.restoreModes(block, settings.loop, settings.shuffle)
         playlists.restoreCrossfade(block, settings.crossfade, settings.lastCrossfade)
+        playlists.restoreAutoMix(block, settings.autoMix)
         visualizers.restore(block, settings.visualizers)
         holograms.setOffset(block, settings.hologram.x, settings.hologram.y, settings.hologram.z)
         if (settings.lamps.isNotEmpty()) lamps.restoreLinks(block, settings.lamps, settings.lampBands)
@@ -154,4 +155,5 @@ class JukeboxSettingsListener(
         pending.clear()
     }
 }
+
 

@@ -8,7 +8,7 @@ import su.plo.voice.discs.visualizer.*
 
 class SavedJukeboxSettingsTest {
     @Test fun `saved payload preserves placement playback and available links`() {
-        val settings = SavedJukeboxSettings(volume = 70, loop = true, shuffle = true, stereo = 2, crossfade = 0, lastCrossfade = 8,
+        val settings = SavedJukeboxSettings(volume = 70, autoMix = true, loop = true, shuffle = true, stereo = 2, crossfade = 0, lastCrossfade = 8,
             hologram = HologramOffset(1.5, 2.0, -0.5),
             visualizers = listOf(VisualizerInstance(7, VisualizerKind.SPEAKER, true,
                 VisualizerLayout(1f, 2f, 3f, 1.5f, 0.75f), VisualizerFacing.WEST)),
@@ -64,4 +64,5 @@ class SavedJukeboxSettingsTest {
         assertTrue(SavedJukeboxSettings.decode("{}")!!.filterConfig.isEmpty())
     }
 }
+
 

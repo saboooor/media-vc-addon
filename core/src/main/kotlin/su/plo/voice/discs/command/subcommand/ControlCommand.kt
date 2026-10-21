@@ -246,9 +246,13 @@ class ControlCommand(
             buttons.clear()
             queueLabels.clear()
             body.clear()
+            val autoMix = playlists.autoMixEnabled(block)
+            body += Component.text("AutoMix: ${if (autoMix) "On" else "Off"}", NamedTextColor.GOLD)
+            body += Component.text("AutoMix uses audio energy and beat estimates to choose entry points and blend length. Uncertain matches use a smooth fade.", NamedTextColor.GRAY)
+            buttons += (if (autoMix) "Disable AutoMix" else "Enable AutoMix") to (prefix + "automix")
             if (queue != null) {
                 body += Component.text("Crossfade: ${if (queue.crossfadeSeconds == 0) "Off" else "${queue.crossfadeSeconds}s"}", NamedTextColor.GOLD)
-                body += Component.text("Changes apply to upcoming transitions. An active fade finishes at its original duration.", NamedTextColor.GRAY)
+                body += Component.text("Fixed crossfade applies when AutoMix is off, including skips. AutoMix overrides the fixed duration. Changes apply to upcoming transitions.", NamedTextColor.GRAY)
                 buttons += "Crossfade -1s" to (prefix + "fadeless")
                 buttons += "Crossfade +1s" to (prefix + "fademore")
                 buttons += (if (queue.crossfadeSeconds > 0) "Disable crossfade" else "Enable crossfade") to (prefix + "fadetoggle")
@@ -615,6 +619,7 @@ class ControlCommand(
             "fadeless" -> playlists.changeCrossfade(session.block, -1)
             "fademore" -> playlists.changeCrossfade(session.block, 1)
             "fadetoggle" -> playlists.toggleCrossfade(session.block)
+            "automix" -> playlists.toggleAutoMix(session.block)
             "holo_menu" -> { show(player, session.block, hologram = true); return }
             "holo_reset" -> {
                 progressDisplay?.resetOffset(session.block)
@@ -679,11 +684,12 @@ class ControlCommand(
                 return
             }
         }
-        show(player, session.block, crossfade = arguments[2] in setOf("fadeless", "fademore", "fadetoggle"), speakers = arguments[2] == "stereo" || arguments[2].startsWith("note_"),
+        show(player, session.block, crossfade = arguments[2] in setOf("fadeless", "fademore", "fadetoggle", "automix"), speakers = arguments[2] == "stereo" || arguments[2].startsWith("note_"),
             queueMenu = arguments[2] in setOf("loop", "shuffle"), volumeMenu = arguments[2] in setOf("quieter", "louder"))
     }
 
     @EventHandler
     fun onQuit(event: PlayerQuitEvent) { sessions.remove(event.player.uniqueId); noteRequests.remove(event.player.uniqueId) }
 }
+
 

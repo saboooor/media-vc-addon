@@ -87,6 +87,28 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         stereoPlayerManager.shutdown()
     }
 
+    /** At most eight seconds of the next intro, one extra decoder per queue, bounded by ten wall seconds. */
+    suspend fun analyzeMixIntro(track: AudioTrack): su.plo.voice.discs.audio.MixFeatures? {
+        if (track.info.isStream || !track.isSeekable) return null
+        val player = stereoPlayerManager.createPlayer()
+        val analysis = su.plo.voice.discs.audio.MixAnalysis()
+        var tap: PlaybackSpectrumTap? = null
+        try {
+            player.playTrack(track.makeClone())
+            return kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+                var decodedMs = 0L
+                while (decodedMs < 8_000 && player.playingTrack != null) {
+                    val frame = player.provide()
+                    if (frame == null) { delay(2); continue }
+                    val reader = tap ?: PlaybackSpectrumTap(frame.format).also { tap = it }
+                    reader.accept(frame.data, null, analysis, frame.timecode)
+                    decodedMs += 20
+                }
+                analysis.snapshot()
+            }
+        } finally { tap?.close(); player.destroy() }
+    }
+
     fun getYoutubeSourceManager(): YoutubeAudioSourceManager? {
         return lavaPlayerManager.source(QualityYoutubeSourceManager::class.java)
             ?: lavaPlayerManager.source(YoutubeAudioSourceManager::class.java)
@@ -216,9 +238,10 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 val sent = synchronized(controls) {
                     if (controls.paused || controls.failure != null) false
                     else playbackPlayer.provide()?.let { frame ->
-                        if (controls.visualizing) {
+                        if (controls.visualizing || controls.autoMixAnalysis) {
                             val tap = spectrumTap ?: PlaybackSpectrumTap(frame.format).also { spectrumTap = it }
-                            tap.accept(frame.data, controls.spectrum)
+                            tap.accept(frame.data, controls.spectrum.takeIf { controls.visualizing },
+                                controls.mixAnalysis.takeIf { controls.autoMixAnalysis }, controls.position, controls.analysisScale)
                         } else {
                             spectrumTap?.close()
                             spectrumTap = null
@@ -539,4 +562,5 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         private val logger = McLoggerFactory.createLogger("PlasmoAudioPlayerManager")
     }
 }
+
 

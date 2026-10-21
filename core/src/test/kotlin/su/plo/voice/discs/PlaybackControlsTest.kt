@@ -44,6 +44,22 @@ class PlaybackControlsTest {
         }
     }
 
+    @Test fun `mix clock advances only for attached transmitted frames and is independent of seeks`() {
+        val controls = PlaybackControls()
+        val decoder = Decoder()
+        controls.attach(decoder.player)
+        assertEquals(0L, controls.sentAudioMs)
+        controls.frameSent(decoder.player, 30_000)
+        assertEquals(20L, controls.sentAudioMs)
+        controls.seekTo(60_000)
+        assertEquals(20L, controls.sentAudioMs)
+        controls.frameSent(decoder.player, 60_000)
+        assertEquals(40L, controls.sentAudioMs)
+        controls.detach(decoder.player)
+        controls.frameSent(decoder.player, 60_020)
+        assertEquals(40L, controls.sentAudioMs)
+    }
+
     @Test fun `video clock waits for transmitted audio after a seek`() {
         val controls = PlaybackControls()
         val decoder = Decoder()
@@ -236,3 +252,4 @@ class PlaybackControlsTest {
         assertEquals(0L, decoder.position)
     }
 }
+

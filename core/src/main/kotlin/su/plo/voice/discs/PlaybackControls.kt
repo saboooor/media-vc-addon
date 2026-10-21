@@ -22,6 +22,12 @@ class PlaybackControls(
         if (failure == null) failure = message
     }
     val spectrum = SpectrumAnalyzer()
+    val mixAnalysis = su.plo.voice.discs.audio.MixAnalysis()
+    @Volatile var autoMixAnalysis = false
+    @Volatile var sentAudioMs = 0L
+        private set
+    val currentGain: Double get() = gain
+    val analysisScale: Double get() = if (volume * gain > 0.01) 100.0 / (volume * gain) else 1.0
     @Volatile var visualizing = false
         private set
     private val analysisConsumers = mutableSetOf<String>()
@@ -83,6 +89,7 @@ class PlaybackControls(
     @Synchronized internal fun frameSent(player: AudioPlayer, timecodeMs: Long) {
         if (player !in players) return
         val track = player.playingTrack ?: return
+        sentAudioMs += 20
         transmittedPositionMs = if (track is JellyfinTranscodedTrack) track.absoluteFramePosition(timecodeMs) else timecodeMs
     }
     val position: Long get() = players.firstOrNull()?.playingTrack?.position?.takeIf { it > 0 } ?: initialPositionMs
@@ -142,7 +149,9 @@ class PlaybackControls(
         initialPositionMs = target
         players.forEach { seekPlayer(it, target) }
         spectrum.reset()
+        mixAnalysis.reset()
         onSeek?.invoke(target)
     }
 }
+
 

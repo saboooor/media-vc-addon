@@ -13,6 +13,7 @@ data class SavedJukeboxSettings(
     val shuffle: Boolean = false,
     val stereo: Int = 0,
     val crossfade: Int = 3,
+    val autoMix: Boolean = false,
     val lastCrossfade: Int = 3,
     val hologram: HologramOffset = HologramOffset(),
     val visualizers: List<VisualizerInstance> = emptyList(),
@@ -55,4 +56,5 @@ data class SavedJukeboxSettings(
         }.getOrNull()
     }
 }
+
 
