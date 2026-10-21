@@ -72,7 +72,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
 
     private val jellyfinLibrary: JellyfinLibrary by inject()
 
-    private val lavaPlayerManager: AudioPlayerManager = DefaultAudioPlayerManager()
+    private val lavaPlayerManager: AudioPlayerManager = DefaultAudioPlayerManager().apply { setUseSeekGhosting(false) }
     // Track loading stays on the main manager; this manager executes loaded tracks as PCM.
     // Separate configuration prevents concurrent normal/mono playback changing output formats.
     private val stereoPlayerManager = DefaultAudioPlayerManager().apply {
@@ -233,6 +233,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                         secondaryPv?.sendAudioFrame(secondaryEncrypted!!, sequence, distance)
                         primarySvc?.send(primary)
                         if (secondary != null) secondarySvc?.send(secondary)
+                        controls.frameSent(playbackPlayer, frame.timecode)
                         sequence++
                         true
                     } ?: false

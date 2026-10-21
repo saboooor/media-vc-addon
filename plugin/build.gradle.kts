@@ -1,6 +1,7 @@
 import org.gradle.kotlin.dsl.withType
 import xyz.jpenilla.runpaper.task.RunServer
 import java.net.URI
+import java.util.zip.ZipFile
 
 plugins {
     alias(libs.plugins.runpaper)
@@ -58,6 +59,27 @@ tasks {
         archiveBaseName.set(rootProject.name)
         archiveClassifier.set("")
         archiveAppendix.set("")
+
+        // Validate against compiler output, so an incomplete core jar cannot pass packaging.
+        doLast {
+            val classes = project(":core").extensions
+                .getByType<org.gradle.api.tasks.SourceSetContainer>()["main"].output.classesDirs
+            val required = classes.asFileTree.matching {
+                include("su/plo/voice/discs/**/*.class")
+            }.files.map { file ->
+                val root = classes.files.first { file.toPath().startsWith(it.toPath()) }
+                file.relativeTo(root).invariantSeparatorsPath
+            }.toSet()
+            check("su/plo/voice/discs/utils/DiscEjectCause.class" in required) {
+                "Core compiler output is incomplete. Run ./gradlew clean build."
+            }
+            ZipFile(archiveFile.get().asFile).use { zip ->
+                val missing = required.filter { zip.getEntry(it) == null }
+                check(missing.isEmpty()) {
+                    "Plugin jar is missing core classes: ${missing.take(10)}. Run ./gradlew clean build."
+                }
+            }
+        }
 
         listOf(
             "co.touchlab",

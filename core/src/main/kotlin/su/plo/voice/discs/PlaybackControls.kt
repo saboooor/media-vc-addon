@@ -77,6 +77,14 @@ class PlaybackControls(
         private set
     @Volatile var initialPositionMs: Long = initialPositionMs
         private set
+    /** Position of audio actually transmitted, unavailable while a new stream/seek buffers. */
+    @Volatile var transmittedPositionMs: Long? = null
+        private set
+    @Synchronized internal fun frameSent(player: AudioPlayer, timecodeMs: Long) {
+        if (player !in players) return
+        val track = player.playingTrack ?: return
+        transmittedPositionMs = if (track is JellyfinTranscodedTrack) track.absoluteFramePosition(timecodeMs) else timecodeMs
+    }
     val position: Long get() = players.firstOrNull()?.playingTrack?.position?.takeIf { it > 0 } ?: initialPositionMs
     val duration: Long get() = players.firstOrNull()?.playingTrack?.duration ?: 0
     val isStream: Boolean get() = players.firstOrNull()?.playingTrack?.let {
@@ -89,7 +97,10 @@ class PlaybackControls(
     private fun seekPlayer(player: AudioPlayer, position: Long) {
         val track = player.playingTrack ?: return
         if (track is JellyfinTranscodedTrack && track.canRestart) {
-            player.playTrack(track.restartAt(position).also { it.userData = track.userData })
+            val replacement = track.restartAt(position).also { it.userData = track.userData }
+            // Clear LavaPlayer's shadow track so old audio cannot leak into the new seek clock.
+            player.stopTrack()
+            player.playTrack(replacement)
         } else if (track.isSeekable) track.position = position
     }
 
@@ -127,6 +138,7 @@ class PlaybackControls(
     @Synchronized fun seekTo(positionMs: Long) {
         if (!seekable) return
         val target = positionMs.coerceIn(0, (duration - 1).coerceAtLeast(0))
+        transmittedPositionMs = null
         initialPositionMs = target
         players.forEach { seekPlayer(it, target) }
         spectrum.reset()

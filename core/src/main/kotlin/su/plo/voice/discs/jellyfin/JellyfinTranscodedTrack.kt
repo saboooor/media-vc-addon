@@ -17,6 +17,7 @@ internal class JellyfinTranscodedTrack(
     fun restartAt(positionMs: Long): JellyfinTranscodedTrack =
         JellyfinTranscodedTrack(delegate, durationMs, reload,
             positionMs.coerceIn(0, (durationMs - 1).coerceAtLeast(0)), true)
+    fun absoluteFramePosition(timecodeMs: Long): Long = startPositionMs + timecodeMs
     override fun getPosition() = startPositionMs + super.getPosition()
     override fun isSeekable() = false
     // Ignore even zero-position assignments used when cloning speakers/backends: a zero-frame

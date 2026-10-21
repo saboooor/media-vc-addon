@@ -16,6 +16,9 @@ import java.util.UUID
 class SvcDiscsPlugin(private val plugin: JavaPlugin) : VoicechatPlugin {
 
     @Volatile
+    private var active = true
+
+    @Volatile
     var serverApi: VoicechatServerApi? = null
         private set
 
@@ -29,6 +32,7 @@ class SvcDiscsPlugin(private val plugin: JavaPlugin) : VoicechatPlugin {
     override fun getPluginId(): String = "vc-addon-discs"
 
     override fun initialize(api: VoicechatApi) {
+        if (!active) return
         if (api is VoicechatServerApi) {
             this.serverApi = api
             registerCategory(api)
@@ -38,6 +42,7 @@ class SvcDiscsPlugin(private val plugin: JavaPlugin) : VoicechatPlugin {
 
     override fun registerEvents(registration: EventRegistration) {
         registration.registerEvent(VoicechatServerStartedEvent::class.java) { event ->
+            if (!active) return@registerEvent
             this.serverApi = event.voicechat
             registerCategory(event.voicechat)
             plugin.slF4JLogger.info("Simple Voice Chat discs audio ready")
@@ -45,6 +50,40 @@ class SvcDiscsPlugin(private val plugin: JavaPlugin) : VoicechatPlugin {
         registration.registerEvent(VoicechatServerStoppedEvent::class.java) {
             this.serverApi = null
         }
+    }
+
+    /**
+     * PlugMan reloads this plugin without rebuilding Simple Voice Chat's plugin registry.
+     * Keep the registered addon instance and temporarily disable its API access instead of
+     * registering another plugin with the same ID.
+     */
+    fun suspend() {
+        active = false
+        serverApi = null
+    }
+
+    fun resume() {
+        active = true
+    }
+
+    /** SVC only initializes registered addons at startup, so late loads need its existing API. */
+    fun attachToRunningServer() {
+        if (!active || serverApi != null) return
+        try {
+            val voicechat = plugin.server.pluginManager.getPlugin("voicechat") ?: return
+            if (!voicechat.isEnabled) return
+            val implementation = voicechat.javaClass.classLoader.loadClass(
+                "de.maxhenkel.voicechat.plugins.impl.VoicechatServerApiImpl"
+            )
+            initialize(implementation.getMethod("instance").invoke(null) as VoicechatServerApi)
+        } catch (e: Exception) {
+            plugin.slF4JLogger.warn("Unable to attach to the running Simple Voice Chat API; restart the server", e)
+        }
+    }
+
+    fun close() {
+        active = false
+        serverApi = null
     }
 
     private fun registerCategory(api: VoicechatServerApi) {

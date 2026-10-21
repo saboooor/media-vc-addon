@@ -355,7 +355,8 @@ class VideoPlayer(
                     val videoMs = startPositionMs + relativeMs
                     while (!stopped.get() && currentCoroutineContext().isActive) {
                         if (isPaused) { delay(20L); continue }
-                        val audioMs = audioClock() ?: 0L
+                        val audioMs = audioClock()
+                        if (audioMs == null) { delay(20L); continue }
                         val waitMs = VideoAudioSync.waitMillis(videoMs, audioMs)
                         if (waitMs == 0L) break
                         delay(waitMs)

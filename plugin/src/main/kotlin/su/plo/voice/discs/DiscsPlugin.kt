@@ -235,6 +235,8 @@ class DiscsPlugin : JavaPlugin(), Listener {
         server.pluginManager.registerEvents(this, this)
         registerSvc()
         bindSvc()
+        svcPlugin?.resume()
+        svcPlugin?.attachToRunningServer()
 
         loadConfig()
 
@@ -390,6 +392,8 @@ class DiscsPlugin : JavaPlugin(), Listener {
             audioPlayerManager.shutdown()
         }
 
+        svcPlugin?.suspend()
+
         LavaplayerDebugLogging.setEnabled(false)
     }
 
@@ -438,4 +442,3 @@ class DiscsPlugin : JavaPlugin(), Listener {
         }
     }
 }
-

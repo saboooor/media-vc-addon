@@ -44,6 +44,20 @@ class PlaybackControlsTest {
         }
     }
 
+    @Test fun `video clock waits for transmitted audio after a seek`() {
+        val controls = PlaybackControls()
+        val decoder = Decoder()
+        controls.attach(decoder.player)
+        assertNull(controls.transmittedPositionMs)
+        controls.frameSent(decoder.player, 30_000)
+        assertEquals(30_000L, controls.transmittedPositionMs)
+        controls.seekTo(60_000)
+        assertEquals(60_000L, controls.position)
+        assertNull(controls.transmittedPositionMs)
+        controls.frameSent(decoder.player, 60_000)
+        assertEquals(60_000L, controls.transmittedPositionMs)
+    }
+
     @Test fun `pause and volume apply to both voice backends and late attachments`() {
         val controls = PlaybackControls()
         val pv = Decoder()
