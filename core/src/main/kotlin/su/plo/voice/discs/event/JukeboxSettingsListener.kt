@@ -40,7 +40,7 @@ class JukeboxSettingsListener(
         val fade = playlists.crossfadeSettings(block)
         return SavedJukeboxSettings(volume = playback.volumeSetting(block),
             loop = playlists.playbackModes(block).first, shuffle = playlists.playbackModes(block).second, stereo = playback.stereoMode(block), autoMix = playlists.autoMixEnabled(block), crossfade = fade.first, lastCrossfade = fade.second,
-            hologram = holograms.getOffset(block).copy(), visualizers = visualizers.instances(block),
+            hologram = holograms.getOffset(block).copy(), hologramVisibility = holograms.visibility(block), visualizers = visualizers.instances(block),
             lamps = lamps.linkedPositions(block), lampBands = lamps.linkedBands(block), screenName = screens.getScreenForJukebox(block)?.name, noteBlock = playback.noteLink(block),
             leftNoteBlock = playback.channelNoteLink(block, true), rightNoteBlock = playback.channelNoteLink(block, false),
             filterConfig = playback.filterConfig(block))
@@ -65,6 +65,7 @@ class JukeboxSettingsListener(
         }
         visualizers.clearSettings(event.block)
         holograms.resetOffset(event.block)
+        holograms.clearVisibility(event.block)
         playlists.clearSettings(event.block)
         playback.clearVolume(event.block)
         screens.getScreenForJukebox(event.block)?.let { screen ->
@@ -119,6 +120,7 @@ class JukeboxSettingsListener(
         playlists.restoreAutoMix(block, settings.autoMix)
         visualizers.restore(block, settings.visualizers)
         holograms.setOffset(block, settings.hologram.x, settings.hologram.y, settings.hologram.z)
+        holograms.setVisibility(block, settings.hologramVisibility)
         if (settings.lamps.isNotEmpty()) lamps.restoreLinks(block, settings.lamps, settings.lampBands)
         settings.screenName?.let { name ->
             val screen = screens.getScreen(name)

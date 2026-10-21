@@ -34,11 +34,33 @@ data class HologramOffset(
     var z: Double = 0.0,
 )
 
-/** One transient, automatically updated display per jukebox, including during crossfades. */
+data class HologramVisibility(val main: Boolean = true, val queue: Boolean = true)
+
+/** Transient playback and queue displays, updated on each jukebox's owning thread. */
 class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : Listener, PluginKoinComponent {
     private val plugin: JavaPlugin by inject()
     private val scope: CoroutineScope by inject()
     private val voiceServer: PlasmoVoiceServer? by getterOrNull()
+    var queueView: (Block) -> su.plo.voice.discs.command.subcommand.PlaylistCommand.QueueView? = { null }
+    private val queueDisplays = ConcurrentHashMap<Block, Entity>()
+    private val queueTexts = ConcurrentHashMap<Block, Component>()
+    private val visibility = ConcurrentHashMap<String, HologramVisibility>()
+    private val visibilityFile get() = File(plugin.dataFolder, "hologram_visibility.json")
+    fun visibility(block: Block) = visibility[blockKey(block)] ?: HologramVisibility()
+    fun setVisibility(block: Block, value: HologramVisibility) {
+        visibility[blockKey(block)] = value
+        saveVisibility()
+    }
+    fun clearVisibility(block: Block) {
+        visibility.remove(blockKey(block))
+        saveVisibility()
+    }
+    private fun saveVisibility() {
+        val snapshot = visibility.toMap()
+        su.plo.voice.discs.utils.SettingsFileWriter.shared.submit(visibilityFile, { gson.toJson(snapshot) }) {
+            plugin.slF4JLogger.error("Failed to save hologram visibility", it)
+        }
+    }
     private val displays = ConcurrentHashMap<Block, Entity>()
     private val displayType = runCatching { EntityType.valueOf("TEXT_DISPLAY") }.getOrNull()
     private var updater: Job? = null
@@ -58,17 +80,28 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
         updater = scope.launch {
             while (isActive) {
                 val blocks = HashSet(displays.keys)
+                blocks.addAll(queueDisplays.keys)
                 blocks.addAll(jukeboxes.controlsByBlock.keys)
                 blocks.addAll(editing)
                 for (block in blocks) {
                     suspendSyncAt(block.location, voiceServer, plugin) {
                         if (!block.world.isChunkLoaded(block.x shr 4, block.z shr 4)) {
                             displays.remove(block)
+                            queueDisplays.remove(block)
+                            queueTexts.remove(block)
                             textStates.remove(block)
                             return@suspendSyncAt
                         }
                         val controls = jukeboxes.controlsByBlock[block]
                         if ((controls == null && block !in editing) || block.type != Material.JUKEBOX) {
+                            displays.remove(block)?.remove()
+                            queueDisplays.remove(block)?.remove()
+                            queueTexts.remove(block)
+                            textStates.remove(block)
+                            return@suspendSyncAt
+                        }
+                        updateQueueDisplay(block)
+                        if (!visibility(block).main && block !in editing) {
                             displays.remove(block)?.remove()
                             textStates.remove(block)
                             return@suspendSyncAt
@@ -101,6 +134,32 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
         }
     }
 
+    private fun updateQueueDisplay(block: Block) {
+        val queue = queueView(block)
+        if (!visibility(block).queue || queue == null || queue.items.isEmpty()) {
+            queueDisplays.remove(block)?.remove()
+            queueTexts.remove(block)
+            return
+        }
+        val first = queue.currentIndex.coerceAtLeast(0)
+        val shown = queue.items.withIndex().drop(first).take(5)
+        var text = Component.text("Queue (${queue.items.size} tracks)", NamedTextColor.AQUA)
+        for ((index, item) in shown) {
+            text = text.append(Component.text("\n${if (index == queue.currentIndex) "▶" else "•"} ${index + 1}. ${item.title.take(60)}",
+                if (index == queue.currentIndex) NamedTextColor.GOLD else NamedTextColor.WHITE))
+        }
+        val remaining = queue.items.size - first - shown.size
+        if (remaining > 0) text = text.append(Component.text("\n+$remaining more", NamedTextColor.GRAY))
+        val target = getDisplayLocation(block).add(0.0, 1.4, 0.0)
+        val display = queueDisplays[block]?.takeIf { it.isValid }
+            ?: create(block, target).also { queueDisplays[block] = it; queueTexts.remove(block) }
+        if (display.location.distanceSquared(target) > 0.001) display.teleport(target)
+        if (queueTexts[block] != text) {
+            textMethod.invoke(display, text)
+            queueTexts[block] = text
+        }
+    }
+
     fun getDisplayLocation(block: Block): Location {
         val base = Companion.getBaseDisplayLocation(block)
         val offset = offsets[blockKey(block)] ?: return base
@@ -114,6 +173,15 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
 
     init {
         loadOffsets()
+        try {
+            if (visibilityFile.exists()) {
+                val type = object : TypeToken<Map<String, HologramVisibility>>() {}.type
+                val loaded: Map<String, HologramVisibility>? = gson.fromJson(visibilityFile.readText(), type)
+                loaded?.let { visibility.putAll(it) }
+            }
+        } catch (e: Exception) {
+            plugin.slF4JLogger.error("Failed to load hologram visibility", e)
+        }
     }
 
     fun loadOffsets() {
@@ -285,6 +353,7 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onUnload(event: ChunkUnloadEvent) {
         displays.keys.filter { it.inChunk(event.chunk) }.forEach { displays.remove(it)?.remove(); textStates.remove(it) }
+        queueDisplays.keys.filter { it.inChunk(event.chunk) }.forEach { queueDisplays.remove(it)?.remove(); queueTexts.remove(it) }
     }
 
     fun shutdown() {
@@ -292,6 +361,9 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
         saveOffsets()
         displays.values.forEach { it.remove() }
         displays.clear()
+        queueDisplays.values.forEach { it.remove() }
+        queueDisplays.clear()
+        queueTexts.clear()
         textStates.clear()
         editing.clear()
     }

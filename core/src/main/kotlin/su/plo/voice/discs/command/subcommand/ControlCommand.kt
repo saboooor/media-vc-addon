@@ -182,7 +182,7 @@ class ControlCommand(
         }
 
         if (progressDisplay != null) {
-            buttons += "Move hologram in world" to (prefix + "holo_edit")
+            buttons += "Manage holograms" to (prefix + "holo_menu")
         }
 
         val body = mutableListOf<Component>()
@@ -368,6 +368,12 @@ class ControlCommand(
             buttons.clear()
             queueLabels.clear()
             body.clear()
+            val visibility = pd.visibility(block)
+            body += Component.text("Main hologram: ${if (visibility.main) "On" else "Off"}", NamedTextColor.GOLD)
+            body += Component.text("Queue hologram: ${if (visibility.queue) "On" else "Off"}", NamedTextColor.AQUA)
+            body += Component.text("Queue shows up to five tracks in chest order, with the current song marked. Shuffle can change playback order.", NamedTextColor.GRAY)
+            buttons += "${if (visibility.main) "Disable" else "Enable"} main hologram" to (prefix + "holo_main_toggle")
+            buttons += "${if (visibility.queue) "Disable" else "Enable"} queue hologram" to (prefix + "holo_queue_toggle")
             val offset = pd.getOffset(block)
             body += Component.text("Hologram Offset: X: ${offset.x}, Y: ${offset.y}, Z: ${offset.z}", NamedTextColor.GOLD)
             body += Component.text("Move in world equips a stick and grabs the hologram. Right-click to place/grab; scroll for distance; sneak-right-click to finish.", NamedTextColor.GRAY)
@@ -434,7 +440,7 @@ class ControlCommand(
             }
             buttons += "Back to playback" to (prefix + "refresh")
         }
-        val dialogTitle = if (lampMenu) "Lights" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Move Hologram" else if (crossfade) "Audio settings" else if (eqMenu) "Equalizer" else if (effectsMenu) "Audio effects" else "Jukebox controls"
+        val dialogTitle = if (lampMenu) "Lights" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Manage holograms" else if (crossfade) "Audio settings" else if (eqMenu) "Equalizer" else if (effectsMenu) "Audio effects" else "Jukebox controls"
         try {
             PaperPlaybackDialog.show(player, listOf(Component.join(net.kyori.adventure.text.JoinConfiguration.newlines(), body)), buttons, queueLabels, dialogTitle, 2)
         } catch (_: ClassNotFoundException) {
@@ -659,6 +665,14 @@ class ControlCommand(
             "fademore" -> playlists.changeCrossfade(session.block, 1)
             "fadetoggle" -> playlists.toggleCrossfade(session.block)
             "automix" -> playlists.toggleAutoMix(session.block)
+            "holo_main_toggle", "holo_queue_toggle" -> {
+                progressDisplay?.let { pd ->
+                    val old = pd.visibility(session.block)
+                    pd.setVisibility(session.block, if (arguments[2] == "holo_main_toggle") old.copy(main = !old.main) else old.copy(queue = !old.queue))
+                }
+                show(player, session.block, hologram = true)
+                return
+            }
             "holo_menu" -> { show(player, session.block, hologram = true); return }
             "holo_reset" -> {
                 progressDisplay?.resetOffset(session.block)

@@ -7,6 +7,13 @@ import su.plo.voice.discs.event.JukeboxBassLamps
 import su.plo.voice.discs.visualizer.*
 
 class SavedJukeboxSettingsTest {
+    @Test fun `hologram visibility persists independently and legacy settings keep displays enabled`() {
+        for (main in listOf(false, true)) for (queue in listOf(false, true)) {
+            val settings = SavedJukeboxSettings(hologramVisibility = su.plo.voice.discs.event.HologramVisibility(main, queue))
+            assertEquals(settings, SavedJukeboxSettings.decode(settings.encode()))
+        }
+        assertEquals(su.plo.voice.discs.event.HologramVisibility(), SavedJukeboxSettings.decode("{}")!!.hologramVisibility)
+    }
     @Test fun `saved payload preserves placement playback and available links`() {
         val settings = SavedJukeboxSettings(filterConfig = su.plo.voice.discs.audio.AudioFilterConfig(tempo = 1.1, pitchSemitones = -2.0), volume = 70, autoMix = true, loop = true, shuffle = true, stereo = 2, crossfade = 0, lastCrossfade = 8,
             hologram = HologramOffset(1.5, 2.0, -0.5),

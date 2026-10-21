@@ -273,6 +273,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
         server.pluginManager.registerEvents(ScreenEventListener(), this)
 
         val playlistCommand = PlaylistCommand(jukeboxEventListener)
+        progressDisplayInstance.queueView = playlistCommand::queueView
         val visualizerCommand = VisualizerCommand(visualizerInstance).also {
             visualizerEditor = it
             server.pluginManager.registerEvents(it, this)
