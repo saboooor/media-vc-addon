@@ -38,8 +38,7 @@ class VideoPlayer(
     ditherStrength: Int = 12,
     private val companionRgb: Boolean = true,
     private val companionQuality: Int = 85,
-    val playbackPositionMs: (() -> Long?)? = null,
-    val subtitlePath: String? = null
+    val playbackPositionMs: (() -> Long?)? = null
 ) {
     @Volatile
     private var process: Process? = null
@@ -85,6 +84,9 @@ class VideoPlayer(
     internal fun isDisplayingMap(viewerId: UUID, mapId: Int): Boolean =
         isPlaying && mapViewers.owns(viewerId, mapId)
 
+    @Volatile var displayedPositionMs: Long = 0L
+        private set
+
     fun start(startPositionMs: Long = 0L) {
         if (stopped.get()) return
         isPaused = false
@@ -92,6 +94,7 @@ class VideoPlayer(
     }
 
     private fun restartPlayback(positionMs: Long) {
+        displayedPositionMs = positionMs.coerceAtLeast(0)
         coroutineScope.launch(Dispatchers.IO) {
             playbackMutex.withLock {
                 val previous = playbackJob
@@ -230,9 +233,9 @@ class VideoPlayer(
         // Drop surplus source frames before scaling and padding.
         val audioClock = playbackPositionMs
         val frameTimes = Channel<Long>(Channel.UNLIMITED)
-        val filter = videoFilter(fps, totalWidth, totalHeight, subtitlePath)
+        val filter = videoFilter(fps, totalWidth, totalHeight)
         // With linked audio, pace by decoded frame timestamps rather than a second wall clock.
-        command.add(if (audioClock != null) filter.removeSuffix(",realtime") + ",showinfo=checksum=0" else filter)
+        command.add((if (audioClock != null) filter.removeSuffix(",realtime") else filter) + ",showinfo=checksum=0")
         // Raw RGB needs no frame-threaded encoder queue; flush each frame to the renderer.
         command.addAll(listOf("-threads:v", "1", "-flush_packets", "1"))
         command.add("-f")
@@ -283,7 +286,7 @@ class VideoPlayer(
                 try {
                     proc.errorStream.bufferedReader().useLines { lines ->
                         lines.forEach { line ->
-                            if (audioClock != null) VideoAudioSync.timestamp(line)?.let { frameTimes.trySend(it) }
+                            VideoAudioSync.timestamp(line)?.let { frameTimes.trySend(it) }
                             if (!colorInfoReady.isCompleted) {
                                 if (line.startsWith("Output #0,")) outputStarted = true
                                 val streamColor = VideoColorInfo.fromStreamLine(line)
@@ -349,10 +352,10 @@ class VideoPlayer(
                 if (!ok) break // End of stream
 
                 framesRendered++
+                val relativeMs = frameTimes.receiveCatching().getOrNull()
+                    ?: throw IOException("Missing video frame timestamp")
+                val videoMs = startPositionMs + relativeMs
                 if (audioClock != null) {
-                    val relativeMs = frameTimes.receiveCatching().getOrNull()
-                        ?: throw IOException("Missing video frame timestamp for audio synchronization")
-                    val videoMs = startPositionMs + relativeMs
                     while (!stopped.get() && currentCoroutineContext().isActive) {
                         if (isPaused) { delay(20L); continue }
                         val audioMs = audioClock()
@@ -365,6 +368,7 @@ class VideoPlayer(
                     if (stopped.get()) break
                     if (VideoAudioSync.stale(videoMs, audioClock() ?: 0L)) continue
                 }
+                displayedPositionMs = videoMs
                 // Process frame and send packets
                 renderWarning.set(false)
                 renderMonitor.beginRead(System.nanoTime())
@@ -703,16 +707,11 @@ class VideoPlayer(
             "-reconnect_delay_max", "5"
         )
 
-        internal fun videoFilter(fps: Int, width: Int, height: Int, subtitlePath: String? = null): String {
+        internal fun videoFilter(fps: Int, width: Int, height: Int): String {
             val base = "fps='if(gt(source_fps,0),min(source_fps,$fps),$fps)'," +
                 "scale=$width:$height:force_original_aspect_ratio=decrease," +
                 "pad=$width:$height:(ow-iw)/2:(oh-ih)/2:black"
-            val subFilter = if (subtitlePath != null && File(subtitlePath).exists()) {
-                val escaped = subtitlePath.replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\''")
-                val fontSize = (height / 14).coerceIn(12, 28)
-                ",subtitles='$escaped':force_style='FontSize=$fontSize,Outline=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000'"
-            } else ""
-            return "$base$subFilter,realtime"
+            return "$base,realtime"
         }
 
         internal fun shouldReportExit(exit: Int?, cancelled: Boolean, stopped: Boolean): Boolean =
@@ -759,9 +758,7 @@ class VideoPlayer(
             it.destroyForcibly()
             process = null
         }
-        if (subtitlePath != null) {
-            runCatching { File(subtitlePath).delete() }
-        }
+
     }
 
     private fun readFully(input: InputStream, buffer: ByteArray): Boolean {
@@ -783,3 +780,4 @@ class VideoPlayer(
                 lower.contains("googleusercontent.com") || lower.contains("ggpht.com")
     }
 }
+

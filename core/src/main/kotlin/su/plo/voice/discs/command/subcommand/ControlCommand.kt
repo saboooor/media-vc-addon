@@ -124,7 +124,7 @@ class ControlCommand(
         show(player, block, hologram = true)
     }
 
-    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null, speakers: Boolean = false, visualizerSelection: Boolean = false, queueMenu: Boolean = false, volumeMenu: Boolean = false, lampMenu: Boolean = false, screenMenu: Boolean = false, effectsMenu: Boolean = false, eqMenu: Boolean = false) {
+    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null, speakers: Boolean = false, visualizerSelection: Boolean = false, queueMenu: Boolean = false, volumeMenu: Boolean = false, lampMenu: Boolean = false, screenMenu: Boolean = false, effectsMenu: Boolean = false, eqMenu: Boolean = false, subtitlesMenu: Boolean = false) {
         val record = block.asJukebox()?.record?.clone() ?: return
         val controls = jukeboxes.controlsByBlock[block]
         val visualizers = visualizer?.instances(block).orEmpty()
@@ -343,6 +343,24 @@ class ControlCommand(
                 buttons += "Link Screen" to (prefix + "screen_link")
             }
             buttons += "Back to playback" to (prefix + "refresh")
+        }
+        if (subtitlesMenu) {
+            buttons.clear(); queueLabels.clear(); body.clear()
+            val screen = screenManager?.getScreenForJukebox(block)
+            body += Component.text("Choose subtitles for the current video. Refresh after the video loads.", NamedTextColor.GRAY)
+            if (screen != null) {
+                buttons += (if (screen.subtitlesEnabled) "Turn subtitles off" else "Turn subtitles on") to (prefix + "screen_subtoggle")
+                buttons += "Automatic track" to (prefix + "screen_subtrack_auto")
+                val tracks = screenManager?.subtitleTracks(screen).orEmpty()
+                for (track in tracks) {
+                    val selected = screen.subtitlesEnabled && screen.subtitleTrackIndex == track.index
+                    val label = "${if (selected) "✓ " else ""}${track.displayTitle} (${track.language}, #${track.index})${if (track.isForced) " · forced" else ""}"
+                    buttons += label to (prefix + "screen_subtrack_${track.index}")
+                }
+                if (tracks.isEmpty()) body += Component.text("No text subtitle tracks available yet. Image subtitles (PGS/DVD) cannot be shown as text.", NamedTextColor.YELLOW)
+            }
+            buttons += "Refresh tracks" to (prefix + "screen_subtitles")
+            buttons += "Back to screen" to (prefix + "screen_menu")
         }
         if (hologram) {
             val pd = progressDisplay ?: return show(player, block)
@@ -668,15 +686,11 @@ class ControlCommand(
                 show(player, session.block, screenMenu = true)
                 return
             }
-            "screen_subtitles" -> {
+            "screen_subtitles" -> { show(player, session.block, subtitlesMenu = true); return }
+            "screen_subtoggle" -> {
                 val sm = screenManager
-                val screen = sm?.getScreenForJukebox(session.block)
-                if (screen != null) {
-                    val enabled = sm.toggleSubtitles(screen)
-                    player.sendMessage(Component.text("Subtitles ${if (enabled) "enabled" else "disabled"} on screen '${screen.name}'.", NamedTextColor.YELLOW))
-                }
-                show(player, session.block, screenMenu = true)
-                return
+                sm?.getScreenForJukebox(session.block)?.let { sm.toggleSubtitles(it) }
+                show(player, session.block, subtitlesMenu = true); return
             }
             "screen_clear" -> {
                 val sm = screenManager
@@ -690,6 +704,14 @@ class ControlCommand(
             }
             "refresh" -> {}
             else -> {
+                if (arguments[2].startsWith("screen_subtrack_")) {
+                    val sm = screenManager ?: return
+                    val screen = sm.getScreenForJukebox(session.block) ?: return
+                    val value = arguments[2].removePrefix("screen_subtrack_")
+                    val index = if (value == "auto") null else value.toIntOrNull() ?: return
+                    sm.selectSubtitle(screen, index)
+                    show(player, session.block, subtitlesMenu = true); return
+                }
                 if (arguments[2].startsWith("fx_set_eq_")) {
                     val presetId = arguments[2].removePrefix("fx_set_eq_")
                     val cur = jukeboxes.filterConfig(session.block)

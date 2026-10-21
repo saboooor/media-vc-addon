@@ -68,50 +68,44 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
         val isDefault: Boolean,
         val isForced: Boolean,
         val codec: String,
-        val deliveryUrl: String?
+        val deliveryUrl: String?,
+        val mediaSourceId: String = ""
     )
 
     fun getSubtitleTracks(session: Session, itemId: String): List<SubtitleTrack> {
-        val json = try {
-            request(session.baseUrl, "Items/${mediaId(itemId)}?userId=${session.userId}&Fields=MediaStreams", session.deviceId, session.token)
-        } catch (_: Exception) {
-            return emptyList()
-        }
-        val streams = json.getAsJsonArray("MediaStreams") ?: return emptyList()
-        val list = mutableListOf<SubtitleTrack>()
-        for (element in streams) {
+        val json = request(session.baseUrl, "Items/${mediaId(itemId)}/PlaybackInfo?userId=${session.userId}", session.deviceId, session.token)
+        val source = json.getAsJsonArray("MediaSources")?.firstOrNull()?.asJsonObject ?: return emptyList()
+        val sourceId = source.get("Id")?.asString ?: return emptyList()
+        val streams = source.getAsJsonArray("MediaStreams") ?: return emptyList()
+        fun JsonObject.string(key: String): String? = get(key)?.takeUnless { it.isJsonNull }?.asString
+        return streams.mapNotNull { element ->
             val obj = element.asJsonObject
-            val type = obj.get("Type")?.asString ?: continue
-            if (type.equals("Subtitle", ignoreCase = true)) {
-                val index = obj.get("Index")?.asInt ?: continue
-                val displayTitle = obj.get("DisplayTitle")?.asString ?: "Subtitle $index"
-                val language = obj.get("Language")?.asString ?: "und"
-                val isDefault = obj.get("IsDefault")?.asBoolean ?: false
-                val isForced = obj.get("IsForced")?.asBoolean ?: false
-                val codec = obj.get("Codec")?.asString ?: "srt"
-                val deliveryUrl = obj.get("DeliveryUrl")?.asString
-                list += SubtitleTrack(index, displayTitle, language, isDefault, isForced, codec, deliveryUrl)
-            }
+            if (!obj.string("Type").equals("Subtitle", true)) return@mapNotNull null
+            val codec = obj.string("Codec") ?: ""
+            // Image subtitles require OCR and cannot be represented by a TextDisplay.
+            if (obj.get("IsTextSubtitleStream")?.takeUnless { it.isJsonNull }?.asBoolean == false ||
+                codec.lowercase() in setOf("pgssub", "hdmv_pgs_subtitle", "dvdsub", "dvd_subtitle", "dvb_subtitle", "xsub")) return@mapNotNull null
+            val index = obj.get("Index")?.asInt ?: return@mapNotNull null
+            SubtitleTrack(index, obj.string("DisplayTitle") ?: "Subtitle $index", obj.string("Language") ?: "und",
+                obj.get("IsDefault")?.asBoolean ?: false, obj.get("IsForced")?.asBoolean ?: false, codec, null, sourceId)
         }
-        return list
     }
 
     fun downloadSubtitle(session: Session, itemId: String, track: SubtitleTrack): String? {
-        val path = track.deliveryUrl?.takeIf { it.isNotBlank() }?.let { if (it.startsWith("/")) it.substring(1) else it }
-            ?: "Videos/${mediaId(itemId)}/${mediaId(itemId)}/Subtitles/${track.index}/Stream.srt"
-        val url = session.baseUrl + path
-        try {
-            val req = HttpRequest.newBuilder(URI.create(url))
-                .header("Authorization", authorization(session.deviceId, session.token))
-                .timeout(Duration.ofSeconds(15))
-                .GET().build()
-            val response = http.send(req, HttpResponse.BodyHandlers.ofString(Charsets.UTF_8))
-            if (response.statusCode() in 200..299 && response.body().isNotBlank()) {
-                return response.body()
-            }
-        } catch (_: Exception) {
+        require(track.index >= 0)
+        // Use the actual source ID and explicitly request converted SRT. Never send tokens to DeliveryUrl hosts.
+        require(track.mediaSourceId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
+        val path = "Videos/${mediaId(itemId)}/${track.mediaSourceId}/Subtitles/${track.index}/0/Stream.srt?copyTimestamps=true"
+        val req = HttpRequest.newBuilder(URI.create(session.baseUrl + path))
+            .header("Authorization", authorization(session.deviceId, session.token))
+            .timeout(Duration.ofSeconds(30)).GET().build()
+        val response = http.send(req, HttpResponse.BodyHandlers.ofInputStream())
+        return response.body().use { input ->
+            if (response.statusCode() !in 200..299) throw JellyfinException("Jellyfin subtitle download failed (HTTP ${response.statusCode()}).")
+            val bytes = input.readNBytes(4 * 1024 * 1024 + 1)
+            if (bytes.size > 4 * 1024 * 1024) throw JellyfinException("Subtitle file is too large.")
+            String(bytes, Charsets.UTF_8).takeIf { it.isNotBlank() }
         }
-        return null
     }
 
     private fun request(base: String, path: String, device: String, token: String? = null, body: JsonObject? = null): JsonObject {
@@ -159,3 +153,4 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
         private fun encode(value: String) = URLEncoder.encode(value, Charsets.UTF_8)
     }
 }
+

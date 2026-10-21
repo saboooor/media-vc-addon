@@ -94,6 +94,9 @@ class ScreenEventListener : Listener, PluginKoinComponent {
         }
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onChunkUnload(event: org.bukkit.event.world.ChunkUnloadEvent) { screenManager.onSubtitleChunkUnload(event) }
+
     @EventHandler
     fun onChunkLoad(event: ChunkLoadEvent) {
         event.chunk.entities.filterIsInstance<ItemFrame>().forEach(screenManager::updateFrameVisibility)
@@ -104,4 +107,5 @@ class ScreenEventListener : Listener, PluginKoinComponent {
         screenManager.cancelSelection(event.player)
     }
 }
+
 
