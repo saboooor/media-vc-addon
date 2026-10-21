@@ -144,7 +144,7 @@ class ControlCommand(
         val modes = playlists.playbackModes(block)
         buttons += "Queue" to (prefix + "queue_menu")
         buttons += "Volume" to (prefix + "volume_menu")
-        buttons += "Audio settings" to (prefix + "audio_menu")
+        buttons += "Mixing" to (prefix + "audio_menu")
         buttons += "Audio effects" to (prefix + "effects_menu")
         val stereoLabel = when (jukeboxes.stereoMode(block)) {
             3 -> "Note block L / Note block R"
@@ -448,7 +448,7 @@ class ControlCommand(
             }
             buttons += "Back to playback" to (prefix + "refresh")
         }
-        val dialogTitle = if (lampMenu) "Lights" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Manage holograms" else if (crossfade) "Audio settings" else if (eqMenu) "Equalizer" else if (effectsMenu) "Audio effects" else "Jukebox controls"
+        val dialogTitle = if (lampMenu) "Lights" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Manage holograms" else if (crossfade) "Mixing" else if (eqMenu) "Equalizer" else if (effectsMenu) "Audio effects" else "Jukebox controls"
         try {
             PaperPlaybackDialog.show(player, listOf(Component.join(net.kyori.adventure.text.JoinConfiguration.newlines(), body)), buttons, queueLabels, dialogTitle, 2)
         } catch (_: ClassNotFoundException) {
