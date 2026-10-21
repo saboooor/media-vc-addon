@@ -16,7 +16,7 @@ class SavedJukeboxSettingsTest {
     }
     @Test fun `saved payload preserves placement playback and available links`() {
         val settings = SavedJukeboxSettings(filterConfig = su.plo.voice.discs.audio.AudioFilterConfig(tempo = 1.1, pitchSemitones = -2.0), volume = 70, autoMix = true, loop = true, shuffle = true, stereo = 2, crossfade = 0, lastCrossfade = 8,
-            hologram = HologramOffset(1.5, 2.0, -0.5),
+            hologram = HologramOffset(1.5, 2.0, -0.5), queueHologram = HologramOffset(-2.0, 3.0, 1.0),
             visualizers = listOf(VisualizerInstance(7, VisualizerKind.SPEAKER, true,
                 VisualizerLayout(1f, 2f, 3f, 1.5f, 0.75f), VisualizerFacing.WEST)),
             lamps = listOf(JukeboxBassLamps.Position("00000000-0000-0000-0000-000000000001", 12, 64, 16)),
@@ -40,6 +40,7 @@ class SavedJukeboxSettingsTest {
 
     @Test fun `old settings default to jukebox playback without stereo or looping`() {
         val restored = SavedJukeboxSettings.decode("{}")!!
+        assertEquals(HologramOffset(), restored.queueHologram)
         assertNull(restored.noteBlock)
         assertFalse(restored.loop)
         assertFalse(restored.shuffle)

@@ -16,6 +16,7 @@ data class SavedJukeboxSettings(
     val autoMix: Boolean = false,
     val lastCrossfade: Int = 3,
     val hologram: HologramOffset = HologramOffset(),
+    val queueHologram: HologramOffset = HologramOffset(),
     val hologramVisibility: su.plo.voice.discs.event.HologramVisibility = su.plo.voice.discs.event.HologramVisibility(),
     val visualizers: List<VisualizerInstance> = emptyList(),
     val lamps: List<JukeboxBassLamps.Position> = emptyList(),
@@ -32,6 +33,7 @@ data class SavedJukeboxSettings(
         require(version == 1 && volume in 0..100 && crossfade in 0..30 && lastCrossfade in 1..30)
         require(filterConfig.speed in 0.25..4.0)
         require(filterConfig.tempo in 0.5..2.0 && filterConfig.pitchSemitones in -12.0..12.0)
+        require(queueHologram.x.isFinite() && queueHologram.y.isFinite() && queueHologram.z.isFinite())
         require(hologram.x.isFinite() && hologram.y.isFinite() && hologram.z.isFinite())
         require(visualizers.size <= 8 && visualizers.map { it.id }.distinct().size == visualizers.size)
         for (instance in visualizers) {

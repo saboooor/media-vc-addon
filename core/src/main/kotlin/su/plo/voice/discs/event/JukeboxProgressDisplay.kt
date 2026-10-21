@@ -64,6 +64,7 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
     private val displays = ConcurrentHashMap<Block, Entity>()
     private val displayType = runCatching { EntityType.valueOf("TEXT_DISPLAY") }.getOrNull()
     private var updater: Job? = null
+    private val queueEditing = ConcurrentHashMap.newKeySet<Block>()
     private val editing = ConcurrentHashMap.newKeySet<Block>()
     private data class TextState(val title: String?, val paused: Boolean, val seconds: Long,
         val durationSeconds: Long, val live: Boolean, val loading: Boolean, val percent: Int, val filled: Int)
@@ -71,8 +72,9 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
     private val textMethod by lazy { Class.forName("org.bukkit.entity.TextDisplay").getMethod("text", Component::class.java) }
     val supported get() = displayType != null
 
-    fun setEditing(block: Block, active: Boolean) {
-        if (active) editing.add(block) else editing.remove(block)
+    fun setEditing(block: Block, active: Boolean, queue: Boolean = false) {
+        val targets = if (queue) queueEditing else editing
+        if (active) targets.add(block) else targets.remove(block)
     }
 
     fun start() {
@@ -83,6 +85,7 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
                 blocks.addAll(queueDisplays.keys)
                 blocks.addAll(jukeboxes.controlsByBlock.keys)
                 blocks.addAll(editing)
+                blocks.addAll(queueEditing)
                 for (block in blocks) {
                     suspendSyncAt(block.location, voiceServer, plugin) {
                         if (!block.world.isChunkLoaded(block.x shr 4, block.z shr 4)) {
@@ -93,7 +96,7 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
                             return@suspendSyncAt
                         }
                         val controls = jukeboxes.controlsByBlock[block]
-                        if ((controls == null && block !in editing) || block.type != Material.JUKEBOX) {
+                        if ((controls == null && block !in editing && block !in queueEditing) || block.type != Material.JUKEBOX) {
                             displays.remove(block)?.remove()
                             queueDisplays.remove(block)?.remove()
                             queueTexts.remove(block)
@@ -136,21 +139,21 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
 
     private fun updateQueueDisplay(block: Block) {
         val queue = queueView(block)
-        if (!visibility(block).queue || queue == null || queue.items.isEmpty()) {
+        if ((!visibility(block).queue || queue == null || queue.items.isEmpty()) && block !in queueEditing) {
             queueDisplays.remove(block)?.remove()
             queueTexts.remove(block)
             return
         }
-        val first = queue.currentIndex.coerceAtLeast(0)
-        val shown = queue.items.withIndex().drop(first).take(5)
-        var text = Component.text("Queue (${queue.items.size} tracks)", NamedTextColor.AQUA)
+        val first = queue?.currentIndex?.coerceAtLeast(0) ?: 0
+        val shown = queue?.items?.withIndex()?.drop(first)?.take(5).orEmpty()
+        var text = Component.text(if (queue == null) "Queue hologram\nPreview" else "Queue (${queue.items.size} tracks)", NamedTextColor.AQUA)
         for ((index, item) in shown) {
-            text = text.append(Component.text("\n${if (index == queue.currentIndex) "▶" else "•"} ${index + 1}. ${item.title.take(60)}",
-                if (index == queue.currentIndex) NamedTextColor.GOLD else NamedTextColor.WHITE))
+            text = text.append(Component.text("\n${if (index == queue?.currentIndex) "▶" else "•"} ${index + 1}. ${item.title.take(60)}",
+                if (index == queue?.currentIndex) NamedTextColor.GOLD else NamedTextColor.WHITE))
         }
-        val remaining = queue.items.size - first - shown.size
+        val remaining = (queue?.items?.size ?: 0) - first - shown.size
         if (remaining > 0) text = text.append(Component.text("\n+$remaining more", NamedTextColor.GRAY))
-        val target = getDisplayLocation(block).add(0.0, 1.4, 0.0)
+        val target = getDisplayLocation(block, queue = true)
         val display = queueDisplays[block]?.takeIf { it.isValid }
             ?: create(block, target).also { queueDisplays[block] = it; queueTexts.remove(block) }
         if (display.location.distanceSquared(target) > 0.001) display.teleport(target)
@@ -160,9 +163,9 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
         }
     }
 
-    fun getDisplayLocation(block: Block): Location {
-        val base = Companion.getBaseDisplayLocation(block)
-        val offset = offsets[blockKey(block)] ?: return base
+    fun getDisplayLocation(block: Block, queue: Boolean = false): Location {
+        val base = Companion.getBaseDisplayLocation(block).add(0.0, if (queue) 1.4 else 0.0, 0.0)
+        val offset = offsets[offsetKey(block, queue)] ?: return base
         return base.clone().add(offset.x, offset.y, offset.z)
     }
 
@@ -208,12 +211,14 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
     private fun blockKey(block: Block): String =
         "${block.world.name}:${block.x}:${block.y}:${block.z}"
 
-    fun getOffset(block: Block): HologramOffset {
-        return offsets[blockKey(block)] ?: HologramOffset()
+    private fun offsetKey(block: Block, queue: Boolean) = (if (queue) "queue:" else "") + blockKey(block)
+
+    fun getOffset(block: Block, queue: Boolean = false): HologramOffset {
+        return offsets[offsetKey(block, queue)] ?: HologramOffset()
     }
 
-    fun setOffset(block: Block, x: Double, y: Double, z: Double, persist: Boolean = true) {
-        val key = blockKey(block)
+    fun setOffset(block: Block, x: Double, y: Double, z: Double, persist: Boolean = true, queue: Boolean = false) {
+        val key = offsetKey(block, queue)
         val roundedX = Math.round(x * 100.0) / 100.0
         val roundedY = Math.round(y * 100.0) / 100.0
         val roundedZ = Math.round(z * 100.0) / 100.0
@@ -229,27 +234,27 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
             offsets[key] = HologramOffset(roundedX, roundedY, roundedZ)
         }
         if (persist) saveOffsets()
-        teleportDisplay(block)
+        teleportDisplay(block, queue)
     }
 
-    fun adjustOffset(block: Block, dx: Double, dy: Double, dz: Double): HologramOffset {
-        val current = getOffset(block)
+    fun adjustOffset(block: Block, dx: Double, dy: Double, dz: Double, queue: Boolean = false): HologramOffset {
+        val current = getOffset(block, queue)
         val newX = current.x + dx
         val newY = current.y + dy
         val newZ = current.z + dz
-        setOffset(block, newX, newY, newZ)
-        return getOffset(block)
+        setOffset(block, newX, newY, newZ, queue = queue)
+        return getOffset(block, queue)
     }
 
-    fun resetOffset(block: Block) {
-        offsets.remove(blockKey(block))
+    fun resetOffset(block: Block, queue: Boolean = false) {
+        offsets.remove(offsetKey(block, queue))
         saveOffsets()
-        teleportDisplay(block)
+        teleportDisplay(block, queue)
     }
 
-    fun teleportDisplay(block: Block) {
-        val display = displays[block]?.takeIf { it.isValid } ?: return
-        val target = getDisplayLocation(block)
+    fun teleportDisplay(block: Block, queue: Boolean = false) {
+        val display = (if (queue) queueDisplays else displays)[block]?.takeIf { it.isValid } ?: return
+        val target = getDisplayLocation(block, queue)
         display.teleport(target)
     }
 
@@ -366,5 +371,6 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
         queueTexts.clear()
         textStates.clear()
         editing.clear()
+        queueEditing.clear()
     }
 }

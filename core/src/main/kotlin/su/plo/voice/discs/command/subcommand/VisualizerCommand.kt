@@ -36,7 +36,7 @@ class VisualizerCommand(private val visualizers: JukeboxVisualizer) : SubCommand
     override val name = "visualizer"
     override val permissions = listOf("control" to PermissionDefault.TRUE)
     private val holograms: JukeboxProgressDisplay? by getterOrNull<JukeboxProgressDisplay>()
-    private class Editor(val block: Block, var id: Int, val hologram: Boolean = false) {
+    private class Editor(val block: Block, var id: Int, val hologram: Boolean = false, val queueHologram: Boolean = false) {
         var grabbed = false
         var distance = 4.0
         var grabOffset = Vector()
@@ -58,21 +58,21 @@ class VisualizerCommand(private val visualizers: JukeboxVisualizer) : SubCommand
     }
     private fun finish(player: Player, text: String = "Visualizer editing finished. Changes saved.") {
         val editor = editors.remove(player.uniqueId) ?: return
-        if (editor.hologram) holograms?.let { it.saveOffsets(); it.setEditing(editor.block, false) } else visualizers.setEditing(editor.block, null)
+        if (editor.hologram) holograms?.let { it.saveOffsets(); it.setEditing(editor.block, false, editor.queueHologram) } else visualizers.setEditing(editor.block, null)
         message(player, if (editor.hologram) "Hologram editing finished. Changes saved." else text)
     }
 
-    fun editHologram(player: Player, block: Block) {
+    fun editHologram(player: Player, block: Block, queue: Boolean = false) {
         if (!checkCanExecute(player) || player.gameMode == GameMode.SPECTATOR || holograms?.supported != true) return
         if (editors.any { it.key != player.uniqueId && it.value.block == block }) {
             message(player, "Someone is already editing this jukebox."); return
         }
         finish(player)
         if (!equipWand(player)) return
-        val editor = Editor(block, 0, hologram = true)
+        val editor = Editor(block, 0, hologram = true, queueHologram = queue)
         editors[player.uniqueId] = editor
-        holograms?.setEditing(block, true)
-        holograms?.getDisplayLocation(block)?.toVector()?.let { grab(player, editor, it) }
+        holograms?.setEditing(block, true, queue)
+        holograms?.getDisplayLocation(block, queue)?.toVector()?.let { grab(player, editor, it) }
         message(player, "Hologram grabbed. Right-click: place/grab. Look around to move. Scroll: distance. Sneak while moving: snap to grid. Sneak-right-click: finish.")
     }
 
@@ -184,7 +184,7 @@ class VisualizerCommand(private val visualizers: JukeboxVisualizer) : SubCommand
         editor.expires = System.currentTimeMillis() + 300_000L
         if (right) {
             if (player.isSneaking) { finish(player); return }
-            val center = if (editor.hologram) holograms?.getDisplayLocation(editor.block)?.toVector()
+            val center = if (editor.hologram) holograms?.getDisplayLocation(editor.block, editor.queueHologram)?.toVector()
                 else visualizers.instances(editor.block).firstOrNull { it.id == editor.id }?.let { anchor(editor.block, it) }
             if (center != null) grab(player, editor, center)
         } else if (editor.hologram) {
@@ -233,7 +233,7 @@ class VisualizerCommand(private val visualizers: JukeboxVisualizer) : SubCommand
                     val player = Bukkit.getPlayer(uuid)
                     if (player == null) {
                         if (editors.remove(uuid, editor)) {
-                            if (editor.hologram) holograms?.let { it.saveOffsets(); it.setEditing(editor.block, false) } else visualizers.setEditing(editor.block, null)
+                            if (editor.hologram) holograms?.let { it.saveOffsets(); it.setEditing(editor.block, false, editor.queueHologram) } else visualizers.setEditing(editor.block, null)
                         }
                         return@suspendSyncAt
                     }
@@ -242,10 +242,10 @@ class VisualizerCommand(private val visualizers: JukeboxVisualizer) : SubCommand
                         val display = holograms ?: return@suspendSyncAt
                         if (editor.grabbed) {
                             val point = player.eyeLocation.toVector().add(player.eyeLocation.direction.multiply(editor.distance)).add(editor.grabOffset)
-                            val base = JukeboxProgressDisplay.getBaseDisplayLocation(editor.block).toVector()
+                            val base = JukeboxProgressDisplay.getBaseDisplayLocation(editor.block).add(0.0, if (editor.queueHologram) 1.4 else 0.0, 0.0).toVector()
                             val offset = point.subtract(base)
                             fun snap(value: Double) = (if (player.isSneaking) round(value * 4) / 4 else value).coerceIn(-24.0, 24.0)
-                            display.setOffset(editor.block, snap(offset.x), snap(offset.y), snap(offset.z), persist = false)
+                            display.setOffset(editor.block, snap(offset.x), snap(offset.y), snap(offset.z), persist = false, queue = editor.queueHologram)
                         }
                         player.sendActionBar(Component.text("Hologram · ${if (editor.grabbed) "MOVING · scroll: distance · sneak: snap" else "Right-click to grab"} · sneak-right-click: finish", NamedTextColor.AQUA))
                         return@suspendSyncAt
@@ -268,7 +268,7 @@ class VisualizerCommand(private val visualizers: JukeboxVisualizer) : SubCommand
     }
     fun shutdown() {
         updater?.cancel()
-        editors.values.forEach { if (it.hologram) holograms?.let { display -> display.saveOffsets(); display.setEditing(it.block, false) } else visualizers.setEditing(it.block, null) }
+        editors.values.forEach { if (it.hologram) holograms?.let { display -> display.saveOffsets(); display.setEditing(it.block, false, it.queueHologram) } else visualizers.setEditing(it.block, null) }
         editors.clear()
     }
     override fun suggest(source: CommandSender, arguments: Array<out String>): List<String> = when (arguments.size) {

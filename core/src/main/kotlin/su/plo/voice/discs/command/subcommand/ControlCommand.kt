@@ -377,8 +377,10 @@ class ControlCommand(
             val offset = pd.getOffset(block)
             body += Component.text("Hologram Offset: X: ${offset.x}, Y: ${offset.y}, Z: ${offset.z}", NamedTextColor.GOLD)
             body += Component.text("Move in world equips a stick and grabs the hologram. Right-click to place/grab; scroll for distance; sneak-right-click to finish.", NamedTextColor.GRAY)
-            buttons += "Move in world" to (prefix + "holo_edit")
-            buttons += "Reset Position" to (prefix + "holo_reset")
+            buttons += "Move main hologram" to (prefix + "holo_edit")
+            buttons += "Move queue hologram" to (prefix + "holo_queue_edit")
+            buttons += "Reset main position" to (prefix + "holo_reset")
+            buttons += "Reset queue position" to (prefix + "holo_queue_reset")
             buttons += "Back to controls" to (prefix + "refresh")
         }
         if (speakers) {
@@ -542,6 +544,7 @@ class ControlCommand(
                     band = LightBand.entries.firstOrNull { arguments[2] == "lamp_link_${it.name.lowercase()}" } ?: LightBand.BASS)
                 return
             }
+            "holo_queue_edit" -> { worldEditor.editHologram(player, session.block, queue = true); return }
             "holo_edit" -> { worldEditor.editHologram(player, session.block); return }
             "viz_edit" -> { worldEditor.editVisualizer(player, session.block, session.visualizerId); return }
             "viz_menu" -> { show(player, session.block, visualizerSelection = true); return }
@@ -674,8 +677,8 @@ class ControlCommand(
                 return
             }
             "holo_menu" -> { show(player, session.block, hologram = true); return }
-            "holo_reset" -> {
-                progressDisplay?.resetOffset(session.block)
+            "holo_reset", "holo_queue_reset" -> {
+                progressDisplay?.resetOffset(session.block, queue = arguments[2] == "holo_queue_reset")
                 show(player, session.block, hologram = true)
                 return
             }
