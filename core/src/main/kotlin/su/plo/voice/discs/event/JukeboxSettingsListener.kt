@@ -42,7 +42,8 @@ class JukeboxSettingsListener(
             loop = playlists.playbackModes(block).first, shuffle = playlists.playbackModes(block).second, stereo = playback.stereoMode(block), crossfade = fade.first, lastCrossfade = fade.second,
             hologram = holograms.getOffset(block).copy(), visualizers = visualizers.instances(block),
             lamps = lamps.linkedPositions(block), lampBands = lamps.linkedBands(block), screenName = screens.getScreenForJukebox(block)?.name, noteBlock = playback.noteLink(block),
-            leftNoteBlock = playback.channelNoteLink(block, true), rightNoteBlock = playback.channelNoteLink(block, false))
+            leftNoteBlock = playback.channelNoteLink(block, true), rightNoteBlock = playback.channelNoteLink(block, false),
+            filterConfig = playback.filterConfig(block))
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
@@ -112,6 +113,7 @@ class JukeboxSettingsListener(
         playback.linkNote(block, nearby(settings.noteBlock))
         playback.linkChannelNote(block, true, nearby(settings.leftNoteBlock))
         playback.linkChannelNote(block, false, nearby(settings.rightNoteBlock))
+        playback.setFilterConfig(block, settings.filterConfig)
         playlists.restoreModes(block, settings.loop, settings.shuffle)
         playlists.restoreCrossfade(block, settings.crossfade, settings.lastCrossfade)
         visualizers.restore(block, settings.visualizers)

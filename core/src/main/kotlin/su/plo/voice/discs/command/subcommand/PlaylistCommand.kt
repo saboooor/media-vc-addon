@@ -282,7 +282,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         val queue = scope.launch(start = CoroutineStart.LAZY) {
             var current: Job? = null
             var outgoing: Job? = null
-            var controls = PlaybackControls()
+            var controls = PlaybackControls(initialFilterConfig = jukeboxes.filterConfig(block))
             var oldControls: PlaybackControls? = null
             var liveDiscs = discs
             val order = ChestQueueOrder()
@@ -367,7 +367,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         if (controls.failure != null && activeDisc.identifier()?.startsWith("jellyfin:") == true) break
                         index = jumpTargets.remove(block) ?: order.next(liveDiscs.size, index,
                             playbackModes(block).first, playbackModes(block).second, removedNextIndex) ?: break
-                        controls = PlaybackControls(initialVolume = controls.volume)
+                        controls = PlaybackControls(initialVolume = controls.volume, initialFilterConfig = controls.filterConfig)
                         current = start(index, controls, false) ?: break
                         continue
                     }
@@ -378,7 +378,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     if (outgoing == null && nextIndex != null && fadeMs > 0 &&
                         controls.seekable && !controls.isStream && !controls.paused &&
                         controls.duration > 0 && remaining in 1..fadeMs) {
-                        val nextControls = PlaybackControls(initialVolume = controls.volume, initialGain = 0.0)
+                        val nextControls = PlaybackControls(initialVolume = controls.volume, initialGain = 0.0, initialFilterConfig = controls.filterConfig)
                         val next = start(nextIndex, nextControls, true) ?: break
                         transitionMs = remaining.coerceAtLeast(1)
                         outgoing = playing

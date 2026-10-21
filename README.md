@@ -90,6 +90,8 @@ Optional full-color Fabric client: see [`screen-companion`](../screen-companion/
 
 `/disc cancel [player]` – Cancel user's goat horn playback. You need `pv.addon.discs.cancel.other` permission to cancel for others.
 
+`/disc effect [preset|toggle|clear|gui]` – Configure audio filters and DSP effects on a jukebox. Look at a jukebox within 8 blocks and run `/disc effect gui` (or click "Audio effects" in the jukebox controls) to open the interactive effects menu. Supports equalizer presets (`bass`, `boost`, `maxed`, `party`, `pop`, `radio`, `soft`, `treb`, `flat`) and real-time DSP effects: 8D audio (`8d`), `echo`, `underwater`, `tremolo`, `vibrato`, `nightcore` (1.25x speed/pitch), and `vaporwave` (0.8x speed/pitch). Run `/disc effect clear` to reset all effects back to flat.
+
 `/disc hologram [edit|done|gui|move|offset|reset]` – Hold a stick and look at a jukebox, then run `/disc hologram` to position its playback hologram directly in the world. `/disc hologram gui` opens the hologram settings, with a Move in world action and position reset. Directional `move`, exact `offset <x> <y> <z>`, and `reset` remain available.
 
 `/disc oauth [force|status]` – Authorize YouTube access via Google device OAuth2 to prevent "Sign in to confirm you're not a bot" or "This video requires login" errors. Check server console for the pairing code, visit https://www.google.com/device with a burner account, and authorize. Use `/disc oauth force` to re-authorize and refresh the stored token.

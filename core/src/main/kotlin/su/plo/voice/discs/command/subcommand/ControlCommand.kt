@@ -124,7 +124,7 @@ class ControlCommand(
         show(player, block, hologram = true)
     }
 
-    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null, speakers: Boolean = false, visualizerSelection: Boolean = false, queueMenu: Boolean = false, volumeMenu: Boolean = false, lampMenu: Boolean = false, screenMenu: Boolean = false) {
+    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null, speakers: Boolean = false, visualizerSelection: Boolean = false, queueMenu: Boolean = false, volumeMenu: Boolean = false, lampMenu: Boolean = false, screenMenu: Boolean = false, effectsMenu: Boolean = false, eqMenu: Boolean = false) {
         val record = block.asJukebox()?.record?.clone() ?: return
         val controls = jukeboxes.controlsByBlock[block]
         val visualizers = visualizer?.instances(block).orEmpty()
@@ -145,6 +145,7 @@ class ControlCommand(
         buttons += "Queue" to (prefix + "queue_menu")
         buttons += "Volume" to (prefix + "volume_menu")
         buttons += "Audio settings" to (prefix + "audio_menu")
+        buttons += "Audio effects" to (prefix + "effects_menu")
         val stereoLabel = when (jukeboxes.stereoMode(block)) {
             3 -> "Note block L / Note block R"
             else -> "Off"
@@ -256,6 +257,55 @@ class ControlCommand(
             }
             buttons += "Back to playback" to (prefix + "refresh")
         }
+        if (effectsMenu) {
+            buttons.clear()
+            queueLabels.clear()
+            body.clear()
+            val cfg = jukeboxes.filterConfig(block)
+            val eqName = cfg.eqPreset?.let { su.plo.voice.discs.audio.EqPreset.fromId(it)?.label } ?: "Flat / Off"
+            body += Component.text("Audio Effects & Equalizer", NamedTextColor.GOLD)
+            body += Component.text("Equalizer preset: $eqName", NamedTextColor.YELLOW)
+            val activeList = mutableListOf<String>()
+            if (cfg.rotation) activeList += "8D Audio"
+            if (cfg.echo) activeList += "Echo"
+            if (cfg.underwater) activeList += "Underwater"
+            if (cfg.tremolo) activeList += "Tremolo"
+            if (cfg.vibrato) activeList += "Vibrato"
+            if (cfg.speed == 1.25) activeList += "Nightcore (1.25x)"
+            else if (cfg.speed == 0.8) activeList += "Vaporwave (0.8x)"
+            else if (cfg.speed != 1.0) activeList += "Speed (${cfg.speed}x)"
+
+            if (activeList.isNotEmpty()) {
+                body += Component.text("Active DSP: ${activeList.joinToString(", ")}", NamedTextColor.AQUA)
+            } else {
+                body += Component.text("No audio effects active.", NamedTextColor.GRAY)
+            }
+
+            buttons += "Equalizer presets" to (prefix + "fx_eq_menu")
+            buttons += "${if (cfg.rotation) "✓ " else ""}8D Audio" to (prefix + "fx_toggle_8d")
+            buttons += "${if (cfg.echo) "✓ " else ""}Echo" to (prefix + "fx_toggle_echo")
+            buttons += "${if (cfg.underwater) "✓ " else ""}Underwater" to (prefix + "fx_toggle_underwater")
+            buttons += "${if (cfg.tremolo) "✓ " else ""}Tremolo" to (prefix + "fx_toggle_tremolo")
+            buttons += "${if (cfg.vibrato) "✓ " else ""}Vibrato" to (prefix + "fx_toggle_vibrato")
+            buttons += "${if (cfg.speed == 1.25) "✓ " else ""}Nightcore" to (prefix + "fx_toggle_nightcore")
+            buttons += "${if (cfg.speed == 0.8) "✓ " else ""}Vaporwave" to (prefix + "fx_toggle_vaporwave")
+            buttons += "Reset all effects" to (prefix + "fx_clear")
+            buttons += "Back to playback" to (prefix + "refresh")
+        }
+        if (eqMenu) {
+            buttons.clear()
+            queueLabels.clear()
+            body.clear()
+            val cfg = jukeboxes.filterConfig(block)
+            body += Component.text("Select Equalizer Preset", NamedTextColor.GOLD)
+            for (preset in su.plo.voice.discs.audio.EqPreset.entries) {
+                val selected = (cfg.eqPreset == null && preset == su.plo.voice.discs.audio.EqPreset.FLAT) ||
+                    (cfg.eqPreset != null && preset == su.plo.voice.discs.audio.EqPreset.fromId(cfg.eqPreset))
+                buttons += "${if (selected) "▶ " else ""}${preset.label}" to (prefix + "fx_set_eq_${preset.id}")
+            }
+            buttons += "Back to effects" to (prefix + "effects_menu")
+            buttons += "Back to playback" to (prefix + "refresh")
+        }
         if (lampMenu) {
             val lamps = bassLamps ?: return show(player, block)
             buttons.clear()
@@ -355,7 +405,7 @@ class ControlCommand(
             }
             buttons += "Back to playback" to (prefix + "refresh")
         }
-        val dialogTitle = if (lampMenu) "Lights" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Move Hologram" else if (crossfade) "Audio settings" else "Jukebox controls"
+        val dialogTitle = if (lampMenu) "Lights" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Move Hologram" else if (crossfade) "Audio settings" else if (eqMenu) "Equalizer" else if (effectsMenu) "Audio effects" else "Jukebox controls"
         try {
             PaperPlaybackDialog.show(player, listOf(Component.join(net.kyori.adventure.text.JoinConfiguration.newlines(), body)), buttons, queueLabels, dialogTitle, 2)
         } catch (_: ClassNotFoundException) {
@@ -511,6 +561,57 @@ class ControlCommand(
                 return
             }
             "audio_menu", "crossfade" -> { show(player, session.block, crossfade = true); return }
+            "effects_menu" -> { show(player, session.block, effectsMenu = true); return }
+            "fx_eq_menu" -> { show(player, session.block, eqMenu = true); return }
+            "fx_clear" -> {
+                jukeboxes.setFilterConfig(session.block, su.plo.voice.discs.audio.AudioFilterConfig())
+                show(player, session.block, effectsMenu = true)
+                return
+            }
+            "fx_toggle_8d" -> {
+                val cur = jukeboxes.filterConfig(session.block)
+                jukeboxes.setFilterConfig(session.block, cur.copy(rotation = !cur.rotation))
+                show(player, session.block, effectsMenu = true)
+                return
+            }
+            "fx_toggle_echo" -> {
+                val cur = jukeboxes.filterConfig(session.block)
+                jukeboxes.setFilterConfig(session.block, cur.copy(echo = !cur.echo))
+                show(player, session.block, effectsMenu = true)
+                return
+            }
+            "fx_toggle_underwater" -> {
+                val cur = jukeboxes.filterConfig(session.block)
+                jukeboxes.setFilterConfig(session.block, cur.copy(underwater = !cur.underwater))
+                show(player, session.block, effectsMenu = true)
+                return
+            }
+            "fx_toggle_tremolo" -> {
+                val cur = jukeboxes.filterConfig(session.block)
+                jukeboxes.setFilterConfig(session.block, cur.copy(tremolo = !cur.tremolo))
+                show(player, session.block, effectsMenu = true)
+                return
+            }
+            "fx_toggle_vibrato" -> {
+                val cur = jukeboxes.filterConfig(session.block)
+                jukeboxes.setFilterConfig(session.block, cur.copy(vibrato = !cur.vibrato))
+                show(player, session.block, effectsMenu = true)
+                return
+            }
+            "fx_toggle_nightcore" -> {
+                val cur = jukeboxes.filterConfig(session.block)
+                val next = if (cur.speed == 1.25) 1.0 else 1.25
+                jukeboxes.setFilterConfig(session.block, cur.copy(speed = next))
+                show(player, session.block, effectsMenu = true)
+                return
+            }
+            "fx_toggle_vaporwave" -> {
+                val cur = jukeboxes.filterConfig(session.block)
+                val next = if (cur.speed == 0.8) 1.0 else 0.8
+                jukeboxes.setFilterConfig(session.block, cur.copy(speed = next))
+                show(player, session.block, effectsMenu = true)
+                return
+            }
             "fadeless" -> playlists.changeCrossfade(session.block, -1)
             "fademore" -> playlists.changeCrossfade(session.block, 1)
             "fadetoggle" -> playlists.toggleCrossfade(session.block)
@@ -565,6 +666,14 @@ class ControlCommand(
             }
             "refresh" -> {}
             else -> {
+                if (arguments[2].startsWith("fx_set_eq_")) {
+                    val presetId = arguments[2].removePrefix("fx_set_eq_")
+                    val cur = jukeboxes.filterConfig(session.block)
+                    val next = if (presetId == "flat") cur.copy(eqPreset = null, bands = null) else cur.copy(eqPreset = presetId, bands = null)
+                    jukeboxes.setFilterConfig(session.block, next)
+                    show(player, session.block, eqMenu = true)
+                    return
+                }
                 val index = arguments[2].takeIf { it.startsWith("queue") }?.removePrefix("queue")?.toIntOrNull() ?: return
                 playlists.jumpToTrack(session.block, index)
                 return

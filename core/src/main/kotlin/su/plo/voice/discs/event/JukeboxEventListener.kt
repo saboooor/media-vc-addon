@@ -86,7 +86,13 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         val links = if (left) leftNoteLinks else rightNoteLinks
         if (position == null) links.remove(block) else links[block] = position
     }
-    fun clearVolume(block: Block) { pendingLoopResumes.remove(block); savedVolumes.remove(block); stereoModes.remove(block); noteLinks.remove(block); leftNoteLinks.remove(block); rightNoteLinks.remove(block) }
+    val savedFilters = ConcurrentHashMap<Block, su.plo.voice.discs.audio.AudioFilterConfig>()
+    fun filterConfig(block: Block): su.plo.voice.discs.audio.AudioFilterConfig = controlsByBlock[block]?.filterConfig ?: savedFilters[block] ?: su.plo.voice.discs.audio.AudioFilterConfig()
+    fun setFilterConfig(block: Block, config: su.plo.voice.discs.audio.AudioFilterConfig) {
+        savedFilters[block] = config
+        controlsByBlock[block]?.applyFilterConfig(config)
+    }
+    fun clearVolume(block: Block) { pendingLoopResumes.remove(block); savedVolumes.remove(block); savedFilters.remove(block); stereoModes.remove(block); noteLinks.remove(block); leftNoteLinks.remove(block); rightNoteLinks.remove(block) }
     val controlsByBlock: MutableMap<Block, PlaybackControls> = ConcurrentHashMap()
 
     data class PendingLoopResume(
@@ -324,6 +330,8 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     ): Job {
         savedVolumes[block]?.let { controls.changeVolume(it - controls.volume) }
         controls.onVolumeChanged = { savedVolumes[block] = it }
+        val initialFilters = savedFilters[block]
+        if (initialFilters != null) controls.applyFilterConfig(initialFilters)
         val playback = scope.launch(start = CoroutineStart.LAZY) {
 
             suspend fun failed(message: String) {

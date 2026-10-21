@@ -6,12 +6,15 @@ import su.plo.voice.discs.visualizer.SpectrumAnalyzer
 import su.plo.voice.discs.jellyfin.JellyfinTranscodedTrack
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.FloatPcmAudioFilter
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory
+import su.plo.voice.discs.audio.AudioFilterConfig
+import su.plo.voice.discs.audio.AudioFilterChain
 
 /** One logical playback, shared by the PV and SVC decoders. */
 class PlaybackControls(
     initialVolume: Int = 100,
     initialGain: Double = 1.0,
-    initialPositionMs: Long = 0L
+    initialPositionMs: Long = 0L,
+    initialFilterConfig: AudioFilterConfig = AudioFilterConfig()
 ) {
     @Volatile var failure: String? = null
         private set
@@ -30,21 +33,18 @@ class PlaybackControls(
         spectrum.reset()
     }
     private val channels = java.util.concurrent.ConcurrentHashMap<AudioPlayer, Int>()
+    @Volatile var filterConfig: AudioFilterConfig = initialFilterConfig
+        private set
+
+    @Synchronized fun applyFilterConfig(config: AudioFilterConfig) {
+        filterConfig = config
+        players.forEach { updateFilter(it) }
+        transitionPartner?.applyFilterConfig(config)
+    }
+
     private fun updateFilter(player: AudioPlayer) {
         val channel = channels[player]
-        player.setFilterFactory(if (channel != null)
-            channelFilter(channel) else null)
-    }
-    private fun channelFilter(channel: Int) = PcmFilterFactory { _, _, output ->
-        listOf(object : FloatPcmAudioFilter {
-            override fun process(input: Array<FloatArray>, offset: Int, length: Int) {
-                SpeakerChannels.isolate(input, offset, length, channel)
-                output.process(input, offset, length)
-            }
-            override fun seekPerformed(requested: Long, provided: Long) { spectrum.reset() }
-            override fun flush() {}
-            override fun close() {}
-        })
+        player.setFilterFactory(AudioFilterChain.buildFactory(filterConfig, channel) { spectrum.reset() })
     }
     @Volatile var sourceFormatDescription: String? = null
     @Volatile var sourceAvailableFormats: String? = null

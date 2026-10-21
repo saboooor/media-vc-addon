@@ -55,5 +55,13 @@ class SavedJukeboxSettingsTest {
         assertEquals(13, instances.add(VisualizerKind.BARS))
         assertEquals(listOf(7, 12, 13), instances.snapshot.map { it.id })
     }
+
+    @Test fun `filter config survives saving and decoding`() {
+        val config = su.plo.voice.discs.audio.AudioFilterConfig(eqPreset = "bass", rotation = true, echo = true, speed = 1.25)
+        val settings = SavedJukeboxSettings(filterConfig = config)
+        val decoded = SavedJukeboxSettings.decode(settings.encode())!!
+        assertEquals(config, decoded.filterConfig)
+        assertTrue(SavedJukeboxSettings.decode("{}")!!.filterConfig.isEmpty())
+    }
 }
 

@@ -35,6 +35,7 @@ import su.plo.voice.discs.command.subcommand.VisualizerCommand
 import su.plo.voice.discs.command.subcommand.PlaylistCommand
 import su.plo.voice.discs.jellyfin.JellyfinLibrary
 import su.plo.voice.discs.command.subcommand.JellyfinCommand
+import su.plo.voice.discs.command.subcommand.EffectCommand
 import su.plo.voice.discs.command.subcommand.BurnCommand
 import su.plo.voice.discs.command.subcommand.CancelCommand
 import su.plo.voice.discs.command.subcommand.EraseCommand
@@ -302,6 +303,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
         server.pluginManager.registerEvents(jellyfinCommand, this)
         val handler = CommandHandler()
             .addSubCommand(::BurnCommand)
+            .addSubCommand(::EffectCommand)
             .addSubCommand { jellyfinCommand }
             .addSubCommand { playlistCommand }
             .addSubCommand { controlCommand }
