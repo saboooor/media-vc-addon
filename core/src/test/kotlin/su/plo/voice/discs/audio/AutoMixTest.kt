@@ -66,6 +66,19 @@ class AutoMixTest {
         assertFalse(fade.complete(1500))
         assertTrue(fade.complete(3000))
     }
+    @Test fun `close tempos match in the correct direction then recover smoothly`() {
+        val outgoing = MixFeatures(rms = 0.1, beatMs = 500, confidence = 0.9)
+        val incoming = MixFeatures(rms = 0.1, beatMs = 480, confidence = 0.9)
+        val plan = AutoMix.plan(100_000, 100_000, outgoing, incoming)
+        assertTrue(plan.beatAligned)
+        assertEquals(0.96, plan.tempoFactor, 1e-9)
+        assertEquals(500.0, 480.0 / plan.tempoFactor, 1e-9)
+        assertEquals(0.96, AutoMix.releaseTempo(0.96, 0), 1e-9)
+        assertEquals(0.98, AutoMix.releaseTempo(0.96, 2000), 1e-9)
+        assertEquals(1.0, AutoMix.releaseTempo(0.96, 4000), 1e-9)
+        assertEquals(1.0, AutoMix.plan(100000, 100000, outgoing, incoming.copy(beatMs = 300)).tempoFactor)
+    }
+
     @Test fun `a louder next song is attenuated during the blend and quiet songs are not boosted`() {
         val plan = AutoMix.plan(100_000, 100_000, MixFeatures(rms = 0.1), MixFeatures(rms = 0.2))
         assertEquals(0.5, plan.incomingGain)

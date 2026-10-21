@@ -134,6 +134,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         pcmChannel: Int? = null,
     ): AudioPlayer {
         val player = manager.createPlayer()
+        player.setFrameBufferDuration(500)
         player.addListener(object : AudioEventAdapter() {
             override fun onTrackException(player: AudioPlayer, track: AudioTrack, exception: FriendlyException) {
                 controls?.fail(exception.message ?: "Audio stream failed")

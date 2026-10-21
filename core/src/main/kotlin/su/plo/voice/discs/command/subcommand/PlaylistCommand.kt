@@ -303,6 +303,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             var outgoingIndex = 0
             var recoveryStart = 0L
             var recoveryGain = 1.0
+            var recoveryTempo = 1.0
             var haltAtEnd = false
             var fadeOutStart: Long? = null
             var fadeOutGain = 1.0
@@ -368,7 +369,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 index = remapQueueIndex(liveDiscs, liveDiscs, outgoingIndex, activeDisc)
                 state.currentIndex = index
                 outgoing = null; oldControls = null; outgoingDisc = null; envelope = null
-                recoveryGain = controls.currentGain; recoveryStart = controls.sentAudioMs
+                recoveryGain = controls.currentGain; recoveryTempo = controls.mixTempoFactor; recoveryStart = controls.sentAudioMs
                 suspendSyncAt(block.location, voiceServer, plugin) { jukeboxes.restorePlayback(block, old, controls) }
                 return true
             }
@@ -378,6 +379,9 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 controls.transitionPartner = null
                 outgoing?.cancelAndJoin(); outgoing = null; oldControls = null
                 val ready = prepared(target)
+                val mixPlan = plan ?: if (autoMixEnabled(block) && ready?.features != null)
+                    AutoMix.plan(controls.duration, ready.track.duration, controls.mixAnalysis.snapshot(), ready.features,
+                        controls.playbackRate, controls.filterConfig.speed * controls.filterConfig.tempo) else null
                 val fade = if (manual) fadeDuration() else plan?.durationMs ?: fadeDuration()
                 if (fade <= 0) {
                     current?.cancelAndJoin()
@@ -389,10 +393,11 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     val previousControls = controls
                     val previousDisc = activeDisc
                     val previousIndex = index
-                    val cue = if (ready?.track?.isSeekable == true) plan?.cueMs ?: 0L else 0L
+                    val cue = if (ready?.track?.isSeekable == true) mixPlan?.cueMs ?: 0L else 0L
                     val nextControls = PlaybackControls(initialVolume = controls.volume, initialGain = 0.0,
                         initialPositionMs = cue, initialFilterConfig = controls.filterConfig)
                     nextControls.autoMixAnalysis = autoMixEnabled(block)
+                    nextControls.setMixTempoFactor(mixPlan?.tempoFactor ?: 1.0)
                     if (controls.paused) nextControls.togglePause()
                     nextControls.transitionPartner = previousControls
                     val next = start(target, nextControls, true, ready) ?: return false
@@ -402,7 +407,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     controls = nextControls; current = next
                 }
                 preparing?.cancel(); preparing = null; preparingDisc = null
-                index = target; fadeOutStart = null; haltAtEnd = false; recoveryGain = 1.0
+                index = target; fadeOutStart = null; haltAtEnd = false; recoveryGain = 1.0; recoveryTempo = 1.0
                 return true
             }
             try {
@@ -475,14 +480,17 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                             outgoing?.cancelAndJoin(); outgoing = null; oldControls = null; outgoingDisc = null
                             controls.transitionPartner = null
                             recoveryGain = controls.currentGain
+                            recoveryTempo = controls.mixTempoFactor
                             recoveryStart = controls.sentAudioMs
                             if (controls.sentAudioMs == 0L) { controls.setGain(1.0); recoveryGain = 1.0 }
                             envelope = null
                         }
-                    } else if (recoveryGain < 1.0) {
+                    } else if (recoveryGain < 1.0 || recoveryTempo != 1.0) {
                         val progress = ((controls.sentAudioMs - recoveryStart) / 2_000.0).coerceIn(0.0, 1.0)
                         controls.setGain(recoveryGain + (1.0 - recoveryGain) * progress)
                         if (progress >= 1.0) recoveryGain = 1.0
+                        controls.setMixTempoFactor(AutoMix.releaseTempo(recoveryTempo, controls.sentAudioMs - recoveryStart))
+                        if (controls.sentAudioMs - recoveryStart >= 4_000) recoveryTempo = 1.0
                     }
                     playing = current ?: break
                     if (!playing.isActive) {
@@ -501,7 +509,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     if (fadeDuration() > 0 && controls.duration > 0 && remaining in 1..45_000) prepare(nextIndex)
                     val ready = prepared(nextIndex)
                     val plan = if (autoMixEnabled(block)) AutoMix.plan(controls.duration,
-                        ready?.track?.duration ?: 0L, controls.mixAnalysis.snapshot(), ready?.features)
+                        ready?.track?.duration ?: 0L, controls.mixAnalysis.snapshot(), ready?.features, controls.playbackRate,
+                        controls.filterConfig.speed * controls.filterConfig.tempo)
                         else MixPlan((controls.duration - fadeDuration()).coerceAtLeast(0), fadeDuration())
                     if (plan.durationMs > 0 && controls.seekable && !controls.isStream && controls.duration > 0 &&
                         controls.position >= plan.startMs && remaining > 0) {

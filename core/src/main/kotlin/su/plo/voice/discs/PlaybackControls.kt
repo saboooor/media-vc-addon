@@ -22,8 +22,20 @@ class PlaybackControls(
         if (failure == null) failure = message
     }
     val spectrum = SpectrumAnalyzer()
+    private val timescaleClock = su.plo.voice.discs.audio.TimescaleClock()
+    @Volatile var mixTempoFactor = 1.0
+        private set
+    fun setMixTempoFactor(value: Double) {
+        require(value.isFinite())
+        val wasActive = mixTempoFactor != 1.0
+        mixTempoFactor = value.coerceIn(0.92, 1.08)
+        if (!autoMixAnalysis && wasActive != (mixTempoFactor != 1.0)) refreshTimescaleFilters()
+    }
+    val playbackRate: Double get() = filterConfig.speed * filterConfig.tempo * mixTempoFactor
     val mixAnalysis = su.plo.voice.discs.audio.MixAnalysis()
     @Volatile var autoMixAnalysis = false
+        set(value) { if (field != value) { field = value; refreshTimescaleFilters() } }
+    @Synchronized private fun refreshTimescaleFilters() { players.forEach { updateFilter(it) } }
     @Volatile var sentAudioMs = 0L
         private set
     val currentGain: Double get() = gain
@@ -50,7 +62,10 @@ class PlaybackControls(
 
     private fun updateFilter(player: AudioPlayer) {
         val channel = channels[player]
-        player.setFilterFactory(AudioFilterChain.buildFactory(filterConfig, channel) { spectrum.reset() })
+        player.setFilterFactory(AudioFilterChain.buildFactory(filterConfig, channel, onSeek = { spectrum.reset() },
+            timescale = if (autoMixAnalysis || mixTempoFactor != 1.0 || filterConfig.tempo != 1.0 ||
+                filterConfig.speed != 1.0 || filterConfig.pitchSemitones != 0.0) ({ su.plo.voice.discs.audio.TimescaleParameters(
+                filterConfig.tempo * mixTempoFactor, filterConfig.pitchSemitones, filterConfig.speed) }) else null, onTimescaleOutput = timescaleClock::decoded))
     }
     @Volatile var sourceFormatDescription: String? = null
     @Volatile var sourceAvailableFormats: String? = null
@@ -90,9 +105,10 @@ class PlaybackControls(
         if (player !in players) return
         val track = player.playingTrack ?: return
         sentAudioMs += 20
-        transmittedPositionMs = if (track is JellyfinTranscodedTrack) track.absoluteFramePosition(timecodeMs) else timecodeMs
+        val rawPosition = if (track is JellyfinTranscodedTrack) track.absoluteFramePosition(timecodeMs) else timecodeMs
+        transmittedPositionMs = timescaleClock.sent(rawPosition)
     }
-    val position: Long get() = players.firstOrNull()?.playingTrack?.position?.takeIf { it > 0 } ?: initialPositionMs
+    val position: Long get() = transmittedPositionMs ?: players.firstOrNull()?.playingTrack?.position?.takeIf { it > 0 } ?: initialPositionMs
     val duration: Long get() = players.firstOrNull()?.playingTrack?.duration ?: 0
     val isStream: Boolean get() = players.firstOrNull()?.playingTrack?.let {
         it.info.isStream && (it as? JellyfinTranscodedTrack)?.canRestart != true
@@ -146,6 +162,7 @@ class PlaybackControls(
         if (!seekable) return
         val target = positionMs.coerceIn(0, (duration - 1).coerceAtLeast(0))
         transmittedPositionMs = null
+        timescaleClock.reset(target)
         initialPositionMs = target
         players.forEach { seekPlayer(it, target) }
         spectrum.reset()

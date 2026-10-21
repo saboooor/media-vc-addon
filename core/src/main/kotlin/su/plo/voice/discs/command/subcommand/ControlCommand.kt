@@ -248,7 +248,7 @@ class ControlCommand(
             body.clear()
             val autoMix = playlists.autoMixEnabled(block)
             body += Component.text("AutoMix: ${if (autoMix) "On" else "Off"}", NamedTextColor.GOLD)
-            body += Component.text("AutoMix uses audio energy and beat estimates to choose entry points and blend length. Uncertain matches use a smooth fade.", NamedTextColor.GRAY)
+            body += Component.text("AutoMix matches close tempos with pitch-preserving time stretching, then eases back to your chosen tempo. Uncertain matches use a smooth fade.", NamedTextColor.GRAY)
             buttons += (if (autoMix) "Disable AutoMix" else "Enable AutoMix") to (prefix + "automix")
             if (queue != null) {
                 body += Component.text("Crossfade: ${if (queue.crossfadeSeconds == 0) "Off" else "${queue.crossfadeSeconds}s"}", NamedTextColor.GOLD)
@@ -268,6 +268,7 @@ class ControlCommand(
             val cfg = jukeboxes.filterConfig(block)
             val eqName = cfg.eqPreset?.let { su.plo.voice.discs.audio.EqPreset.fromId(it)?.label } ?: "Flat / Off"
             body += Component.text("Audio Effects & Equalizer", NamedTextColor.GOLD)
+            body += Component.text("Tempo: ${"%.2f".format(cfg.tempo)}x · Pitch: ${cfg.pitchSemitones} semitones", NamedTextColor.GRAY)
             body += Component.text("Equalizer preset: $eqName", NamedTextColor.YELLOW)
             val activeList = mutableListOf<String>()
             if (cfg.rotation) activeList += "8D Audio"
@@ -291,6 +292,11 @@ class ControlCommand(
             buttons += "${if (cfg.underwater) "✓ " else ""}Underwater" to (prefix + "fx_toggle_underwater")
             buttons += "${if (cfg.tremolo) "✓ " else ""}Tremolo" to (prefix + "fx_toggle_tremolo")
             buttons += "${if (cfg.vibrato) "✓ " else ""}Vibrato" to (prefix + "fx_toggle_vibrato")
+            buttons += "Tempo -5%" to (prefix + "fx_tempo_down")
+            buttons += "Tempo +5%" to (prefix + "fx_tempo_up")
+            buttons += "Pitch -1 semitone" to (prefix + "fx_pitch_down")
+            buttons += "Pitch +1 semitone" to (prefix + "fx_pitch_up")
+            buttons += "Reset tempo & pitch" to (prefix + "fx_timescale_reset")
             buttons += "${if (cfg.speed == 1.25) "✓ " else ""}Nightcore" to (prefix + "fx_toggle_nightcore")
             buttons += "${if (cfg.speed == 0.8) "✓ " else ""}Vaporwave" to (prefix + "fx_toggle_vaporwave")
             buttons += "Reset all effects" to (prefix + "fx_clear")
@@ -599,6 +605,19 @@ class ControlCommand(
             "fx_toggle_vibrato" -> {
                 val cur = jukeboxes.filterConfig(session.block)
                 jukeboxes.setFilterConfig(session.block, cur.copy(vibrato = !cur.vibrato))
+                show(player, session.block, effectsMenu = true)
+                return
+            }
+            "fx_tempo_down", "fx_tempo_up", "fx_pitch_down", "fx_pitch_up", "fx_timescale_reset" -> {
+                val cur = jukeboxes.filterConfig(session.block)
+                val next = when (arguments[2]) {
+                    "fx_tempo_down" -> cur.copy(tempo = (cur.tempo - 0.05).coerceIn(0.5, 2.0))
+                    "fx_tempo_up" -> cur.copy(tempo = (cur.tempo + 0.05).coerceIn(0.5, 2.0))
+                    "fx_pitch_down" -> cur.copy(pitchSemitones = (cur.pitchSemitones - 1.0).coerceIn(-12.0, 12.0))
+                    "fx_pitch_up" -> cur.copy(pitchSemitones = (cur.pitchSemitones + 1.0).coerceIn(-12.0, 12.0))
+                    else -> cur.copy(tempo = 1.0, pitchSemitones = 0.0)
+                }
+                jukeboxes.setFilterConfig(session.block, next)
                 show(player, session.block, effectsMenu = true)
                 return
             }

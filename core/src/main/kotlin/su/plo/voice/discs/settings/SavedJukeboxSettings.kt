@@ -29,6 +29,7 @@ data class SavedJukeboxSettings(
         require(stereo in 0..3)
         require(version == 1 && volume in 0..100 && crossfade in 0..30 && lastCrossfade in 1..30)
         require(filterConfig.speed in 0.25..4.0)
+        require(filterConfig.tempo in 0.5..2.0 && filterConfig.pitchSemitones in -12.0..12.0)
         require(hologram.x.isFinite() && hologram.y.isFinite() && hologram.z.isFinite())
         require(visualizers.size <= 8 && visualizers.map { it.id }.distinct().size == visualizers.size)
         for (instance in visualizers) {

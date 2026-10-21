@@ -49,24 +49,32 @@ class MixAnalysis {
 data class MixFeatures(val rms: Double = 0.0, val audibleStartMs: Long = 0, val beatMs: Long? = null,
                        val beatAnchorMs: Long = 0, val confidence: Double = 0.0)
 data class MixPlan(val startMs: Long, val durationMs: Long, val cueMs: Long = 0,
-                   val incomingGain: Double = 1.0, val beatAligned: Boolean = false)
+                   val incomingGain: Double = 1.0, val beatAligned: Boolean = false, val tempoFactor: Double = 1.0)
 
 object AutoMix {
-    fun plan(durationMs: Long, nextDurationMs: Long, outgoing: MixFeatures, incoming: MixFeatures?): MixPlan {
+    fun plan(durationMs: Long, nextDurationMs: Long, outgoing: MixFeatures, incoming: MixFeatures?, outgoingRate: Double = 1.0, incomingBaseRate: Double = 1.0): MixPlan {
         val next = incoming ?: MixFeatures()
         val beat = outgoing.beatMs
+        val tempoFactor = if (beat != null && next.beatMs != null) next.beatMs.toDouble() / beat / incomingBaseRate else 1.0
         val compatible = beat != null && next.beatMs != null && outgoing.confidence >= 0.55 && next.confidence >= 0.55 &&
-            abs(beat.toDouble() / next.beatMs - 1.0) <= 0.08
+            tempoFactor in 0.92..1.08
         val limit = min(10_000L, min(durationMs / 3, nextDurationMs.takeIf { it > 0 }?.div(3) ?: 10_000L)).coerceAtLeast(250L)
         val desired = if (compatible) beat!! * 8 else if (outgoing.rms < 0.025 || next.rms < 0.025) 2_000L else 4_000L
         val fade = desired.coerceIn(250L, limit)
-        var start = (durationMs - fade).coerceAtLeast(0)
-        if (compatible) start = (start - Math.floorMod(start - outgoing.beatAnchorMs, beat!!)).coerceAtLeast(0)
+        var start = (durationMs - (fade * outgoingRate).toLong()).coerceAtLeast(0)
+        if (compatible) start = (start - Math.floorMod(start - outgoing.beatAnchorMs,
+            (beat!! * outgoingRate).toLong().coerceAtLeast(1))).coerceAtLeast(0)
         // Trim only silence found in the bounded intro; retain audible musical introductions.
         val cue = if (compatible) next.beatAnchorMs.takeIf { it in next.audibleStartMs..(next.audibleStartMs + next.beatMs!!) }
             ?: next.audibleStartMs else next.audibleStartMs
         val gain = if (outgoing.rms > 0.003 && next.rms > 0.003) (outgoing.rms / next.rms).coerceIn(0.5, 1.0) else 1.0
-        return MixPlan(start, min(fade, durationMs - start).coerceAtLeast(1), cue.coerceIn(0, 8_000), gain, compatible)
+        return MixPlan(start, min(fade, ((durationMs - start) / outgoingRate).toLong()).coerceAtLeast(1), cue.coerceIn(0, 8_000), gain,
+            compatible, if (compatible) tempoFactor else 1.0)
+    }
+    fun releaseTempo(start: Double, elapsedMs: Long): Double {
+        val t = (elapsedMs / 4_000.0).coerceIn(0.0, 1.0)
+        val eased = t * t * (3.0 - 2.0 * t)
+        return start + (1.0 - start) * eased
     }
     fun gains(progress: Double, outgoingStart: Double = 1.0, incomingTarget: Double = 1.0): Pair<Double, Double> {
         val angle = progress.coerceIn(0.0, 1.0) * Math.PI / 2
