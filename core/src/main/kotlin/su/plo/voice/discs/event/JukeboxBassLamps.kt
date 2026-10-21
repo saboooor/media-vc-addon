@@ -43,6 +43,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     }
     data class Link(val lamp: Position, val jukebox: Position, val band: LightBand? = LightBand.BASS, val originalData: String? = null, val shutterData: String? = null)
     private data class Pending(val jukebox: Block, val unlink: Boolean, val band: LightBand = LightBand.BASS, val expires: Long = System.currentTimeMillis() + 120_000)
+    private val config: su.plo.voice.discs.AddonConfig by getter()
     private val plugin: JavaPlugin by inject()
     private val scope: CoroutineScope by inject()
     private val voiceServer: PlasmoVoiceServer? by getterOrNull()
@@ -184,7 +185,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                             if (listening) active += controls!!
                             val lit = if (listening && controls?.paused == false)
                                 envelopes.computeIfAbsent(link.lamp) { BassLampEnvelope() }.update(
-                                    (link.band ?: LightBand.BASS).level(controls.spectrum.levels))
+                                    (link.band ?: LightBand.BASS).level(controls.spectrum.levels), config.lightFalloff)
                             else { envelopes.remove(link.lamp); false }
                             setLit(lamp, link, lit)
                         }

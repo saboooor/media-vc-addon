@@ -72,6 +72,7 @@ import su.plo.voice.discs.v1_19_4.GoatHornListener
     authors = ["KPidS", "Apehum"]
 )
 class DiscsPlugin : JavaPlugin(), Listener {
+    private var handheldJukeboxes: HandheldJukeboxes? = null
 
     private val addonName = "discs"
 
@@ -301,6 +302,11 @@ class DiscsPlugin : JavaPlugin(), Listener {
             server.pluginManager.registerEvents(GoatHornListener(), this)
         }
 
+        handheldJukeboxes = HandheldJukeboxes().also {
+            server.pluginManager.registerEvents(it, this)
+            it.start()
+        }
+
         val jellyfinCommand = JellyfinCommand(jellyfinLibrary)
         server.pluginManager.registerEvents(jellyfinCommand, this)
         val handler = CommandHandler()
@@ -370,6 +376,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
     }
 
     override fun onDisable() {
+        handheldJukeboxes?.shutdown()
         screenMapPacketListener?.let { PacketEvents.getAPI().eventManager.unregisterListener(it) }
         screenMapPacketListener = null
         visualizerEditor?.shutdown()

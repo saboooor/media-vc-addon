@@ -51,10 +51,11 @@ class BassLampEnvelope {
     private var pulse = 0f
     var lit = false
         private set
-    fun update(bass: Float): Boolean {
+    fun update(bass: Float, falloff: Double = 0.2): Boolean {
         val value = bass.coerceIn(0f, 1f)
-        // Lamps need a crisp flash; the speaker driver's slower release blurs adjacent beats.
-        pulse = max(max((value - previous).coerceAtLeast(0f) * 3f, pulse * 0.2f), value * 0.25f).coerceIn(0f, 1f)
+        // Invalid configuration falls back to the original response; endpoints are intentional.
+        val retention = if (falloff.isFinite()) falloff.coerceIn(0.0, 1.0).toFloat() else 0.2f
+        pulse = max(max((value - previous).coerceAtLeast(0f) * 3f, pulse * retention), value * 0.25f).coerceIn(0f, 1f)
         previous = value
         lit = if (lit) pulse > 0.2f else pulse > 0.4f
         return lit
