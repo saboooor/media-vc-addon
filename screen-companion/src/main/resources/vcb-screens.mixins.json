@@ -1,6 +1,6 @@
 {
   "required": true,
-  "package": "io.pfaumc.voicebridge.screens.mixin",
+  "package": "ca.saboor.discs.screen.companion.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": ["ItemFrameVideoMixin", "ScreenCullingMixin"],
   "injectors": { "defaultRequire": 1 }

@@ -65,16 +65,16 @@ tasks {
             val classes = project(":core").extensions
                 .getByType<org.gradle.api.tasks.SourceSetContainer>()["main"].output.classesDirs
             val required = classes.asFileTree.matching {
-                include("su/plo/voice/discs/**/*.class")
+                include("su/plo/voice/discs/**/*.class", "ca/saboor/discs/**/*.class")
             }.files.map { file ->
                 val root = classes.files.first { file.toPath().startsWith(it.toPath()) }
                 file.relativeTo(root).invariantSeparatorsPath
             }.toSet()
             val essentialClasses = setOf(
                 "su/plo/voice/discs/utils/DiscEjectCause.class",
-                "su/plo/voice/discs/command/subcommand/PlaylistCommand\$Pending.class",
-                "su/plo/voice/discs/playlist/CatalogPlaylistClient.class",
-                "su/plo/voice/discs/playlist/PublicPlaylistClient.class",
+                "ca/saboor/discs/command/subcommand/PlaylistCommand\$Pending.class",
+                "ca/saboor/discs/playlist/CatalogPlaylistClient.class",
+                "ca/saboor/discs/playlist/PublicPlaylistClient.class",
             )
             check(required.containsAll(essentialClasses)) {
                 "Core compiler output is incomplete: ${essentialClasses - required}. Run ./gradlew clean build."

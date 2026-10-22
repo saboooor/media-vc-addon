@@ -1,5 +1,10 @@
 package su.plo.voice.discs.command.subcommand
 
+import ca.saboor.discs.dialog.PaperPlaybackDialog
+import ca.saboor.discs.utils.extend.cleanArtistName
+import ca.saboor.discs.utils.extend.cleanTrackName
+import ca.saboor.discs.utils.extend.containsArtist
+import ca.saboor.discs.utils.extend.suspendSyncFor
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
 import net.kyori.adventure.text.Component
@@ -11,7 +16,6 @@ import su.plo.slib.api.chat.style.McTextHoverEvent
 import su.plo.slib.api.permission.PermissionDefault
 import su.plo.voice.discs.api.PlayerSearchEvent
 import su.plo.voice.discs.command.SubCommand
-import su.plo.voice.discs.dialog.PaperPlaybackDialog
 import su.plo.voice.discs.utils.extend.*
 
 class SearchCommand : SubCommand() {

@@ -1,6 +1,18 @@
 package su.plo.voice.discs.event
 
-import su.plo.voice.discs.audio.PlaybackFailure
+import ca.saboor.discs.PlaybackControls
+import ca.saboor.discs.audio.PlaybackFailure
+import ca.saboor.discs.bridge.VoiceBridgeCompat
+import ca.saboor.discs.event.JukeboxBassLamps
+import ca.saboor.discs.screen.ScreenManager
+import ca.saboor.discs.svc.SvcDiscsPlugin
+import ca.saboor.discs.utils.extend.cleanArtistName
+import ca.saboor.discs.utils.extend.cleanTrackName
+import ca.saboor.discs.utils.extend.containsArtist
+import ca.saboor.discs.utils.extend.eraseBurnMetadata
+import ca.saboor.discs.utils.extend.suspendSyncAt
+import ca.saboor.discs.utils.extend.suspendSyncFor
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.*
 import kotlinx.coroutines.future.await
 import net.kyori.adventure.text.Component
@@ -10,8 +22,8 @@ import org.bukkit.Bukkit
 import org.bukkit.GameMode
 import org.bukkit.Location
 import org.bukkit.Material
-import org.bukkit.block.BlockFace
 import org.bukkit.block.Block
+import org.bukkit.block.BlockFace
 import org.bukkit.block.Jukebox
 import org.bukkit.entity.Player
 import org.bukkit.entity.minecart.HopperMinecart
@@ -37,20 +49,15 @@ import su.plo.voice.api.server.PlasmoVoiceServer
 import su.plo.voice.api.server.audio.line.ServerSourceLine
 import su.plo.voice.api.server.player.VoicePlayer
 import su.plo.voice.discs.AddonConfig
-import su.plo.voice.discs.PlaybackControls
 import su.plo.voice.discs.PlasmoAudioPlayerManager
 import su.plo.voice.discs.api.PlayTrackFromDiscEvent
-import su.plo.voice.discs.bridge.VoiceBridgeCompat
 import su.plo.voice.discs.item.DiscHelper
-import su.plo.voice.discs.screen.ScreenManager
-import su.plo.voice.discs.svc.SvcDiscsPlugin
 import su.plo.voice.discs.utils.DiscChunkUnloadCause
 import su.plo.voice.discs.utils.DiscEjectCause
 import su.plo.voice.discs.utils.DiscPullCause
 import su.plo.voice.discs.utils.DiscReplaceCause
 import su.plo.voice.discs.utils.PluginKoinComponent
 import su.plo.voice.discs.utils.extend.*
-import java.util.concurrent.ConcurrentHashMap
 
 class JukeboxEventListener : Listener, PluginKoinComponent {
 
@@ -87,9 +94,9 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         val links = if (left) leftNoteLinks else rightNoteLinks
         if (position == null) links.remove(block) else links[block] = position
     }
-    val savedFilters = ConcurrentHashMap<Block, su.plo.voice.discs.audio.AudioFilterConfig>()
-    fun filterConfig(block: Block): su.plo.voice.discs.audio.AudioFilterConfig = controlsByBlock[block]?.filterConfig ?: savedFilters[block] ?: su.plo.voice.discs.audio.AudioFilterConfig()
-    fun setFilterConfig(block: Block, config: su.plo.voice.discs.audio.AudioFilterConfig) {
+    val savedFilters = ConcurrentHashMap<Block, ca.saboor.discs.audio.AudioFilterConfig>()
+    fun filterConfig(block: Block): ca.saboor.discs.audio.AudioFilterConfig = controlsByBlock[block]?.filterConfig ?: savedFilters[block] ?: ca.saboor.discs.audio.AudioFilterConfig()
+    fun setFilterConfig(block: Block, config: ca.saboor.discs.audio.AudioFilterConfig) {
         savedFilters[block] = config
         controlsByBlock[block]?.applyFilterConfig(config)
     }
@@ -637,7 +644,4 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         }
     }
 }
-
-
-
 

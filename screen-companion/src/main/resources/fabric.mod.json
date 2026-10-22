@@ -5,7 +5,7 @@
   "name": "Voice Bridge Screens",
   "description": "Full-color item-frame video for vc-addon-discs servers.",
   "environment": "client",
-  "entrypoints": { "client": ["io.pfaumc.voicebridge.screens.ScreensClient"] },
+  "entrypoints": { "client": ["ca.saboor.discs.screen.companion.ScreensClient"] },
   "mixins": ["vcb-screens.mixins.json"],
   "depends": { "fabricloader": ">=0.19.5", "minecraft": "${minecraft_version}", "java": ">=${java_version}", "fabric-api": "*" }
 }

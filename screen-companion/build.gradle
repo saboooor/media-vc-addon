@@ -4,14 +4,14 @@ plugins {
     id 'net.fabricmc.fabric-loom' version '1.17.12' apply false
 }
 
-group = 'io.pfaumc.voicebridge'
+group = 'ca.saboor.discs'
 version = '0.1.0'
 
 def targets = [mc12111: ['1.21.11', '0.141.6+1.21.11', 21], mc261: ['26.1', '0.145.1+26.1', 25], mc2611: ['26.1.1', '0.145.4+26.1.1', 25], mc2612: ['26.1.2', '0.155.3+26.1.2', 25], mc262: ['26.2', '0.161.0+26.2', 25], mc263: ['26.3', '0.164.0+26.3', 25]]
 subprojects {
     def target = targets[project.name]
     apply plugin: project.name == 'mc12111' ? 'net.fabricmc.fabric-loom-remap' : 'net.fabricmc.fabric-loom'
-    group = 'io.pfaumc.voicebridge'
+    group = 'ca.saboor.discs'
     version = '0.1.0'
     base.archivesName = "vcb-screen-companion-${target[0]}"
     repositories { mavenCentral() }

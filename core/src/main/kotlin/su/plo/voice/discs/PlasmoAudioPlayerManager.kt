@@ -1,9 +1,20 @@
 package su.plo.voice.discs
 
-import su.plo.voice.discs.audio.PlaybackFailure
-import su.plo.voice.discs.jellyfin.JellyfinLibrary
-import su.plo.voice.discs.jellyfin.JellyfinAudioSourceManager
+import ca.saboor.discs.PlaybackControls
+import ca.saboor.discs.audio.PlaybackFailure
+import ca.saboor.discs.audio.PlaybackSpectrumTap
+import ca.saboor.discs.audio.QualityYoutubeSourceManager
+import ca.saboor.discs.audio.StereoPcmFrameEncoder
+import ca.saboor.discs.jellyfin.JellyfinAudioSourceManager
+import ca.saboor.discs.jellyfin.JellyfinLibrary
 import de.maxhenkel.voicechat.api.audiochannel.AudioChannel
+import java.io.File
+import java.net.URI
+import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
+import java.util.function.Consumer
+import kotlin.concurrent.fixedRateTimer
+import kotlin.time.Duration.Companion.nanoseconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,10 +33,13 @@ import su.plo.voice.discs.utils.PluginKoinComponent
 import su.plo.voice.discs.utils.extend.getValue
 import su.plo.voice.discs.utils.extend.getter
 import su.plo.voice.discs.utils.extend.getterOrNull
+import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.format.OpusAudioDataFormat
+import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.format.StandardAudioDataFormats
+import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.format.transcoder.AudioChunkEncoder
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.AudioLoadResultHandler
+import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.AudioPlayer
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.DefaultAudioPlayerManager
-import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.AudioPlayer
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.event.AudioEventAdapter
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.source.AudioSourceManager
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.source.bandcamp.BandcampAudioSourceManager
@@ -49,19 +63,6 @@ import su.plo.voice.lavaplayer.libs.org.apache.http.auth.AuthScope
 import su.plo.voice.lavaplayer.libs.org.apache.http.auth.UsernamePasswordCredentials
 import su.plo.voice.lavaplayer.libs.org.apache.http.impl.client.BasicCredentialsProvider
 import su.plo.voice.lavaplayer.libs.org.apache.http.impl.client.HttpClientBuilder
-import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.format.StandardAudioDataFormats
-import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.format.OpusAudioDataFormat
-import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.format.transcoder.AudioChunkEncoder
-import su.plo.voice.discs.audio.PlaybackSpectrumTap
-import su.plo.voice.discs.audio.StereoPcmFrameEncoder
-import su.plo.voice.discs.audio.QualityYoutubeSourceManager
-import java.io.File
-import java.net.URI
-import java.nio.file.Path
-import java.util.concurrent.CompletableFuture
-import java.util.function.Consumer
-import kotlin.concurrent.fixedRateTimer
-import kotlin.time.Duration.Companion.nanoseconds
 
 class PlasmoAudioPlayerManager : PluginKoinComponent {
 
@@ -86,9 +87,9 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     @Volatile private var shuttingDown = false
     private val oauthLock = Any()
     private var oauthStartedAt = 0L
-    private val webhooks = su.plo.voice.discs.webhook.PlaybackWebhooks(scope, { config.webhook },
+    private val webhooks = ca.saboor.discs.webhook.PlaybackWebhooks(scope, { config.webhook },
         { plugin.slF4JLogger.warn(it) }, { startOauth2(force = true) })
-    private val oauthPromptLog = su.plo.voice.discs.webhook.OauthPromptLog { prompt ->
+    private val oauthPromptLog = ca.saboor.discs.webhook.OauthPromptLog { prompt ->
         synchronized(oauthLock) { oauthStartedAt = System.currentTimeMillis() }
         webhooks.oauthPrompt(prompt)
     }
@@ -109,12 +110,12 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     }
 
     /** Compare sections in the first minute, bounded by twenty wall seconds and one decoder. */
-    suspend fun analyzeMixSections(track: AudioTrack): List<su.plo.voice.discs.audio.MixFeatures> {
+    suspend fun analyzeMixSections(track: AudioTrack): List<ca.saboor.discs.audio.MixFeatures> {
         if (track.info.isStream || !track.isSeekable) return emptyList()
         val player = stereoPlayerManager.createPlayer()
-        val analysis = su.plo.voice.discs.audio.MixAnalysis()
+        val analysis = ca.saboor.discs.audio.MixAnalysis()
         songEdges(track)
-        val sections = mutableListOf<su.plo.voice.discs.audio.MixFeatures>()
+        val sections = mutableListOf<ca.saboor.discs.audio.MixFeatures>()
         var tap: PlaybackSpectrumTap? = null
         try {
             player.playTrack(track.makeClone())
@@ -146,13 +147,13 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
 
     suspend fun prepareSongEdges(track: AudioTrack) { songEdges(track) }
 
-    private val edgeCache = java.util.concurrent.ConcurrentHashMap<Pair<String, Long>, su.plo.voice.discs.audio.SongEdges>()
-    private suspend fun songEdges(track: AudioTrack): su.plo.voice.discs.audio.SongEdges? {
+    private val edgeCache = java.util.concurrent.ConcurrentHashMap<Pair<String, Long>, ca.saboor.discs.audio.SongEdges>()
+    private suspend fun songEdges(track: AudioTrack): ca.saboor.discs.audio.SongEdges? {
         if (!track.isSeekable || track.info.isStream || track.duration <= 0) return null
         val key = track.identifier to track.duration
         edgeCache[key]?.let { return it }
         val probe = stereoPlayerManager.createPlayer()
-        val scan = su.plo.voice.discs.audio.EdgeSilenceScan(track.duration)
+        val scan = ca.saboor.discs.audio.EdgeSilenceScan(track.duration)
         var tap: PlaybackSpectrumTap? = null
         try {
             probe.playTrack(track.makeClone())
@@ -651,7 +652,4 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         private val logger = McLoggerFactory.createLogger("PlasmoAudioPlayerManager")
     }
 }
-
-
-
 

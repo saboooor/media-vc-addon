@@ -1,5 +1,23 @@
 package su.plo.voice.discs
 
+import ca.saboor.discs.HandheldJukeboxes
+import ca.saboor.discs.command.subcommand.ControlCommand
+import ca.saboor.discs.command.subcommand.EffectCommand
+import ca.saboor.discs.command.subcommand.HologramCommand
+import ca.saboor.discs.command.subcommand.JellyfinCommand
+import ca.saboor.discs.command.subcommand.OauthCommand
+import ca.saboor.discs.command.subcommand.PlaylistCommand
+import ca.saboor.discs.command.subcommand.ReloadCommand
+import ca.saboor.discs.command.subcommand.VisualizerCommand
+import ca.saboor.discs.event.JukeboxBassLamps
+import ca.saboor.discs.event.JukeboxProgressDisplay
+import ca.saboor.discs.event.JukeboxSettingsListener
+import ca.saboor.discs.event.JukeboxVisualizer
+import ca.saboor.discs.jellyfin.JellyfinLibrary
+import ca.saboor.discs.screen.ScreenCommand
+import ca.saboor.discs.screen.ScreenEventListener
+import ca.saboor.discs.screen.ScreenManager
+import ca.saboor.discs.svc.SvcDiscsPlugin
 import com.github.retrooper.packetevents.PacketEvents
 import com.github.retrooper.packetevents.event.PacketListenerPriority
 import de.maxhenkel.voicechat.api.BukkitVoicechatService
@@ -28,42 +46,25 @@ import su.plo.voice.api.logging.DebugLogger
 import su.plo.voice.api.server.PlasmoVoiceServer
 import su.plo.voice.api.server.audio.line.ServerSourceLine
 import su.plo.voice.api.server.event.config.VoiceServerConfigReloadedEvent
-import su.plo.voice.proto.packets.tcp.clientbound.SourceLineRegisterPacket
 import su.plo.voice.discs.command.CommandHandler
-import su.plo.voice.discs.command.subcommand.ControlCommand
-import su.plo.voice.discs.command.subcommand.HologramCommand
-import su.plo.voice.discs.command.subcommand.VisualizerCommand
-import su.plo.voice.discs.command.subcommand.PlaylistCommand
-import su.plo.voice.discs.jellyfin.JellyfinLibrary
-import su.plo.voice.discs.command.subcommand.JellyfinCommand
-import su.plo.voice.discs.command.subcommand.EffectCommand
 import su.plo.voice.discs.command.subcommand.BurnCommand
 import su.plo.voice.discs.command.subcommand.CancelCommand
 import su.plo.voice.discs.command.subcommand.EraseCommand
 import su.plo.voice.discs.command.subcommand.SearchCommand
-import su.plo.voice.discs.command.subcommand.ReloadCommand
-import su.plo.voice.discs.command.subcommand.OauthCommand
 import su.plo.voice.discs.crafting.BurnableDiscCraft
 import su.plo.voice.discs.crafting.BurnableHornCraft
 import su.plo.voice.discs.event.ForbidGrindstoneListener
-import su.plo.voice.discs.event.JukeboxSettingsListener
-import su.plo.voice.discs.event.JukeboxBassLamps
-import su.plo.voice.discs.event.JukeboxVisualizer
-import su.plo.voice.discs.event.JukeboxProgressDisplay
 import su.plo.voice.discs.event.JukeboxEventListener
-import su.plo.voice.discs.screen.ScreenCommand
-import su.plo.voice.discs.screen.ScreenEventListener
-import su.plo.voice.discs.screen.ScreenManager
 import su.plo.voice.discs.item.DiscHelper
 import su.plo.voice.discs.item.GoatHornHelper
 import su.plo.voice.discs.packet.CancelJukeboxPlayEvent
-import su.plo.voice.discs.svc.SvcDiscsPlugin
 import su.plo.voice.discs.utils.KOIN_INSTANCE
 import su.plo.voice.discs.utils.LavaplayerDebugLogging
 import su.plo.voice.discs.utils.extend.debug
 import su.plo.voice.discs.utils.extend.getMinecraftVersionInt
 import su.plo.voice.discs.utils.extend.registerBukkit
 import su.plo.voice.discs.v1_19_4.GoatHornListener
+import su.plo.voice.proto.packets.tcp.clientbound.SourceLineRegisterPacket
 
 @Addon(
     id = "vc-addon-discs",
@@ -243,8 +244,8 @@ class DiscsPlugin : JavaPlugin(), Listener {
 
         loadConfig()
 
-        su.plo.voice.discs.utils.PlayerAudience.start(this, scope, pvServer)
-        su.plo.voice.discs.screen.CompanionScreens.start(this)
+        ca.saboor.discs.utils.PlayerAudience.start(this, scope, pvServer)
+        ca.saboor.discs.screen.CompanionScreens.start(this)
         val screenManagerInstance = ScreenManager()
         screenManager = screenManagerInstance
 
@@ -315,7 +316,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
             .addSubCommand { jellyfinCommand }
             .addSubCommand { playlistCommand }
             .addSubCommand { controlCommand }
-            .addSubCommand { su.plo.voice.discs.command.subcommand.PortableCommand(handheldJukeboxes!!) }
+            .addSubCommand { ca.saboor.discs.command.subcommand.PortableCommand(handheldJukeboxes!!) }
             .addSubCommand { hologramCommand }
             .addSubCommand { visualizerCommand }
             .addSubCommand(::EraseCommand)
@@ -357,7 +358,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
         }
 
         screenMapPacketListener = PacketEvents.getAPI().eventManager.registerListener(
-            su.plo.voice.discs.screen.ScreenMapPacketListener(screenManagerInstance),
+            ca.saboor.discs.screen.ScreenMapPacketListener(screenManagerInstance),
             PacketListenerPriority.NORMAL
         )
         PacketEvents.getAPI().eventManager.registerListener(
@@ -386,13 +387,13 @@ class DiscsPlugin : JavaPlugin(), Listener {
         visualizer?.shutdown()
         progressDisplay?.shutdown()
         screenManager?.shutdown()
-        su.plo.voice.discs.screen.CompanionScreens.shutdown()
+        ca.saboor.discs.screen.CompanionScreens.shutdown()
         runBlocking {
             withTimeoutOrNull(5_000L) { scope.coroutineContext.job.cancelAndJoin() }
         }
 
-        su.plo.voice.discs.utils.PlayerAudience.shutdown()
-        su.plo.voice.discs.utils.SettingsFileWriter.shared.close()
+        ca.saboor.discs.utils.PlayerAudience.shutdown()
+        ca.saboor.discs.utils.SettingsFileWriter.shared.close()
 
         if (isPvAvailable()) {
             try {

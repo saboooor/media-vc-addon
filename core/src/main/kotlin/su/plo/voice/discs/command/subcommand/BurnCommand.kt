@@ -1,5 +1,9 @@
 package su.plo.voice.discs.command.subcommand
 
+import ca.saboor.discs.utils.extend.burnMetadata
+import ca.saboor.discs.utils.extend.formatTrackDisplay
+import ca.saboor.discs.utils.extend.suspendSyncAt
+import ca.saboor.discs.utils.extend.suspendSyncFor
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
 import net.kyori.adventure.text.Component
