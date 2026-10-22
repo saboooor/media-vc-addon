@@ -408,3 +408,5 @@ Queues, volume, and selected track are saved on each item and travel with it; pl
 does not automatically resume after reconnecting or restarting. Separately crafted devices
 receive independent identities on first use. Separate stacked unused devices before using
 them. Crafting is available only on Minecraft versions with copper nuggets and amethyst shards.
+
+Jellyfin browsing groups TV episodes under their show. Click a show to open its episodes in numeric season/episode order (including season 0 specials), then click an episode to burn it. Episode lists support pagination and scoped search; **Back to library** restores the library page and filter. Both the dialog and chest views support show navigation.

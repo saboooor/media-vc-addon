@@ -6,6 +6,62 @@ import org.junit.jupiter.api.Test
 import java.net.InetSocketAddress
 
 class JellyfinClientTest {
+    @Test fun `library lists shows instead of episodes and episodes are scoped ordered and paginated`() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val seriesId = "0123456789abcdef0123456789abcdef"
+        val paths = mutableListOf<String>()
+        val episodes = listOf(
+            """{"Id":"00000000000000000000000000000001","Name":"Special","Type":"Episode","ParentIndexNumber":0,"IndexNumber":1}""",
+            """{"Id":"00000000000000000000000000000002","Name":"Zulu","Type":"Episode","ParentIndexNumber":1,"IndexNumber":2}""",
+            """{"Id":"00000000000000000000000000000003","Name":"Alpha","Type":"Episode","ParentIndexNumber":1,"IndexNumber":10}""",
+            """{"Id":"00000000000000000000000000000004","Name":"New season","Type":"Episode","ParentIndexNumber":2,"IndexNumber":1}"""
+        )
+        server.createContext("/jellyfin/Items") { exchange ->
+            val uri = exchange.requestURI
+            paths += uri.toString()
+            val query = uri.rawQuery.split('&').associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('='), "UTF-8") }
+            assertTrue(exchange.requestHeaders.getFirst("Authorization").contains("test-token"))
+            val response = if (query["parentId"] == null) {
+                assertEquals("Audio,AudioBook,Movie,Series,MusicVideo,Video", query["includeItemTypes"])
+                """{"Items":[{"Id":"$seriesId","Name":"A show","Type":"Series","RunTimeTicks":null}],"TotalRecordCount":1}"""
+            } else {
+                assertEquals(seriesId, query["parentId"])
+                assertEquals("Episode", query["includeItemTypes"])
+                assertEquals("true", query["recursive"])
+                assertEquals("false", query["isMissing"])
+                assertEquals("ParentIndexNumber,IndexNumber,SortName", query["sortBy"])
+                assertEquals("Ascending", query["sortOrder"])
+                assertEquals("title & name", query["searchTerm"])
+                val offset = query.getValue("startIndex").toInt()
+                val limit = query.getValue("limit").toInt()
+                """{"Items":[${episodes.drop(offset).take(limit).joinToString(",")}],"TotalRecordCount":4}"""
+            }.toByteArray()
+            exchange.sendResponseHeaders(200, response.size.toLong())
+            exchange.responseBody.use { it.write(response) }
+        }
+        server.start()
+        try {
+            val session = JellyfinClient.Session("http://127.0.0.1:${server.address.port}/jellyfin/", seriesId, "test-token", "device")
+            val client = JellyfinClient()
+            val show = client.browse(session, 0).items.single()
+            assertTrue(show.isSeries)
+            assertEquals("A show", show.browserLabel)
+            val first = client.episodes(session, show.id, 0, "title & name", 2)
+            val second = client.episodes(session, show.id, 1, "title & name", 2)
+            assertEquals(4, first.total)
+            assertEquals(listOf("S00E01 · Special", "S01E02 · Zulu", "S01E10 · Alpha", "S02E01 · New season"),
+                (first.items + second.items).map { it.browserLabel })
+            assertTrue(second.items.none { it.isSeries })
+            assertEquals("", client.episodes(session, show.id, 2, "title & name", 2).items.joinToString())
+            assertTrue(paths.none { "test-token" in it })
+            assertThrows(IllegalArgumentException::class.java) { client.episodes(session, "bad/path", 0) }
+            assertThrows(IllegalArgumentException::class.java) { client.episodes(session, show.id, -1) }
+        } finally { server.stop(0) }
+    }
+    @Test fun `episode labels handle missing numbering without hiding titles`() {
+        assertEquals("S?E? · Pilot", JellyfinClient.Media("id", "Pilot", "", "", 0, "Episode").browserLabel)
+        assertEquals("Artist - Song", JellyfinClient.Media("id", "Song", "Artist", "", 1000).browserLabel)
+    }
     @Test fun `subtitle download uses actual source ID converted SRT and header authentication`() {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val paths = mutableListOf<String>()
@@ -67,7 +123,7 @@ class JellyfinClientTest {
             assertTrue(requests[0].third.contains("a secret"))
             assertFalse(requests[0].second.contains("Token="))
             assertTrue(requests[1].first.contains("startIndex=45"))
-            assertTrue(requests[1].first.contains("includeItemTypes=Audio,AudioBook,Movie,Episode,MusicVideo,Video"))
+            assertTrue(requests[1].first.contains("includeItemTypes=Audio,AudioBook,Movie,Series,MusicVideo,Video"))
             val firstSeek = client.streamUrl(session, page.items.single().id, "Movie", 50_000)
             val secondSeek = client.streamUrl(session, page.items.single().id, "Movie", 50_000)
             val firstSession = firstSeek.substringAfter("playSessionId=")
