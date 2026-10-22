@@ -345,11 +345,14 @@ class AddonConfig {
         @ConfigField(comment = "Enable stable ordered dithering for smoother screen colors and gradients")
         var dithering: Boolean = true
 
-        @ConfigField(comment = "Send full-color JPEG tiles to negotiated Fabric screen companion clients")
+        @ConfigField(comment = "Send full-color video to negotiated Fabric screen companion clients")
         var companionRgb: Boolean = true
 
         @ConfigField(comment = "Companion JPEG quality, 40-95. Higher uses more network bandwidth")
         var companionQuality: Int = 85
+
+        @ConfigField(comment = "Companion resolution: map, 720p, 1080p, or source (up to 4K). Source content is never upscaled; settings apply to new playback")
+        var companionResolution: String = "1080p"
 
         @ConfigField(comment = "Ordered dithering strength in RGB levels (0-32; 0 disables, default 12). Higher values add more visible texture")
         var ditherStrength: Int = 12

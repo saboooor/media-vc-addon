@@ -28,7 +28,7 @@ import org.bukkit.entity.Player
 class VideoPlayer(
     val screen: Screen,
     val sourceUrl: String,
-    val fps: Int = 15,
+    fps: Int = 15,
     val maxDistance: Int = 48,
     val ffmpegPath: String = "ffmpeg",
     val fallbackImageUrl: String? = null,
@@ -38,8 +38,21 @@ class VideoPlayer(
     ditherStrength: Int = 12,
     private val companionRgb: Boolean = true,
     private val companionQuality: Int = 85,
+    private val companionResolution: String = "map",
     val playbackPositionMs: (() -> Long?)? = null
 ) {
+    @Volatile var fps: Int = fps.coerceIn(1, 30)
+        private set
+
+    fun updateFrameRate(value: Int) {
+        val next = value.coerceIn(1, 30)
+        if (fps == next) return
+        fps = next
+        if (isPlaying && !stopped.get()) {
+            restartPlayback(playbackPositionMs?.invoke() ?: displayedPositionMs)
+        }
+    }
+
     @Volatile
     private var process: Process? = null
 
@@ -65,6 +78,9 @@ class VideoPlayer(
 
     private val totalWidth = screen.totalWidthPixels
     private val totalHeight = screen.totalHeightPixels
+    private val videoSize = CompanionResolution.size(totalWidth, totalHeight, if (companionRgb) companionResolution else "map")
+    private val mapScaler = RgbFrameScaler()
+    private val fallbackRgbEncoder = CompanionFrameEncoder()
     private val rows = screen.rows
     private val cols = screen.columns
 
@@ -201,10 +217,7 @@ class VideoPlayer(
             else -> "Mozilla/5.0"
         }, sourceAuthorization) else null
 
-        val frameSizeBytes = totalWidth * totalHeight * 3
-        val rawFrameBuffer = ByteArray(frameSizeBytes)
-        // Preserve HDR precision until transfer/gamut conversion, before quantizing to RGB24.
-        val decodedFrameBuffer = ByteArray(frameSizeBytes * 2)
+        val outputSizeReady = CompletableDeferred<CompanionResolution.Size>()
         val colorInfoReady = CompletableDeferred<VideoColorInfo>()
         var toneMapper: VideoToneMapper? = null
 
@@ -233,7 +246,7 @@ class VideoPlayer(
         // Drop surplus source frames before scaling and padding.
         val audioClock = playbackPositionMs
         val frameTimes = Channel<Long>(Channel.UNLIMITED)
-        val filter = videoFilter(fps, totalWidth, totalHeight)
+        val filter = videoFilter(fps, videoSize.width, videoSize.height, videoSize.width != totalWidth || videoSize.height != totalHeight)
         // With linked audio, pace by decoded frame timestamps rather than a second wall clock.
         command.add((if (audioClock != null) filter.removeSuffix(",realtime") else filter) + ",showinfo=checksum=0")
         // Raw RGB needs no frame-threaded encoder queue; flush each frame to the renderer.
@@ -286,6 +299,7 @@ class VideoPlayer(
                 try {
                     proc.errorStream.bufferedReader().useLines { lines ->
                         lines.forEach { line ->
+                            if (!outputSizeReady.isCompleted) CompanionResolution.parseOutputSize(line)?.let { outputSizeReady.complete(it) }
                             VideoAudioSync.timestamp(line)?.let { frameTimes.trySend(it) }
                             if (!colorInfoReady.isCompleted) {
                                 if (line.startsWith("Output #0,")) outputStarted = true
@@ -307,8 +321,11 @@ class VideoPlayer(
                             }
                         }
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    outputSizeReady.completeExceptionally(e)
                 } finally {
+                    // With no video output, retain the normal zero-frame artwork fallback.
+                    outputSizeReady.complete(videoSize)
                     frameTimes.close()
                     colorInfoReady.complete(inputColor ?: VideoColorInfo())
                 }
@@ -335,6 +352,11 @@ class VideoPlayer(
                     }
                 }
             }
+
+            val outputSize = outputSizeReady.await()
+            val frameSizeBytes = outputSize.width * outputSize.height * 3
+            val rawFrameBuffer = ByteArray(frameSizeBytes)
+            val decodedFrameBuffer = ByteArray(frameSizeBytes * 2)
 
             while (!stopped.get() && currentCoroutineContext().isActive) {
                 if (isPaused) {
@@ -376,7 +398,7 @@ class VideoPlayer(
                     val nearbyPlayers = getNearbyPlayers()
                     if (nearbyPlayers.isEmpty()) {
                         // Drain decoded frames to preserve timing, but do no color/render work.
-                        sliceAndSend(rawFrameBuffer, nearbyPlayers)
+                        sliceAndSend(rawFrameBuffer, nearbyPlayers, outputSize.width, outputSize.height)
                         continue
                     }
                     val mapper = toneMapper ?: VideoToneMapper(colorInfoReady.await().also { color ->
@@ -385,7 +407,7 @@ class VideoPlayer(
                         }
                     }).also { toneMapper = it }
                     mapper.convert(decodedFrameBuffer, rawFrameBuffer)
-                    sliceAndSend(rawFrameBuffer, nearbyPlayers)
+                    sliceAndSend(rawFrameBuffer, nearbyPlayers, outputSize.width, outputSize.height)
                 } finally {
                     renderMonitor.endRead()
                 }
@@ -595,7 +617,7 @@ class VideoPlayer(
     }
 
     @Synchronized
-    private fun sliceAndSend(rawFrame: ByteArray, players: List<Player>) {
+    private fun sliceAndSend(sourceFrame: ByteArray, players: List<Player>, width: Int = totalWidth, height: Int = totalHeight) {
         if (stopped.get()) return
         mapViewers.update(players.map { it.uniqueId })
         if (players.isEmpty()) {
@@ -603,14 +625,16 @@ class VideoPlayer(
             companionRecipients.clear()
             return
         }
+        val rawFrame = mapScaler.scale(sourceFrame, width, height, totalWidth, totalHeight)
         val newViewers = players.filter { previousViewers[it.uniqueId] !== it }
         val existingViewers = players.filter { previousViewers[it.uniqueId] === it }
         val playerManager = PacketEvents.getAPI().playerManager
 
         if (companionRgb && players.any(CompanionScreens::capable)) {
             try {
-                val jpeg = rgbEncoder.encode(rawFrame, totalWidth, rows * 128, companionQuality)
                 val capable = players.filter(CompanionScreens::capable)
+                val jpeg = try { rgbEncoder.encode(sourceFrame, width, height, companionQuality) }
+                    catch (_: IllegalArgumentException) { fallbackRgbEncoder.encode(rawFrame, totalWidth, totalHeight, companionQuality) }
                 val recipients = companionRecipients.select(jpeg, capable, System.nanoTime())
                 if (recipients.isNotEmpty()) CompanionScreens.frame(screen, jpeg, recipients)
             } catch (e: Exception) {
@@ -707,10 +731,13 @@ class VideoPlayer(
             "-reconnect_delay_max", "5"
         )
 
-        internal fun videoFilter(fps: Int, width: Int, height: Int): String {
+        internal fun videoFilter(fps: Int, width: Int, height: Int, preventUpscale: Boolean = false): String {
+            val scale = if (preventUpscale) "scale='min(iw,$width)':'min(ih,$height)':force_original_aspect_ratio=decrease,"
+                else "scale=$width:$height:force_original_aspect_ratio=decrease,"
             val base = "fps='if(gt(source_fps,0),min(source_fps,$fps),$fps)'," +
-                "scale=$width:$height:force_original_aspect_ratio=decrease," +
-                "pad=$width:$height:(ow-iw)/2:(oh-ih)/2:black"
+                scale +
+                (if (preventUpscale) "pad=w='max(iw,ceil(ih*$width/$height))':h='max(ih,ceil(iw*$height/$width))':x=(ow-iw)/2:y=(oh-ih)/2:color=black"
+                else "pad=$width:$height:(ow-iw)/2:(oh-ih)/2:black")
             return "$base,realtime"
         }
 

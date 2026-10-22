@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ScreensClient implements ClientModInitializer {
     private record Encoded(long session, long revision, byte[] jpeg, int columns, int rows, int[] maps) {}
-    private record Decoded(long session, long revision, int[] pixels, int columns, int rows, int[] maps) {}
+    private record Decoded(long session, long revision, int[] pixels, int width, int height, int columns, int rows, int[] maps) {}
     public record Texture(Identifier id, DynamicTexture image, int columns, int rows, int[] maps) {}
     private static final FrameAssembler assembler = new FrameAssembler();
     private static final Map<Integer, Integer> anchors = new HashMap<>();
@@ -47,13 +47,19 @@ public class ScreensClient implements ClientModInitializer {
             if (client.level != level) { reset(); level = client.level; }
             // Bukkit advertises its plugin channels after the play connection is established.
             if (++ticks % 100 == 0 && ClientPlayNetworking.canSend(HelloPayload.TYPE)) ClientPlayNetworking.send(new HelloPayload());
-            int uploaded = 0;
-            for (int id : decoded.keySet()) {
-                Decoded frame = decoded.remove(id);
-                if (frame != null && frame.session == session && Objects.equals(revisions.get(id), frame.revision)) upload(id, frame);
-                if (++uploaded == 8) break;
-            }
         });
+    }
+
+    /** Called on the render thread before drawing, independently of the 20 Hz game tick. */
+    public static void uploadReadyFrames() {
+        var client = Minecraft.getInstance();
+        if (client.level != level) { reset(); level = client.level; }
+        int uploaded = 0;
+        for (int id : decoded.keySet()) {
+            Decoded frame = decoded.remove(id);
+            if (frame != null && frame.session == session && Objects.equals(revisions.get(id), frame.revision)) upload(id, frame);
+            if (++uploaded == LIMIT) break;
+        }
     }
 
     private static void accept(byte[] bytes) {
@@ -79,9 +85,9 @@ public class ScreensClient implements ClientModInitializer {
                         var reader = readers.next();
                         try {
                             reader.setInput(input);
-                            if (reader.getWidth(0) != frame.columns * 128 || reader.getHeight(0) != frame.rows * 128) continue;
+                            if (!VideoDimensions.valid(reader.getWidth(0), reader.getHeight(0))) continue;
                             var image = reader.read(0);
-                            decoded.put(id, new Decoded(frame.session, frame.revision, image.getRGB(0, 0, image.getWidth(), image.getHeight(), null, 0, image.getWidth()), frame.columns, frame.rows, frame.maps));
+                            decoded.put(id, new Decoded(frame.session, frame.revision, image.getRGB(0, 0, image.getWidth(), image.getHeight(), null, 0, image.getWidth()), image.getWidth(), image.getHeight(), frame.columns, frame.rows, frame.maps));
                         } finally { reader.dispose(); }
                     } catch (Exception ignored) { /* Keep palette or last valid RGB texture. */ }
                 }
@@ -93,11 +99,12 @@ public class ScreensClient implements ClientModInitializer {
     }
 
     private static void upload(int id, Decoded frame) {
-        int width = frame.columns * 128, height = frame.rows * 128;
+        int width = frame.width, height = frame.height;
         if (width > 8192 || height > 8192) return;
         Texture texture = textures.get(id);
         if (texture != null && (texture.columns != frame.columns || texture.rows != frame.rows
-                || !Arrays.equals(texture.maps, frame.maps))) { release(id); texture = null; }
+                || texture.image.getPixels() == null || texture.image.getPixels().getWidth() != width
+                || texture.image.getPixels().getHeight() != height || !Arrays.equals(texture.maps, frame.maps))) { release(id); texture = null; }
         if (texture == null) {
             if (textures.size() >= LIMIT) release(textures.keySet().iterator().next());
             Identifier name = Identifier.fromNamespaceAndPath("vcb_screens", "screen/" + id);

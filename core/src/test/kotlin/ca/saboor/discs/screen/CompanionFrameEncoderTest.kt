@@ -30,6 +30,14 @@ class CompanionFrameEncoderTest {
         assertNotSame(encoded, encoder.encode(source, 256, 256, 85))
     }
 
+    @Test fun `HD JPEG dimensions are independent of map tile layout`() {
+        val source = ByteArray(1920 * 1080 * 3) { 80 }
+        val encoded = CompanionFrameEncoder().encode(source, 1920, 1080, 85)
+        val image = ImageIO.read(ByteArrayInputStream(encoded))
+        assertEquals(1920, image.width)
+        assertEquals(1080, image.height)
+    }
+
     @Test fun `complete JPEG may exceed one plugin message`() {
         val source = Random(23).nextBytes(512 * 256 * 3)
         val encoded = CompanionFrameEncoder().encode(source, 512, 256, 95)

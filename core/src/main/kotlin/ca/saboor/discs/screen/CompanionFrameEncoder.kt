@@ -14,7 +14,7 @@ internal class CompanionFrameEncoder {
     private var cachedHeight = 0
     private var cachedQuality = 0
     fun encode(rgb: ByteArray, screenWidth: Int, screenHeight: Int, quality: Int): ByteArray {
-        require(screenWidth > 0 && screenHeight > 0 && screenWidth.toLong() * screenHeight <= 256L * 128 * 128)
+        require(screenWidth in 1..8192 && screenHeight in 1..8192 && screenWidth.toLong() * screenHeight <= 8_294_400L)
         if (pixels.size != screenWidth * screenHeight) { pixels = IntArray(screenWidth * screenHeight); cached = null }
         val jpegQuality = quality.coerceIn(40, 95)
         var changed = cached == null || cachedWidth != screenWidth || cachedHeight != screenHeight || cachedQuality != jpegQuality

@@ -15,6 +15,7 @@ class VideoFrameRateTest {
         for ((sourceRate, cap, expectedFrames) in listOf(
             Triple("12", 30, 24),
             Triple("60", 15, 30),
+            Triple("30", 3, 6),
             Triple("24000/1001", 30, 48)
         )) {
             val process = ProcessBuilder(

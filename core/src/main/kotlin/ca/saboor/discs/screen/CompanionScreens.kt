@@ -14,6 +14,8 @@ import org.bukkit.plugin.messaging.PluginMessageListener
 
 /** Only negotiated clients receive RGB. No media URL or authentication token leaves the server. */
 object CompanionScreens : Listener, PluginMessageListener {
+    const val PROTOCOL = 3
+    internal fun supportsProtocol(message: ByteArray) = message.contentEquals(byteArrayOf(PROTOCOL.toByte()))
     const val HELLO = "vcb:screen_hello"
     const val FRAME = "vcb:screen_rgb"
     const val CLEAR = "vcb:screen_clear"
@@ -26,7 +28,9 @@ object CompanionScreens : Listener, PluginMessageListener {
         plugin.server.pluginManager.registerEvents(this, plugin)
     }
     override fun onPluginMessageReceived(channel: String, player: Player, message: ByteArray) {
-        if (channel == HELLO && message.contentEquals(byteArrayOf(2))) clients[player.uniqueId] = player
+        if (channel == HELLO && supportsProtocol(message)) {
+            clients[player.uniqueId] = player
+        }
     }
     fun capable(player: Player) = clients.containsKey(player.uniqueId)
     private val sequence = java.util.concurrent.atomic.AtomicInteger()

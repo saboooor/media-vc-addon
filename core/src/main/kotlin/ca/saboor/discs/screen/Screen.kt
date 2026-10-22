@@ -26,7 +26,13 @@ data class Screen(
     var subtitleLanguage: String? = null,
     var subtitleTrackIndex: Int? = null,
     var subtitleMediaId: String? = null,
+    @Volatile var videoFps: Int? = null,
 ) {
+    fun effectiveVideoFps(serverMax: Int): Int {
+        val maximum = serverMax.coerceIn(5, 30)
+        return (videoFps ?: maximum).coerceIn(1, maximum)
+    }
+
     val facing: BlockFace
         get() = try {
             BlockFace.valueOf(facingName)

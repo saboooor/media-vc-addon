@@ -9,10 +9,10 @@ public record HelloPayload() implements CustomPacketPayload {
     public static final Type<HelloPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath("vcb", "screen_hello"));
     public static final StreamCodec<RegistryFriendlyByteBuf, HelloPayload> CODEC = new StreamCodec<>() {
         @Override public HelloPayload decode(RegistryFriendlyByteBuf buf) {
-            if (buf.readableBytes() != 1 || buf.readByte() != 2) throw new IllegalArgumentException("Screen protocol mismatch");
+            if (buf.readableBytes() != 1 || buf.readByte() != 3) throw new IllegalArgumentException("Screen protocol mismatch");
             return new HelloPayload();
         }
-        @Override public void encode(RegistryFriendlyByteBuf buf, HelloPayload payload) { buf.writeByte(2); }
+        @Override public void encode(RegistryFriendlyByteBuf buf, HelloPayload payload) { buf.writeByte(3); }
     };
     @Override public Type<? extends CustomPacketPayload> type() { return TYPE; }
 }

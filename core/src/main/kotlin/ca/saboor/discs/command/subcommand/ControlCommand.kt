@@ -282,6 +282,15 @@ class ControlCommand(
             val screen = screenManager?.getScreenForJukebox(block)
             if (screen != null) {
                 body += Component.text("Linked screen: ${screen.name} (${screen.columns}x${screen.rows} frames)", NamedTextColor.AQUA)
+                val maxFps = screenManager!!.maxVideoFps
+                val fps = screen.effectiveVideoFps(maxFps)
+                body += Component.text("Video FPS: up to $fps (server max: $maxFps)", NamedTextColor.GRAY)
+                buttons += "FPS −1" to (prefix + "screen_fps_${(fps - 1).coerceAtLeast(1)}")
+                buttons += "FPS +1" to (prefix + "screen_fps_${(fps + 1).coerceAtMost(maxFps)}")
+                for (preset in listOf(1, 5, 10, 15, 20, 24, 25, 30).filter { it <= maxFps }) {
+                    buttons += "$preset FPS${if (fps == preset) " ✓" else ""}" to (prefix + "screen_fps_$preset")
+                }
+                buttons += "FPS: Server default ($maxFps)" to (prefix + "screen_fps_auto")
                 body += Component.text("Subtitles: ${if (screen.subtitlesEnabled) "Enabled" else "Disabled"}", NamedTextColor.GRAY)
                 buttons += "Subtitles: ${if (screen.subtitlesEnabled) "On" else "Off"}" to (prefix + "screen_subtitles")
                 buttons += "Unlink Screen" to (prefix + "screen_unlink")
@@ -427,6 +436,17 @@ class ControlCommand(
         }
         sessions.remove(player.uniqueId, session)
         val controls = session.controls
+        if (arguments[2].startsWith("screen_fps_")) {
+            if (!player.isOp && !player.hasPermission("pv.addon.discs.screen") &&
+                !player.hasPermission("vc.addon.discs.screen")) return
+            val manager = screenManager ?: return
+            val screen = manager.getScreenForJukebox(session.block) ?: return
+            val value = arguments[2].removePrefix("screen_fps_")
+            val fps = if (value == "auto") null else value.toIntOrNull() ?: return
+            if (!manager.setVideoFps(screen, fps)) return
+            show(player, session.block, screenMenu = true)
+            return
+        }
         if (arguments[2].startsWith("viz_face_")) {
             val facing = VisualizerFacing.entries.firstOrNull {
                 arguments[2] == "viz_face_${it.name.lowercase()}"

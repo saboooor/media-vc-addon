@@ -50,6 +50,7 @@ object VideoSourceResolver {
         ytdlpPath: String = "yt-dlp",
         artworkUrl: String? = null,
         isYouTubeMusic: Boolean = false,
+        highResolution: Boolean = false,
     ): String {
         val trimmed = identifier.trim()
         val videoId = extractYouTubeVideoId(trimmed)
@@ -58,7 +59,7 @@ object VideoSourceResolver {
 
         if (isYt) {
             // Option 1: Try yt-dlp if installed on server
-            val ytdlpResolved = tryResolveWithYtDlp(trimmed, ytdlpPath)
+            val ytdlpResolved = tryResolveWithYtDlp(trimmed, ytdlpPath, highResolution)
             if (ytdlpResolved != null) {
                 logger.info("Resolved video stream via yt-dlp for '$trimmed'")
                 return ytdlpResolved
@@ -66,7 +67,7 @@ object VideoSourceResolver {
 
             // Option 2: Try resolving via Lavaplayer's YouTube source formats
             if (targetId != null && audioPlayerManager != null) {
-                val lpResolved = tryResolveWithLavaPlayer(targetId, audioPlayerManager)
+                val lpResolved = tryResolveWithLavaPlayer(targetId, audioPlayerManager, highResolution)
                 if (lpResolved != null) return lpResolved
             }
 
@@ -80,13 +81,13 @@ object VideoSourceResolver {
         return trimmed
     }
 
-    private fun tryResolveWithYtDlp(url: String, ytdlpPath: String): String? {
+    private fun tryResolveWithYtDlp(url: String, ytdlpPath: String, highResolution: Boolean): String? {
         return try {
             val process = ProcessBuilder(
                 ytdlpPath,
                 "-g",
                 "-f",
-                "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio/best",
+                if (highResolution) "bestvideo[ext=mp4]/bestvideo/best" else "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio/best",
                 "--no-playlist",
                 url
             ).redirectErrorStream(true).start()
@@ -107,7 +108,7 @@ object VideoSourceResolver {
         }
     }
 
-    private fun tryResolveWithLavaPlayer(videoId: String, audioPlayerManager: PlasmoAudioPlayerManager): String? {
+    private fun tryResolveWithLavaPlayer(videoId: String, audioPlayerManager: PlasmoAudioPlayerManager, highResolution: Boolean): String? {
         val ytSource = audioPlayerManager.getYoutubeSourceManager() ?: return null
         return try {
             val http = ytSource.`interface`
@@ -129,10 +130,10 @@ object VideoSourceResolver {
 
                         if (videoFormats.isEmpty()) continue
 
-                        val selected = videoFormats.filter { (it.type?.mimeType ?: "").contains("mp4") }
+                        val selected = (if (highResolution) videoFormats.maxByOrNull { it.bitrate } else videoFormats.filter { (it.type?.mimeType ?: "").contains("mp4") }
                             .minByOrNull { kotlin.math.abs(it.bitrate - 1_500_000) }
                             ?: videoFormats.minByOrNull { kotlin.math.abs(it.bitrate - 1_500_000) }
-                            ?: videoFormats.firstOrNull()
+                            ?: videoFormats.firstOrNull())
                             ?: continue
 
                         var finalUri = selected.url

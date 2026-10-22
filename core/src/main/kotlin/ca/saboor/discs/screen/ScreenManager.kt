@@ -380,7 +380,8 @@ class ScreenManager : PluginKoinComponent {
                 audioPlayerManager = audioPlayerManager,
                 ytdlpPath = config.screen.ytdlpPath,
                 artworkUrl = artworkUrl,
-                isYouTubeMusic = isYouTubeMusic
+                isYouTubeMusic = isYouTubeMusic,
+                highResolution = config.screen.companionRgb && config.screen.companionResolution.lowercase() in setOf("720p", "1080p", "source")
             )
 
             val resolvedFfmpegPath = FFmpegResolver.resolve(
@@ -397,8 +398,9 @@ class ScreenManager : PluginKoinComponent {
                 playbackPositionMs = playbackPositionMs,
                 companionRgb = config.screen.companionRgb,
                 companionQuality = config.screen.companionQuality,
+                companionResolution = config.screen.companionResolution,
                 ditherStrength = if (config.screen.dithering) config.screen.ditherStrength.coerceIn(0, 32) else 0,
-                fps = config.screen.fps.coerceIn(5, 30),
+                fps = screen.effectiveVideoFps(maxVideoFps),
                 maxDistance = config.screen.maxDistance.coerceIn(8, 128),
                 ffmpegPath = resolvedFfmpegPath,
                 fallbackImageUrl = fallbackImg,
@@ -417,6 +419,7 @@ class ScreenManager : PluginKoinComponent {
                     "Screen '${screen.name}' playback starting: source='${VideoPlayer.describeSource(resolvedUrl)}', ffmpeg='$resolvedFfmpegPath'"
                 )
                 activePlayers[lower] = videoPlayer
+                videoPlayer.updateFrameRate(screen.effectiveVideoFps(maxVideoFps))
                 videoPlayer.start(requestedPositions[lower] ?: startPositionMs)
             }
             if (jellyfin != null) {
@@ -444,6 +447,18 @@ class ScreenManager : PluginKoinComponent {
             activeYouTubeMusic.remove(lower)
             activePlayers.remove(lower)?.stop()
         }
+    }
+
+    val maxVideoFps: Int get() = config.screen.fps.coerceIn(5, 30)
+
+    fun setVideoFps(screen: Screen, fps: Int?): Boolean {
+        if (fps != null && fps !in 1..maxVideoFps) return false
+        synchronized(playbackLock) {
+            screen.videoFps = fps
+            activePlayers[screen.name.lowercase(Locale.ROOT)]?.updateFrameRate(screen.effectiveVideoFps(maxVideoFps))
+        }
+        saveScreens()
+        return true
     }
 
     fun toggleSubtitles(screen: Screen): Boolean {

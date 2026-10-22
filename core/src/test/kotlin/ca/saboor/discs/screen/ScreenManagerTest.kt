@@ -13,6 +13,24 @@ class ScreenManagerTest {
     private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
 
     @Test
+    fun `screen fps persists and follows server maximum for old saves`() {
+        val screen = Screen("tv", "world", "NORTH", 1, 1, emptyList(), emptyList())
+        val oldSave = gson.toJson(screen)
+        val restored = gson.fromJson(oldSave, Screen::class.java)
+        assertNull(restored.videoFps)
+        assertEquals(30, restored.effectiveVideoFps(30))
+        restored.videoFps = 12
+        val saved = gson.fromJson(gson.toJson(restored), Screen::class.java)
+        assertEquals(12, saved.videoFps)
+        assertEquals(12, saved.effectiveVideoFps(30))
+        assertEquals(10, saved.effectiveVideoFps(10))
+        saved.videoFps = -5
+        assertEquals(1, saved.effectiveVideoFps(30))
+        saved.videoFps = null
+        assertEquals(15, saved.effectiveVideoFps(15))
+    }
+
+    @Test
     fun `screen serializes and deserializes correctly with json`() {
         val screen = Screen(
             name = "cinema",
