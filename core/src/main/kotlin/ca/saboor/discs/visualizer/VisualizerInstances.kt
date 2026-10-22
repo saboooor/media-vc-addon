@@ -49,23 +49,66 @@ class SpeakerEnvelope {
 class BassLampEnvelope {
     private var previous = 0f
     private var pulse = 0f
+    private var baseline = 0f
     private var sustained = 0f
+    private var sustainTicks = 0
+    private var rollingPeak = 0.80f
+    var beatCount = 0
+        private set
+    var isBuzzing = false
+        private set
     var lit = false
         private set
     fun update(bass: Float, falloff: Double = 0.2): Boolean {
-        val value = bass.coerceIn(0f, 1f)
+        val raw = bass.coerceIn(0f, 1f)
+        if (raw > rollingPeak) {
+            rollingPeak = rollingPeak * 0.4f + raw * 0.6f
+        } else if (raw > 0.02f) {
+            // Very slow peak decay (~0.985 per 50ms tick) so rollingPeak stays anchored to true peaks
+            // rather than dropping to the average background level between beats.
+            rollingPeak = (rollingPeak * 0.985f + raw * 0.015f).coerceIn(0.35f, 1.0f)
+        }
+        val value = if (raw <= 0.02f) raw
+        else (raw / rollingPeak.coerceAtLeast(0.35f) * 0.80f).coerceAtLeast(raw).coerceIn(0f, 1f)
+
+        // Slow baseline tracks steady background music energy so normal songs still turn off between beats,
+        // while genuine high-energy sustained sections (long bass sub-drops / sustained synths) stay lit.
+        baseline = if (value < baseline) baseline * 0.65f + value * 0.35f
+        else baseline * 0.92f + value * 0.08f
+
         // Invalid configuration falls back to the original response; endpoints are intentional.
         val retention = if (falloff.isFinite()) falloff.coerceIn(0.0, 1.0).toFloat() else 0.2f
+        val transient = (value - previous).coerceAtLeast(0f) * 3f
+        val prominentHold = raw >= 0.46f && value >= 0.56f && (value >= baseline * 0.92f)
         sustained = when {
-            value >= 0.35f -> (sustained * 0.6f + value * 0.4f).coerceIn(0f, 1f)
-            value >= 0.22f -> sustained * 0.75f
+            prominentHold -> (sustained * 0.55f + value * 0.45f).coerceIn(0f, 1f)
+            value >= 0.42f -> sustained * 0.60f
             else -> 0f
         }
-        val transient = (value - previous).coerceAtLeast(0f) * 3f
-        val hold = max(value * 0.6f, if (sustained >= 0.38f) sustained * 1.05f else sustained * 0.7f)
-        pulse = max(max(transient, pulse * retention), hold).coerceIn(0f, 1f)
+        sustainTicks = if (prominentHold) sustainTicks + 1 else 0
+
+        val wasLit = lit
+        val veryLoudSustain = sustainTicks >= 3 && raw >= 0.72f && value >= 0.80f && sustained >= 0.72f
+        isBuzzing = veryLoudSustain && transient < 0.45f
+        if (isBuzzing) {
+            // Buzz/flicker only when a sustained section is really, really loud;
+            // ordinary sustained bass/highs stay solidly lit below.
+            val rising = value > previous + 0.03f
+            lit = !lit || rising
+            pulse = if (lit) max(sustained, value * 0.6f).coerceAtLeast(0.45f) else 0.15f
+        } else {
+            val hold = if (sustainTicks >= 2 && sustained >= 0.52f) {
+                sustained * 0.78f
+            } else {
+                (value - baseline * 0.6f).coerceAtLeast(0f) * 0.5f
+            }
+            pulse = max(max(transient, pulse * retention), hold).coerceIn(0f, 1f)
+            lit = if (lit) pulse > 0.22f else pulse > 0.40f
+        }
+        if (lit && (!wasLit || (sustainTicks <= 1 && transient >= 0.40f))) {
+            beatCount++
+        }
         previous = value
-        lit = if (lit) pulse > 0.2f else pulse > 0.4f
         return lit
     }
 }

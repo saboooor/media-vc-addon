@@ -8,6 +8,7 @@ import ca.saboor.discs.event.JukeboxProgressDisplay
 import ca.saboor.discs.event.JukeboxVisualizer
 import ca.saboor.discs.screen.ScreenManager
 import ca.saboor.discs.visualizer.LightBand
+import ca.saboor.discs.visualizer.LightBlock
 import ca.saboor.discs.visualizer.VisualizerFacing
 import ca.saboor.discs.visualizer.VisualizerKind
 import java.util.UUID
@@ -124,7 +125,7 @@ class ControlCommand(
         show(player, block, hologram = true)
     }
 
-    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null, speakers: Boolean = false, visualizerSelection: Boolean = false, queueMenu: Boolean = false, volumeMenu: Boolean = false, lampMenu: Boolean = false, screenMenu: Boolean = false, effectsMenu: Boolean = false, eqMenu: Boolean = false, subtitlesMenu: Boolean = false) {
+    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null, speakers: Boolean = false, visualizerSelection: Boolean = false, queueMenu: Boolean = false, volumeMenu: Boolean = false, lampMenu: Boolean = false, lampFalloffMenu: Boolean = false, screenMenu: Boolean = false, effectsMenu: Boolean = false, eqMenu: Boolean = false, subtitlesMenu: Boolean = false) {
         val record = block.asJukebox()?.record?.clone() ?: return
         val controls = jukeboxes.controlsByBlock[block]
         val visualizers = visualizer?.instances(block).orEmpty()
@@ -265,14 +266,36 @@ class ControlCommand(
         }
         if (lampMenu) {
             val lamps = bassLamps ?: return show(player, block)
+            lamps.cancelLink(player)
             controls?.let { if (lamps.isAutoFalloff(block)) it.tempoAnalysis = true }
             buttons.clear()
             queueLabels.clear()
             body.clear()
             val count = lamps.count(block)
             body += Component.text("Lights: $count linked", NamedTextColor.GOLD)
-            body += Component.text("Choose a band, then click a lamp to link it or change its response.")
+            body += Component.text("Click 'Configure lights' to receive a dye for each frequency band, then right-click light blocks with the dye to set their type (sneak-click or click the jukebox when done).")
             body += Component.text("Deep bass follows low thumps; low mids follow warmth; vocal range follows mids; sparkle follows bright highs. Full spectrum responds across all bands.", NamedTextColor.GRAY)
+            body += Component.text("Supported blocks: ${LightBlock.supportedBlockNames.joinToString(", ")}", NamedTextColor.AQUA)
+            val isAuto = lamps.isAutoFalloff(block)
+            val falloff = (lamps.falloff(block) * 100).toInt()
+            val bpm = lamps.currentBpm(block)?.toInt()
+            val falloffSummary = if (isAuto) {
+                val bpmText = if (bpm != null) "$bpm BPM → $falloff%" else "detecting tempo..."
+                "Auto ($bpmText)"
+            } else "$falloff%"
+            body += Component.text("Light falloff: $falloffSummary", NamedTextColor.GOLD)
+            val waveMode = lamps.isWaveMode(block)
+            val chaseMode = lamps.isChaseMode(block)
+            bodyLampButtons(buttons, prefix, count, lamps.isHighlighting(block), waveMode, chaseMode)
+            buttons += "Back to playback" to (prefix + "refresh")
+        }
+        if (lampFalloffMenu) {
+            val lamps = bassLamps ?: return show(player, block)
+            lamps.cancelLink(player)
+            controls?.let { if (lamps.isAutoFalloff(block)) it.tempoAnalysis = true }
+            buttons.clear()
+            queueLabels.clear()
+            body.clear()
             val isAuto = lamps.isAutoFalloff(block)
             val falloff = (lamps.falloff(block) * 100).toInt()
             val bpm = lamps.currentBpm(block)?.toInt()
@@ -282,12 +305,12 @@ class ControlCommand(
             } else {
                 body += Component.text("Light falloff: $falloff% · higher keeps flashes lit longer", NamedTextColor.GRAY)
             }
+            body += Component.text("Auto falloff is enabled by default and adjusts how quickly lights fade after each beat based on the song's BPM.", NamedTextColor.GRAY)
             buttons += "Falloff −10%" to (prefix + "lamp_falloff_${(falloff - 10).coerceAtLeast(0)}")
             buttons += "Falloff +10%" to (prefix + "lamp_falloff_${(falloff + 10).coerceAtMost(100)}")
             buttons += (if (isAuto) "✓ Auto falloff (tempo)" else "Auto falloff (tempo)") to (prefix + "lamp_falloff_auto")
             buttons += "Reset falloff (20%)" to (prefix + "lamp_falloff_20")
-            bodyLampButtons(buttons, prefix, count, lamps.isHighlighting(block))
-            buttons += "Back to playback" to (prefix + "refresh")
+            buttons += "Back to lights" to (prefix + "lamp_menu")
         }
         if (screenMenu) {
             if (screenManager == null || !canManageScreens) return show(player, block)
@@ -414,7 +437,7 @@ class ControlCommand(
             }
             buttons += "Back to playback" to (prefix + "refresh")
         }
-        val dialogTitle = if (lampMenu) "Lights" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Manage holograms" else if (crossfade) "Mixing" else if (eqMenu) "Equalizer" else if (effectsMenu) "Audio effects" else "Jukebox controls"
+        val dialogTitle = if (lampFalloffMenu) "Light falloff" else if (lampMenu) "Lights" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Manage holograms" else if (crossfade) "Mixing" else if (eqMenu) "Equalizer" else if (effectsMenu) "Audio effects" else "Jukebox controls"
         try {
             PaperPlaybackDialog.show(player, listOf(Component.join(net.kyori.adventure.text.JoinConfiguration.newlines(), body)), buttons, queueLabels, dialogTitle, 2)
         } catch (_: ClassNotFoundException) {
@@ -430,12 +453,20 @@ class ControlCommand(
     }
 
     companion object {
-        internal fun bodyLampButtons(buttons: MutableList<Pair<String, String>>, prefix: String, count: Int, isShowing: Boolean = false) {
-            for (band in LightBand.entries)
-                buttons += "Set light: ${band.label}" to (prefix + "lamp_link_${band.name.lowercase()}")
+        internal fun bodyLampButtons(
+            buttons: MutableList<Pair<String, String>>,
+            prefix: String,
+            count: Int,
+            isShowing: Boolean = false,
+            waveMode: Boolean = false,
+            chaseMode: Boolean = false,
+        ) {
+            buttons += "Configure lights" to (prefix + "lamp_link")
+            buttons += "Falloff settings" to (prefix + "lamp_falloff_menu")
+            buttons += (if (waveMode) "✓ Wave ripple mode" else "Wave ripple mode") to (prefix + "lamp_wave")
+            buttons += (if (chaseMode) "✓ Beat chase mode" else "Beat chase mode") to (prefix + "lamp_chase")
             if (count > 0) {
                 buttons += (if (isShowing) "Hide lights" else "Show lights") to (prefix + "lamp_show")
-                buttons += "Unlink light ($count linked)" to (prefix + "lamp_unlink")
                 buttons += "Unset all lights" to (prefix + "lamp_unset_all")
             }
         }
@@ -457,20 +488,24 @@ class ControlCommand(
         }
         sessions.remove(player.uniqueId, session)
         val controls = session.controls
+        if (arguments[2] == "lamp_falloff_menu") {
+            show(player, session.block, lampFalloffMenu = true)
+            return
+        }
         if (arguments[2] == "lamp_falloff_auto") {
             val lamps = bassLamps ?: return
             val next = !lamps.isAutoFalloff(session.block)
             lamps.setAutoFalloff(session.block, next)
             session.controls?.let { if (next) it.tempoAnalysis = true }
             player.sendMessage(Component.text(if (next) "Automatic tempo-based light falloff enabled." else "Automatic light falloff disabled."))
-            show(player, session.block, lampMenu = true)
+            show(player, session.block, lampFalloffMenu = true)
             return
         }
         if (arguments[2].startsWith("lamp_falloff_")) {
             val amount = arguments[2].removePrefix("lamp_falloff_").toIntOrNull() ?: return
             if (amount !in 0..100) return
             bassLamps?.setFalloff(session.block, amount / 100.0) ?: return
-            show(player, session.block, lampMenu = true)
+            show(player, session.block, lampFalloffMenu = true)
             return
         }
         if (arguments[2].startsWith("screen_fps_")) {
@@ -550,6 +585,20 @@ class ControlCommand(
                 }
                 bassLamps?.beginLink(player, session.block, unlink = arguments[2] == "lamp_unlink",
                     band = LightBand.entries.firstOrNull { arguments[2] == "lamp_link_${it.name.lowercase()}" } ?: LightBand.BASS)
+                return
+            }
+            "lamp_wave" -> {
+                val lamps = bassLamps ?: return
+                val enabled = lamps.toggleWaveMode(session.block)
+                player.sendMessage(Component.text(if (enabled) "Wave ripple mode enabled (lights ripple outward by distance)." else "Wave ripple mode disabled."))
+                show(player, session.block, lampMenu = true)
+                return
+            }
+            "lamp_chase" -> {
+                val lamps = bassLamps ?: return
+                val enabled = lamps.toggleChaseMode(session.block)
+                player.sendMessage(Component.text(if (enabled) "Beat chase mode enabled (paired lights alternate on beats)." else "Beat chase mode disabled."))
+                show(player, session.block, lampMenu = true)
                 return
             }
             "lamp_unset_all" -> {

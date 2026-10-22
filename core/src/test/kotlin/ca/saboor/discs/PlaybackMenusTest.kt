@@ -27,6 +27,7 @@ class PlaybackMenusTest {
     @Test fun `lamp menu includes unset all lights and show hide lights button when lights are linked`() {
         val buttons = mutableListOf<Pair<String, String>>()
         ca.saboor.discs.command.subcommand.ControlCommand.bodyLampButtons(buttons, "/disc control token ", 0)
+        assertTrue(buttons.any { it.first == "Falloff settings" && it.second.endsWith("lamp_falloff_menu") })
         assertFalse(buttons.any { it.first == "Unset all lights" })
         assertFalse(buttons.any { it.second.endsWith("lamp_unset_all") })
         assertFalse(buttons.any { it.first == "Show lights" })
@@ -40,8 +41,8 @@ class PlaybackMenusTest {
         assertTrue(buttons.any { it.second.endsWith("lamp_show") })
         assertTrue(buttons.any { it.first == "Unset all lights" })
         assertTrue(buttons.any { it.second.endsWith("lamp_unset_all") })
-        assertTrue(buttons.any { it.first == "Unlink light (3 linked)" })
-        assertTrue(buttons.any { it.second.endsWith("lamp_unlink") })
+        assertFalse(buttons.any { it.first.startsWith("Unlink light") })
+        assertFalse(buttons.any { it.second.endsWith("lamp_unlink") })
 
         buttons.clear()
         ca.saboor.discs.command.subcommand.ControlCommand.bodyLampButtons(buttons, "/disc control token ", 3, isShowing = true)
@@ -63,5 +64,24 @@ class PlaybackMenusTest {
         val defaultLamp = ca.saboor.discs.event.JukeboxBassLamps.Link(pos, jukePos, null, null)
         assertEquals("Redstone Lamp", defaultLamp.blockTypeName)
         assertEquals("Bass", (defaultLamp.band ?: ca.saboor.discs.visualizer.LightBand.BASS).label)
+    }
+
+    @Test fun `lamp menu includes configure lights button wave and chase toggles and distinct dye mappings`() {
+        val buttons = mutableListOf<Pair<String, String>>()
+        ca.saboor.discs.command.subcommand.ControlCommand.bodyLampButtons(
+            buttons, "/disc control token ", 2, isShowing = false, waveMode = true, chaseMode = true
+        )
+        assertTrue(buttons.any { it.first == "Configure lights" && it.second.endsWith("lamp_link") })
+        assertTrue(buttons.any { it.first == "✓ Wave ripple mode" && it.second.endsWith("lamp_wave") })
+        assertTrue(buttons.any { it.first == "✓ Beat chase mode" && it.second.endsWith("lamp_chase") })
+
+        val dyeMaterials = ca.saboor.discs.visualizer.LightBand.entries.map { band ->
+            ca.saboor.discs.event.JukeboxBassLamps.bandDyeMaterial(band)
+        }
+        assertEquals(ca.saboor.discs.visualizer.LightBand.entries.size, dyeMaterials.distinct().size, "Each light band should have a distinct dye item")
+        for (band in ca.saboor.discs.visualizer.LightBand.entries) {
+            assertEquals(band, ca.saboor.discs.event.JukeboxBassLamps.bandFromDyeMaterial(ca.saboor.discs.event.JukeboxBassLamps.bandDyeMaterial(band)))
+        }
+        assertTrue(ca.saboor.discs.visualizer.LightBlock.supportedBlockNames.contains("Wool (color-changing)"))
     }
 }

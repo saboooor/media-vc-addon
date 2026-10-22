@@ -73,4 +73,21 @@ class BeaconShutterTest {
         assertSame(glass, f.topData)
         assertEquals(0, f.beaconWrites)
     }
+
+    @Test fun `dynamic stained glass shutter cycles colors when lit and restores empty on cleanup`() {
+        val f = Fixture()
+        val redGlass = data(BeaconShutter.glassForStep(0))
+        val cyanGlass = data(BeaconShutter.glassForStep(4))
+        assertEquals(Material.RED_STAINED_GLASS, redGlass.material)
+        assertEquals(Material.CYAN_STAINED_GLASS, cyanGlass.material)
+
+        BeaconShutter.update(f.beacon, f.empty, f.closed, true, redGlass)
+        assertSame(redGlass, f.topData)
+        BeaconShutter.update(f.beacon, f.empty, f.closed, true, cyanGlass)
+        assertSame(cyanGlass, f.topData)
+        BeaconShutter.update(f.beacon, f.empty, f.closed, false, cyanGlass)
+        assertSame(f.closed, f.topData)
+        BeaconShutter.update(f.beacon, f.empty, f.closed, true, f.empty)
+        assertSame(f.empty, f.topData)
+    }
 }

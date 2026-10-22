@@ -86,31 +86,63 @@ class LightFalloffTest {
         assertEquals(0.35, falloff)
     }
 
-    @Test fun `sustained bass or highs keep the light on continuously until the section ends`() {
-        val envelope = BassLampEnvelope()
-        // Initial hit followed by a long sustained bass/highs passage at moderate-high intensity (0.50f)
-        assertTrue(envelope.update(0.75f))
-        repeat(40) {
-            assertTrue(envelope.update(0.50f), "Light should stay lit throughout sustained band activity")
+    @Test fun `normal sustained bass or highs stay solidly lit while very loud sustained sections flicker`() {
+        val normalSustain = BassLampEnvelope()
+        assertTrue(normalSustain.update(0.70f))
+        repeat(15) {
+            assertTrue(normalSustain.update(0.60f), "Strong sustained bass/highs should stay solidly lit without flickering")
+            assertFalse(normalSustain.isBuzzing)
         }
-        // Brief 1-frame phase dip during sustained note should not flicker off
-        assertTrue(envelope.update(0.26f))
-        assertTrue(envelope.update(0.50f))
+        assertFalse(normalSustain.update(0f))
 
-        // When the sustained section drops to silence, the light turns off
+        val loudBuzz = BassLampEnvelope()
+        assertTrue(loudBuzz.update(0.95f))
+        assertTrue(loudBuzz.update(0.90f))
+        val states = (1..20).map { loudBuzz.update(0.90f) }
+        assertTrue(loudBuzz.isBuzzing)
+        assertTrue(states.any { it }, "Very loud sustained buzz should flash on")
+        assertTrue(states.any { !it }, "Very loud sustained buzz should flicker off between pulses")
+        assertFalse(loudBuzz.update(0f))
+    }
+
+    @Test fun `smooth swells stay solidly lit on sustained passages and flicker only when peaking very loud`() {
+        val envelope = BassLampEnvelope()
+        for (level in listOf(0.15f, 0.30f, 0.45f, 0.58f)) {
+            envelope.update(level)
+        }
+        repeat(10) {
+            assertTrue(envelope.update(0.58f), "Smooth sustained swells should hold solid on")
+        }
+        // Swell up to a very loud sustained peak
+        val loudStates = (1..20).map { envelope.update(0.90f) }
+        assertTrue(loudStates.any { it })
+        assertTrue(loudStates.any { !it }, "Once the sustained passage reaches very loud levels, it should flicker")
         assertFalse(envelope.update(0f))
     }
 
-    @Test fun `smooth swells without a sharp transient still light up during sustained passages`() {
+    @Test fun `steady background music between beats turns off instead of staying permanently lit`() {
         val envelope = BassLampEnvelope()
-        // Gradual fade-in where each step delta is small (< 0.12f)
-        for (level in listOf(0.10f, 0.20f, 0.30f, 0.40f, 0.48f, 0.50f, 0.50f)) {
-            envelope.update(level)
+        // Simulate a song with 0.35 continuous background instrumentation and periodic 0.80 beats
+        var offCount = 0
+        var onCount = 0
+        for (tick in 0 until 60) {
+            val isBeat = tick % 10 == 0
+            val lit = envelope.update(if (isBeat) 0.80f else 0.35f, falloff = 0.2)
+            if (lit) onCount++ else offCount++
         }
-        assertTrue(envelope.lit, "Smoothly swelling sustained highs/bass should turn the light on")
-        repeat(20) {
-            assertTrue(envelope.update(0.48f))
-        }
-        assertFalse(envelope.update(0f))
+        assertTrue(onCount >= 6, "Beats should flash the light on")
+        assertTrue(offCount >= 30, "Steady background music between beats should let the light turn off")
+    }
+
+    @Test fun `rolling peak automatic gain normalization triggers lights on quiet tracks and increments beat count`() {
+        val envelope = BassLampEnvelope()
+        // Feed quiet background frames so rollingPeak decays to its quiet floor
+        repeat(200) { envelope.update(0.03f) }
+        // A quiet transient (0.12f) that would fail unnormalized threshold (0.12*3 = 0.36 < 0.40) triggers cleanly with AGC
+        assertTrue(envelope.update(0.12f))
+        assertEquals(1, envelope.beatCount)
+        assertFalse(envelope.update(0.0f))
+        assertTrue(envelope.update(0.12f))
+        assertEquals(2, envelope.beatCount)
     }
 }

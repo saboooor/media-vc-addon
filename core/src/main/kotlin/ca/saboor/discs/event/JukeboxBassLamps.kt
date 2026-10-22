@@ -16,9 +16,11 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
+import net.kyori.adventure.text.format.TextDecoration
 import org.bukkit.Bukkit
 import org.bukkit.Location
 import org.bukkit.Material
+import org.bukkit.NamespacedKey
 import org.bukkit.block.Block
 import org.bukkit.block.data.Lightable
 import org.bukkit.entity.Entity
@@ -27,10 +29,17 @@ import org.bukkit.entity.Player
 import org.bukkit.event.*
 import org.bukkit.event.block.*
 import org.bukkit.event.entity.EntityExplodeEvent
+import org.bukkit.event.entity.PlayerDeathEvent
+import org.bukkit.event.inventory.InventoryClickEvent
+import org.bukkit.event.inventory.InventoryDragEvent
+import org.bukkit.event.player.PlayerDropItemEvent
 import org.bukkit.event.player.PlayerInteractEvent
 import org.bukkit.event.player.PlayerQuitEvent
+import org.bukkit.event.player.PlayerSwapHandItemsEvent
 import org.bukkit.event.world.ChunkUnloadEvent
 import org.bukkit.inventory.EquipmentSlot
+import org.bukkit.inventory.ItemStack
+import org.bukkit.persistence.PersistentDataType
 import org.bukkit.plugin.java.JavaPlugin
 import org.koin.core.component.inject
 import su.plo.voice.api.server.PlasmoVoiceServer
@@ -58,31 +67,70 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                 return mat.name.lowercase().split('_').joinToString(" ") { it.replaceFirstChar(Char::titlecase) }
             }
     }
-    private data class Pending(val jukebox: Block, val unlink: Boolean, val band: LightBand = LightBand.BASS, val expires: Long = System.currentTimeMillis() + 120_000)
+    private data class Pending(val jukebox: Block, val unlink: Boolean = false, val band: LightBand = LightBand.BASS, val savedHotbar: Array<ItemStack?>? = null, val expires: Long = System.currentTimeMillis() + 180_000)
+    private val toolKey by lazy { NamespacedKey(plugin, "light_dye_tool") }
+
+    companion object {
+        fun bandDyeMaterial(band: LightBand): Material = when (band) {
+            LightBand.DEEP_BASS -> Material.RED_DYE
+            LightBand.BASS -> Material.ORANGE_DYE
+            LightBand.LOW_MIDS -> Material.YELLOW_DYE
+            LightBand.MID -> Material.LIME_DYE
+            LightBand.VOCALS -> Material.CYAN_DYE
+            LightBand.HIGHS -> Material.LIGHT_BLUE_DYE
+            LightBand.SPARKLE -> Material.MAGENTA_DYE
+            LightBand.FULL -> Material.WHITE_DYE
+        }
+
+        fun bandFromDyeMaterial(material: Material): LightBand? =
+            LightBand.entries.firstOrNull { bandDyeMaterial(it) == material }
+    }
     private val plugin: JavaPlugin by inject()
     private val scope: CoroutineScope by inject()
     private val voiceServer: PlasmoVoiceServer? by getterOrNull()
     private val links = ConcurrentHashMap<Position, Link>()
     private val pending = ConcurrentHashMap<UUID, Pending>()
     private val falloffs = ConcurrentHashMap<Position, Double>()
-    private val autoFalloffs = ConcurrentHashMap.newKeySet<Position>()
-    fun isAutoFalloff(jukebox: Block): Boolean = autoFalloffs.contains(Position.of(jukebox))
+    private val waveModes = ConcurrentHashMap.newKeySet<Position>()
+    private val chaseModes = ConcurrentHashMap.newKeySet<Position>()
+    fun isAutoFalloff(jukebox: Block): Boolean = !falloffs.containsKey(Position.of(jukebox))
     fun setAutoFalloff(jukebox: Block, auto: Boolean = true) {
         val pos = Position.of(jukebox)
-        if (auto) autoFalloffs.add(pos) else autoFalloffs.remove(pos)
+        if (auto) {
+            falloffs.remove(pos)
+        } else if (!falloffs.containsKey(pos)) {
+            falloffs[pos] = jukeboxes.controlsByBlock[jukebox]?.tempoFalloff() ?: 0.2
+        }
+    }
+    fun isWaveMode(jukebox: Block): Boolean = waveModes.contains(Position.of(jukebox))
+    fun setWaveMode(jukebox: Block, enabled: Boolean = true) {
+        val pos = Position.of(jukebox)
+        if (enabled) waveModes.add(pos) else waveModes.remove(pos)
+    }
+    fun toggleWaveMode(jukebox: Block): Boolean {
+        val next = !isWaveMode(jukebox)
+        setWaveMode(jukebox, next)
+        return next
+    }
+    fun isChaseMode(jukebox: Block): Boolean = chaseModes.contains(Position.of(jukebox))
+    fun setChaseMode(jukebox: Block, enabled: Boolean = true) {
+        val pos = Position.of(jukebox)
+        if (enabled) chaseModes.add(pos) else chaseModes.remove(pos)
+    }
+    fun toggleChaseMode(jukebox: Block): Boolean {
+        val next = !isChaseMode(jukebox)
+        setChaseMode(jukebox, next)
+        return next
     }
     private fun effectiveFalloff(jukebox: Position, controls: PlaybackControls?): Double {
-        if (autoFalloffs.contains(jukebox)) {
-            val tempo = controls?.tempoFalloff()
-            if (tempo != null) return tempo
-        }
-        return falloffs[jukebox] ?: 0.2
+        val manual = falloffs[jukebox]
+        if (manual != null) return manual
+        return controls?.tempoFalloff() ?: 0.2
     }
     fun falloff(jukebox: Block): Double =
         effectiveFalloff(Position.of(jukebox), jukeboxes.controlsByBlock[jukebox])
     fun setFalloff(jukebox: Block, value: Double) {
         require(value.isFinite() && value in 0.0..1.0)
-        autoFalloffs.remove(Position.of(jukebox))
         falloffs[Position.of(jukebox)] = value
     }
     fun currentBpm(jukebox: Block): Double? = jukeboxes.controlsByBlock[jukebox]?.currentBpm
@@ -245,7 +293,9 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     }
 
     private data class SourceBandKey(val jukebox: Position, val band: LightBand)
+    private data class BandTickState(val lit: Boolean = false, val beatCount: Int = 0, val isBuzzing: Boolean = false, val colorStep: Int = 0)
     private val envelopes = ConcurrentHashMap<SourceBandKey, BassLampEnvelope>()
+    private val bandHistories = ConcurrentHashMap<SourceBandKey, ArrayDeque<BandTickState>>()
     private val litLamps = ConcurrentHashMap.newKeySet<Position>()
     private val consumers = ConcurrentHashMap.newKeySet<PlaybackControls>()
     private val gson = GsonBuilder().setPrettyPrinting().create()
@@ -264,9 +314,82 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         }).also { index = it }
     }
 
+    private fun createToolItem(action: String, material: Material, name: Component, loreLines: List<Component>): ItemStack {
+        val stack = ItemStack(material)
+        val meta = stack.itemMeta ?: return stack
+        meta.displayName(name.decoration(TextDecoration.ITALIC, false))
+        meta.lore(loreLines.map { it.decoration(TextDecoration.ITALIC, false) })
+        runCatching { meta.persistentDataContainer.set(toolKey, PersistentDataType.STRING, action) }
+        stack.itemMeta = meta
+        return stack
+    }
+
+    private fun toolAction(item: ItemStack?): String? {
+        if (item == null || item.type == Material.AIR) return null
+        val meta = item.itemMeta ?: return null
+        val tag = runCatching { meta.persistentDataContainer.get(toolKey, PersistentDataType.STRING) }.getOrNull()
+        if (tag != null) return tag
+        bandFromDyeMaterial(item.type)?.let { return it.name }
+        if (item.type == Material.BLACK_DYE || item.type == Material.SHEARS) return "UNLINK"
+        return null
+    }
+
+    private fun isToolItem(item: ItemStack?): Boolean {
+        if (item == null || item.type == Material.AIR) return false
+        val meta = item.itemMeta ?: return false
+        return runCatching { meta.persistentDataContainer.has(toolKey, PersistentDataType.STRING) }.getOrDefault(false)
+    }
+
+    private fun restoreHotbar(player: Player, saved: Array<ItemStack?>?) {
+        if (saved == null) return
+        val inv = player.inventory
+        for (slot in 0..8) {
+            inv.setItem(slot, saved.getOrNull(slot))
+        }
+    }
+
+    fun isLinking(player: Player): Boolean = pending.containsKey(player.uniqueId)
+
     fun beginLink(player: Player, jukebox: Block, unlink: Boolean = false, band: LightBand = LightBand.BASS) {
-        pending[player.uniqueId] = Pending(jukebox, unlink, band)
-        player.sendMessage(Component.text("Right-click a solid light-emitting block within 32 blocks of this jukebox to ${if (unlink) "unlink" else "link"} it (2 minutes)."))
+        cancelLink(player, notify = false)
+        val inv = player.inventory
+        val savedHotbar = Array(9) { slot -> inv.getItem(slot)?.clone() }
+        LightBand.entries.forEachIndexed { idx, b ->
+            val name = Component.text("✦ ${b.label} ✦", bandTextColor(b))
+            val lore = listOf(
+                Component.text("Right-click a light block to set to ${b.label}", NamedTextColor.GRAY),
+                Component.text("Sneak-right-click or click jukebox to finish", NamedTextColor.DARK_GRAY),
+            )
+            inv.setItem(idx, createToolItem(b.name, bandDyeMaterial(b), name, lore))
+        }
+        val unlinkItem = createToolItem(
+            "UNLINK",
+            Material.BLACK_DYE,
+            Component.text("✦ Unlink Light / Finish ✦", NamedTextColor.RED),
+            listOf(
+                Component.text("Right-click a linked light to unlink it", NamedTextColor.GRAY),
+                Component.text("Sneak-right-click or click jukebox to finish", NamedTextColor.DARK_GRAY),
+            )
+        )
+        inv.setItem(8, unlinkItem)
+        inv.heldItemSlot = if (unlink) 8 else band.ordinal.coerceIn(0, 7)
+        pending[player.uniqueId] = Pending(jukebox, unlink, band, savedHotbar)
+        showHighlights(jukebox, durationMs = 180_000L)
+        player.sendMessage(
+            Component.text(
+                "Equipped light dyes in your hotbar! Select a dye and right-click lights within 32 blocks to set their type (slot 9 unlinks). Sneak-right-click or click the jukebox when done.",
+                NamedTextColor.GOLD
+            )
+        )
+    }
+
+    fun cancelLink(player: Player, notify: Boolean = false) {
+        val removed = pending.remove(player.uniqueId) ?: return
+        restoreHotbar(player, removed.savedHotbar)
+        hideHighlights(removed.jukebox)
+        if (notify) {
+            player.sendMessage(Component.text("Finished configuring lights.", NamedTextColor.GREEN))
+        }
     }
     fun linkedPositions(jukebox: Block) = linkedIndex().sources[Position.of(jukebox)].orEmpty().map { it.lamp }
     fun linkedBands(jukebox: Block) = linkedIndex().sources[Position.of(jukebox)].orEmpty().map { it.band ?: LightBand.BASS }
@@ -293,8 +416,14 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     fun unsetAll(jukebox: Block): Int {
         hideHighlights(jukebox)
         val target = Position.of(jukebox)
-        pending.values.removeIf { Position.of(it.jukebox) == target }
+        pending.entries.removeIf { (uuid, req) ->
+            if (Position.of(req.jukebox) == target) {
+                Bukkit.getPlayer(uuid)?.let { restoreHotbar(it, req.savedHotbar) }
+                true
+            } else false
+        }
         envelopes.keys.removeIf { it.jukebox == target }
+        bandHistories.keys.removeIf { it.jukebox == target }
         var count = 0
         for (link in links.values.toList()) {
             if (link.jukebox == target) {
@@ -311,29 +440,56 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     fun onClick(event: PlayerInteractEvent) {
-        if (event.action != Action.RIGHT_CLICK_BLOCK || event.hand != EquipmentSlot.HAND) return
-        val request = pending[event.player.uniqueId] ?: return
-        val lamp = event.clickedBlock ?: return
-        if (!links.containsKey(Position.of(lamp)) && !LightBlock.supports(lamp.blockData)) return
-        if (System.currentTimeMillis() > request.expires) { pending.remove(event.player.uniqueId); return }
+        if (event.hand != EquipmentSlot.HAND) return
         val player = event.player
-        if (!(player.hasPermission("pv.addon.discs.control") || player.hasPermission("vc.addon.discs.control")) ||
-            !(player.hasPermission("pv.addon.discs.play") || player.hasPermission("vc.addon.discs.play"))) return
-        if (lamp.world != request.jukebox.world || lamp.location.distanceSquared(request.jukebox.location) > 32 * 32 ||
-            request.jukebox.type != Material.JUKEBOX) {
-            player.sendMessage(Component.text("Choose a solid light-emitting block within 32 blocks of the jukebox."))
+        val request = pending[player.uniqueId] ?: return
+        if (System.currentTimeMillis() > request.expires) {
+            cancelLink(player, notify = true)
             return
         }
-        if (!request.unlink && lamp.type == Material.BEACON && links[Position.of(lamp)]?.shutterData == null &&
+        val rightClick = event.action == Action.RIGHT_CLICK_BLOCK || event.action == Action.RIGHT_CLICK_AIR
+        if (!rightClick) return
+        val lamp = event.clickedBlock
+        if (lamp == request.jukebox) {
+            cancelLink(player, notify = true)
+            return
+        }
+        val heldAction = toolAction(player.inventory.itemInMainHand)
+        if (player.isSneaking && (lamp == null || (!links.containsKey(Position.of(lamp)) && !LightBlock.supports(lamp.blockData)))) {
+            event.isCancelled = true
+            cancelLink(player, notify = true)
+            return
+        }
+        if (lamp == null) {
+            if (heldAction != null) event.isCancelled = true
+            return
+        }
+        if (!links.containsKey(Position.of(lamp)) && !LightBlock.supports(lamp.blockData)) {
+            if (heldAction != null) event.isCancelled = true
+            return
+        }
+        if (!(player.hasPermission("pv.addon.discs.control") || player.hasPermission("vc.addon.discs.control")) ||
+            !(player.hasPermission("pv.addon.discs.play") || player.hasPermission("vc.addon.discs.play"))) {
+            cancelLink(player)
+            return
+        }
+        if (lamp.world != request.jukebox.world || lamp.location.distanceSquared(request.jukebox.location) > 32 * 32 ||
+            request.jukebox.type != Material.JUKEBOX) {
+            event.isCancelled = true
+            player.sendMessage(Component.text("Choose a supported light block within 32 blocks of the jukebox."))
+            return
+        }
+        val unlink = heldAction == "UNLINK" || (heldAction == null && request.unlink)
+        val band = heldAction?.let { act -> LightBand.entries.firstOrNull { it.name == act } } ?: request.band
+        if (!unlink && lamp.type == Material.BEACON && links[Position.of(lamp)]?.shutterData == null &&
             BeaconShutter.capture(lamp) == null) {
             event.isCancelled = true
             player.sendMessage(Component.text("Leave the block directly above the beacon empty for its beam shutter."))
             return
         }
         event.isCancelled = true
-        pending.remove(player.uniqueId)
         val key = Position.of(lamp)
-        if (request.unlink) {
+        if (unlink) {
             if (links[key]?.jukebox != Position.of(request.jukebox)) {
                 player.sendMessage(Component.text("That lamp is not linked to this jukebox.")); return
             }
@@ -343,15 +499,57 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         } else {
             val original = links[key]?.originalData ?: lamp.blockData.asString
             val shutter = links[key]?.shutterData ?: if (lamp.type == Material.BEACON) BeaconShutter.capture(lamp)?.asString else null
-            links[key] = Link(key, Position.of(request.jukebox), request.band, original, shutter)
+            links[key] = Link(key, Position.of(request.jukebox), band, original, shutter)
             litLamps.remove(key)
         }
         save()
-        if (isHighlighting(request.jukebox)) {
-            if (count(request.jukebox) > 0) showHighlights(request.jukebox)
-            else hideHighlights(request.jukebox)
+        val remaining = count(request.jukebox)
+        if (player.isSneaking) {
+            cancelLink(player, notify = false)
+            player.sendMessage(Component.text(if (unlink) "Light unlinked (finished)." else "Light set to ${band.label.lowercase()} (finished).", NamedTextColor.GREEN))
+        } else {
+            pending[player.uniqueId] = request.copy(expires = System.currentTimeMillis() + 180_000)
+            if (remaining > 0) showHighlights(request.jukebox, durationMs = 180_000L) else hideHighlights(request.jukebox)
+            player.sendMessage(Component.text(if (unlink) "Light unlinked ($remaining linked). Sneak-click or click jukebox when done." else "Light set to ${band.label} ($remaining linked).", bandTextColor(band)))
         }
-        player.sendMessage(Component.text(if (request.unlink) "Light unlinked." else "Light set to ${request.band.label.lowercase()}."))
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun onDropTool(event: PlayerDropItemEvent) {
+        if (pending.containsKey(event.player.uniqueId)) {
+            event.isCancelled = true
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun onSwapTool(event: PlayerSwapHandItemsEvent) {
+        if (pending.containsKey(event.player.uniqueId)) {
+            event.isCancelled = true
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun onInventoryClickTool(event: InventoryClickEvent) {
+        val player = event.whoClicked as? Player ?: return
+        if (pending.containsKey(player.uniqueId)) {
+            event.isCancelled = true
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun onInventoryDragTool(event: InventoryDragEvent) {
+        val player = event.whoClicked as? Player ?: return
+        if (pending.containsKey(player.uniqueId)) {
+            event.isCancelled = true
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    fun onDeathTool(event: PlayerDeathEvent) {
+        val req = pending.remove(event.entity.uniqueId) ?: return
+        event.drops.removeIf(::isToolItem)
+        req.savedHotbar?.filterNotNull()?.filter { it.type != Material.AIR }?.forEach { event.drops.add(it) }
+        hideHighlights(req.jukebox)
     }
 
     fun start() {
@@ -392,23 +590,46 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                     PlayerAudience.positions(it.world, it.x.toDouble(), it.y.toDouble(), it.z.toDouble(), 64.0)
                 }
 
-                // Precompute the synchronized target lit state for each active jukebox and band.
+                // Precompute the synchronized target state and history for each active jukebox and band.
                 // This ensures all lamps across all chunks on the same jukebox band receive the exact
-                // same state at the exact same audio frame, eliminating inter-chunk envelope divergence.
-                val targetLitStates = mutableMapOf<SourceBandKey, Boolean>()
+                // same state at the exact same audio frame, while supporting distance-delayed wave mode
+                // and alternating beat-chase mode.
                 val activeJukeboxes = sourceControls.keys
                 envelopes.keys.removeIf { it.jukebox !in activeJukeboxes }
+                bandHistories.keys.removeIf { it.jukebox !in activeJukeboxes }
                 for ((sourcePos, controls) in sourceControls) {
                     if (controls.paused) {
                         envelopes.keys.removeIf { it.jukebox == sourcePos }
+                        bandHistories.keys.removeIf { it.jukebox == sourcePos }
                         continue
                     }
                     val falloff = effectiveFalloff(sourcePos, controls)
                     val levels = controls.spectrum.levels
+                    val nonFullBands = LightBand.entries.filter { it != LightBand.FULL }
+                    val dominantBand = nonFullBands.maxByOrNull { it.level(levels) } ?: LightBand.BASS
                     for (band in LightBand.entries) {
                         val key = SourceBandKey(sourcePos, band)
                         val env = envelopes.computeIfAbsent(key) { BassLampEnvelope() }
-                        targetLitStates[key] = env.update(band.level(levels), falloff)
+                        val lit = env.update(band.level(levels), falloff)
+                        val effectiveColorBand = if (band == LightBand.FULL) dominantBand else band
+                        val colorStep = LightBlock.bandColorOffset(effectiveColorBand) + env.beatCount
+                        val state = BandTickState(lit = lit, beatCount = env.beatCount, isBuzzing = env.isBuzzing, colorStep = colorStep)
+                        val history = bandHistories.computeIfAbsent(key) { ArrayDeque(16) }
+                        synchronized(history) {
+                            history.addFirst(state)
+                            while (history.size > 16) history.removeLast()
+                        }
+                    }
+                }
+
+                // Assign deterministic parity indices (0 or 1) per (jukebox, band) for Beat Chase mode.
+                val lampParities = HashMap<Position, Int>()
+                val bandGroupSizes = HashMap<SourceBandKey, Int>()
+                for ((sourcePos, jukeLinks) in snapshot.sources) {
+                    for ((band, group) in jukeLinks.groupBy { it.band ?: LightBand.BASS }) {
+                        val sorted = group.sortedWith(compareBy({ it.lamp.x }, { it.lamp.y }, { it.lamp.z }))
+                        bandGroupSizes[SourceBandKey(sourcePos, band)] = sorted.size
+                        sorted.forEachIndexed { idx, l -> lampParities[l.lamp] = idx and 1 }
                     }
                 }
 
@@ -443,9 +664,35 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                                         }
                                         if (listening) active.add(controls)
                                         val band = link.band ?: LightBand.BASS
-                                        val lit = listening && !controls.paused && (targetLitStates[SourceBandKey(link.jukebox, band)] == true)
-                                        if (lit) litLamps.add(link.lamp) else litLamps.remove(link.lamp)
-                                        setLit(lamp, link, lit)
+                                        val key = SourceBandKey(link.jukebox, band)
+                                        val history = bandHistories[key]
+                                        val delayTicks = if (waveModes.contains(link.jukebox)) {
+                                            val dx = (link.lamp.x - link.jukebox.x).toDouble()
+                                            val dy = (link.lamp.y - link.jukebox.y).toDouble()
+                                            val dz = (link.lamp.z - link.jukebox.z).toDouble()
+                                            val dist = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+                                            (dist / 3.0).toInt().coerceIn(0, 12)
+                                        } else 0
+                                        val state = if (history != null) {
+                                            synchronized(history) {
+                                                if (history.isEmpty()) BandTickState()
+                                                else history[delayTicks.coerceAtMost(history.size - 1)]
+                                            }
+                                        } else BandTickState()
+                                        val parity = lampParities[link.lamp] ?: 0
+                                        val useChase = chaseModes.contains(link.jukebox) && (bandGroupSizes[key] ?: 0) >= 2
+                                        val effectiveLit = if (!listening || controls.paused) {
+                                            false
+                                        } else if (!useChase) {
+                                            state.lit
+                                        } else if (state.isBuzzing) {
+                                            if (parity == 0) state.lit else !state.lit
+                                        } else {
+                                            state.lit && ((state.beatCount and 1) == parity)
+                                        }
+                                        val colorStep = state.colorStep + parity
+                                        if (effectiveLit) litLamps.add(link.lamp) else litLamps.remove(link.lamp)
+                                        setLit(lamp, link, effectiveLit, colorStep)
                                     }
                                 }
                             }
@@ -453,7 +700,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                     }
                 }
                 if (dirty.get()) save()
-                val autoFalloffControls = sourceControls.filter { autoFalloffs.contains(it.key) }.values.toSet()
+                val autoFalloffControls = sourceControls.filter { !falloffs.containsKey(it.key) }.values.toSet()
                 autoFalloffControls.forEach { it.tempoAnalysis = true }
                 active.forEach { it.tempoAnalysis = true }
                 active.filterNot { it in consumers }.forEach { it.setVisualizing(true, "bass_lamps") }
@@ -471,10 +718,10 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     private fun original(link: Link) = LightBlock.original(link.originalData)
         ?: Bukkit.createBlockData(Material.REDSTONE_LAMP)
     private fun matches(block: Block, link: Link) = LightBlock.matches(block, original(link))
-    private fun setLit(block: Block, link: Link, lit: Boolean) {
+    private fun setLit(block: Block, link: Link, lit: Boolean, colorStep: Int = 0) {
         val original = original(link)
         if (original.material != Material.BEACON) {
-            LightBlock.update(block, original, lit)
+            LightBlock.update(block, original, lit, colorStep)
             return
         }
         // Recover beacons darkened by older versions once, then leave the beacon untouched.
@@ -487,13 +734,14 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
             save()
         }
         val empty = LightBlock.original(shutter) ?: return
-        BeaconShutter.update(block, empty, Bukkit.createBlockData(Material.BLACK_CONCRETE), lit)
+        val litData = runCatching { Bukkit.createBlockData(BeaconShutter.glassForStep(colorStep)) }.getOrNull() ?: empty
+        BeaconShutter.update(block, empty, Bukkit.createBlockData(Material.BLACK_CONCRETE), lit, litData)
     }
     private fun restore(block: Block, link: Link) {
         val original = original(link)
         if (original.material == Material.BEACON) {
             link.shutterData?.let(LightBlock::original)?.let {
-                BeaconShutter.update(block, it, Bukkit.createBlockData(Material.BLACK_CONCRETE), true)
+                BeaconShutter.update(block, it, Bukkit.createBlockData(Material.BLACK_CONCRETE), true, it)
             }
         }
         LightBlock.restore(block, original)
@@ -509,8 +757,10 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         val broken = blocks.map(Position::of).toSet()
         broken.forEach {
             falloffs.remove(it)
-            autoFalloffs.remove(it)
+            waveModes.remove(it)
+            chaseModes.remove(it)
             envelopes.keys.removeIf { key -> key.jukebox == it }
+            bandHistories.keys.removeIf { key -> key.jukebox == it }
             highlightJobs.remove(it)?.cancel()
             highlights.remove(it)?.forEach { h -> safeRemove(h.blockDisplay); safeRemove(h.textDisplay) }
         }
@@ -525,7 +775,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     }
     private fun isShutter(block: Block): Boolean {
         val position = Position.of(block)
-        return block.type == Material.BLACK_CONCRETE &&
+        return (block.type == Material.BLACK_CONCRETE || BeaconShutter.isShutterGlass(block.type)) &&
             links[position.copy(y = position.y - 1)]?.shutterData != null
     }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -571,7 +821,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
             }
         }
     }
-    @EventHandler fun onQuit(event: PlayerQuitEvent) { pending.remove(event.player.uniqueId) }
+    @EventHandler fun onQuit(event: PlayerQuitEvent) { cancelLink(event.player) }
     fun shutdown() {
         updater?.cancel()
         save()
@@ -580,6 +830,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         highlightJobs.values.forEach { it.cancel() }; highlightJobs.clear()
         highlights.values.flatten().forEach { safeRemove(it.blockDisplay); safeRemove(it.textDisplay) }
         highlights.clear()
-        pending.clear(); envelopes.clear(); litLamps.clear()
+        pending.forEach { (uuid, req) -> Bukkit.getPlayer(uuid)?.let { restoreHotbar(it, req.savedHotbar) } }
+        pending.clear(); envelopes.clear(); bandHistories.clear(); litLamps.clear()
     }
 }

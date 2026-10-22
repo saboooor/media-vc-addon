@@ -64,7 +64,34 @@ class LightBlockTest {
         assertTrue(LightBlock.supports(data(Material.BEACON)))
         assertTrue(LightBlock.supports(data(Material.GLOWSTONE)))
         assertTrue(LightBlock.supports(data(Material.SHROOMLIGHT)))
+        assertTrue(LightBlock.supports(data(Material.WHITE_WOOL)))
+        assertTrue(LightBlock.supports(data(Material.CYAN_WOOL)))
         assertFalse(LightBlock.supports(data(Material.STONE)))
         assertFalse(LightBlock.supports(data(Material.TORCH)))
+    }
+
+    @Test fun `wool blocks cycle colors when lit turn black wool when off and restore original wool color`() {
+        val original = data(Material.WHITE_WOOL)
+        val fixture = Fixture(original)
+        val resolver: (Material) -> BlockData = { mat -> data(mat) }
+
+        // Turn on at step 0 -> RED_WOOL
+        LightBlock.update(fixture.block, original, true, colorStep = 0, colorResolver = resolver)
+        assertEquals(Material.RED_WOOL, fixture.data.material)
+        assertTrue(LightBlock.matches(fixture.block, original))
+
+        // Turn on at step 4 -> CYAN_WOOL
+        LightBlock.update(fixture.block, original, true, colorStep = 4, colorResolver = resolver)
+        assertEquals(Material.CYAN_WOOL, fixture.data.material)
+        assertTrue(LightBlock.matches(fixture.block, original))
+
+        // Turn off -> BLACK_WOOL
+        LightBlock.update(fixture.block, original, false, colorStep = 4, colorResolver = resolver)
+        assertEquals(Material.BLACK_WOOL, fixture.data.material)
+        assertTrue(LightBlock.matches(fixture.block, original))
+
+        // Restore -> WHITE_WOOL
+        LightBlock.restore(fixture.block, original)
+        assertSame(original, fixture.data)
     }
 }
