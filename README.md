@@ -408,3 +408,5 @@ Queues, volume, and selected track are saved on each item and travel with it; pl
 does not automatically resume after reconnecting or restarting. Separately crafted devices
 receive independent identities on first use. Separate stacked unused devices before using
 them. Crafting is available only on Minecraft versions with copper nuggets and amethyst shards.
+
+Provider sign-in, OAuth, CAPTCHA/bot-verification, and rate-limit errors preserve the disc's burn metadata, including failures during next-song preloading. A chest queue stops on an authentication failure rather than repeatedly retrying or erasing its discs; retry playback after fixing the provider connection. Other unavailable-media failures retain the existing skip/erase behavior.

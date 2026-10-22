@@ -1,5 +1,6 @@
 package su.plo.voice.discs
 
+import su.plo.voice.discs.audio.PlaybackFailure
 import su.plo.voice.discs.jellyfin.JellyfinLibrary
 import su.plo.voice.discs.jellyfin.JellyfinAudioSourceManager
 import de.maxhenkel.voicechat.api.audiochannel.AudioChannel
@@ -188,7 +189,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         player.setFrameBufferDuration(500)
         player.addListener(object : AudioEventAdapter() {
             override fun onTrackException(player: AudioPlayer, track: AudioTrack, exception: FriendlyException) {
-                controls?.fail(exception.message ?: "Audio stream failed")
+                controls?.fail(PlaybackFailure.message(exception, "Audio stream failed"))
                 plugin.slF4JLogger.error("Disc audio stream failed: ${track.info.title}", exception)
                 val msg = exception.message ?: ""
                 val cause = exception.cause
@@ -616,5 +617,6 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         private val logger = McLoggerFactory.createLogger("PlasmoAudioPlayerManager")
     }
 }
+
 
 

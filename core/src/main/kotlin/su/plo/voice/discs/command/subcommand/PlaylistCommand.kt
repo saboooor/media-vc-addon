@@ -1,5 +1,6 @@
 package su.plo.voice.discs.command.subcommand
 
+import su.plo.voice.discs.audio.PlaybackFailure
 import kotlinx.coroutines.*
 import kotlinx.coroutines.future.await
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
@@ -423,8 +424,9 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         if (e !is TimeoutCancellationException) throw e
                         preparationFailed = true
                         null
-                    } catch (_: Exception) {
-                        preparationFailed = true
+                    } catch (e: Exception) {
+                        // Retry through normal playback for a useful error, without erasing a valid URL.
+                        preparationFailed = !PlaybackFailure.keepDisc(e)
                         null
                     }
                 }
@@ -639,7 +641,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     if (!playing.isActive) {
                         playing.join()
                         if (playing.isCancelled || haltAtEnd) break
-                        if (controls.failure != null && activeDisc.identifier()?.startsWith("jellyfin:") == true) break
+                        if (controls.failure != null && (activeDisc.identifier()?.startsWith("jellyfin:") == true ||
+                            PlaybackFailure.keepDisc(controls.failure))) break
                         val target = order.next(liveDiscs.size, index, playbackModes(block).first,
                             playbackModes(block).second, removedNextIndex) ?: break
                         if (!transition(target, null, true)) break
@@ -843,5 +846,6 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     @EventHandler
     fun onQuit(event: PlayerQuitEvent) { pending.remove(event.player.uniqueId) }
 }
+
 
 
