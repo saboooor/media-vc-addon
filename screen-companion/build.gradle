@@ -1,7 +1,11 @@
 plugins {
+    id 'base'
     id 'net.fabricmc.fabric-loom-remap' version '1.17.12' apply false
     id 'net.fabricmc.fabric-loom' version '1.17.12' apply false
 }
+
+group = 'io.pfaumc.voicebridge'
+version = '0.1.0'
 
 def targets = [mc12111: ['1.21.11', '0.141.6+1.21.11', 21], mc261: ['26.1', '0.145.1+26.1', 25], mc2611: ['26.1.1', '0.145.4+26.1.1', 25], mc2612: ['26.1.2', '0.155.3+26.1.2', 25], mc262: ['26.2', '0.161.0+26.2', 25], mc263: ['26.3', '0.164.0+26.3', 25]]
 subprojects {
@@ -29,6 +33,51 @@ subprojects {
     sourceSets.main.resources.srcDirs = [rootProject.file('src/main/resources')]
     processResources {
         inputs.property 'minecraft_version', target[0]
-        filesMatching('fabric.mod.json') { expand minecraft_version: target[0], java_version: target[2], version: project.version }
+        // Distinct versions keep Loader from coalescing alternative nested mods.
+        filesMatching('fabric.mod.json') { expand minecraft_version: target[0], java_version: target[2], version: "${project.version}-mc.${target[0]}" }
     }
 }
+
+def universalMetadata = tasks.register('universalMetadata') {
+    def destination = layout.buildDirectory.file('universal/fabric.mod.json')
+    inputs.property 'version', project.version.toString()
+    inputs.property 'minecraftVersions', targets.values().collect { it[0] }
+    outputs.file destination
+    doLast {
+        def metadata = [
+            schemaVersion: 1,
+            id: 'vcb_screens_bundle',
+            version: project.version.toString(),
+            name: 'Voice Bridge Screens (Universal)',
+            description: 'Selects the screen companion for your Minecraft version.',
+            environment: 'client',
+            depends: [fabricloader: '>=0.19.5', minecraft: targets.values().collect { it[0] },
+                      java: '>=21', 'fabric-api': '*', vcb_screens: '*'],
+            jars: targets.keySet().collect { [file: "META-INF/jars/${it}.jar"] }
+        ]
+        def output = destination.get().asFile
+        output.parentFile.mkdirs()
+        output.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(metadata))
+    }
+}
+
+tasks.register('universalJar', Jar) {
+    group = 'build'
+    description = 'Bundles all supported Minecraft versions into one installable Fabric mod.'
+    archiveBaseName = 'vcb-screen-companion'
+    archiveVersion = project.version.toString()
+    destinationDirectory = layout.buildDirectory.dir('libs')
+    from(universalMetadata)
+    targets.keySet().each { targetName ->
+        def targetProject = project(":${targetName}")
+        // 1.21.11 must ship intermediary bytecode; 26.x ships unobfuscated.
+        def productionJar = targetProject.tasks.named(targetName == 'mc12111' ? 'remapJar' : 'jar')
+        into('META-INF/jars') {
+            from(productionJar)
+            rename { "${targetName}.jar" }
+        }
+    }
+}
+
+tasks.named('assemble') { dependsOn tasks.named('universalJar') }
+tasks.named('check') { dependsOn subprojects.collect { "${it.path}:check" } }

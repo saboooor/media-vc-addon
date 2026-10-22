@@ -8,10 +8,10 @@ Video retains the configured screen FPS and resolution (columns Ã— 128 by rows Ã
 
 1. Replace the server's discs plugin with the updated `vc-addon-discs/plugin/build/libs/vc-addon-discs-1.2.1.jar` and restart. Both server and companion must use protocol v2; older companions fall back to vanilla maps.
 2. Install Fabric Loader 0.19.5 or later and Fabric API matching your Minecraft version.
-3. Put the matching companion JAR from the table below in the client's `mods` directory. Install only one version.
+3. Put `screen-companion/build/libs/vcb-screen-companion-0.1.0.jar` in the client's `mods` directory. The same JAR supports all six Minecraft versions below. Remove any separately installed companion JAR first.
 4. Join and play a linked screen normally. Negotiation happens automatically within five seconds. Clients on servers without the updated plugin behave normally.
 
-| Minecraft | Client Java | Build output |
+| Minecraft | Client Java | Optional single-version build output |
 | --- | --- | --- |
 | 1.21.11 | 21+ | `mc12111/build/libs/vcb-screen-companion-1.21.11-0.1.0.jar` |
 | 26.1 | 25+ | `mc261/build/libs/vcb-screen-companion-26.1-0.1.0.jar` |
@@ -24,7 +24,9 @@ In the server's `discs.toml`, under `[screen]`, `companion_rgb = true` enables n
 
 ## Build and verify
 
-Run `./gradlew build` here to build all six targets, or `./gradlew :mc12111:build` for one target. Gradle downloads the matching Java toolchains. Version builds are separate because 1.21.11 is remapped and 26.x ships unobfuscated.
+Run `./gradlew build` here to build and test all six targets and create the universal JAR in `build/libs/`. Use `./gradlew universalJar` to package without running tests, or `./gradlew :mc12111:build` for one standalone target. Gradle downloads the matching Java toolchains.
+
+The universal JAR contains six nested Fabric mods. Fabric Loader selects the implementation whose exact Minecraft and Java dependencies match; the outer mod requires an implementation so unsupported versions fail clearly. Each implementation has a distinct version to keep the alternatives separate during dependency resolution. The 1.21.11 implementation is remapped to intermediary names; 26.x implementations ship unobfuscated. Fabric API is still installed separately for your Minecraft version. This packaging supports the listed versions only, not arbitrary older or future releases.
 
 Before distributing, verify in a real client: join a server without the plugin; join with one vanilla and one companion client; start, stop, pause, seek, switch tracks, leave/re-enter screen range, reconnect, and switch worlds. Test ordinary maps, multiple screens, and resource reloads. Check edge-to-edge alignment, all wall directions, floor/ceiling screens, rotated frames, and restoration after stopping. Compiling a mixin does not replace checking its injection during game startup.
 
