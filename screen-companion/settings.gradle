@@ -1,0 +1,4 @@
+pluginManagement { repositories { maven { url = 'https://maven.fabricmc.net/' }; gradlePluginPortal() } }
+plugins { id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0' }
+rootProject.name = 'vcb-screen-companion'
+include 'mc12111', 'mc261', 'mc2611', 'mc2612', 'mc262', 'mc263'
