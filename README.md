@@ -242,6 +242,19 @@ Place a solid light-emitting block (such as a redstone lamp, copper bulb, shroom
 
 These are ordinary player-placed blocks with actual world lighting. Blocks with a native lit state use it; always-lit blocks temporarily become black concrete while off. Redstone blocks supply power only while on. Beacons stay in place: a black-concrete shutter in the empty space directly above them blocks the beam while off and retracts while on. Leave that space empty when linking a beacon. Beacons still need a valid base and a clear beam path. Shutters are removed when their link is released, the chunk unloads, or the plugin stops. Their original block data is saved and restored when unlinked, unloaded, moved by a piston, broken, or on plugin shutdown. The selected frequency band turns each light on; pausing, stopping, unloading, and plugin shutdown reset them while respecting normal redstone power. Breaking a temporarily darkened block restores its original material before drops are calculated. Breaking the lamp or jukebox removes its link. Links and band selections are saved in `bass_lamp_links.json` across restarts. Existing links default to bass. Choose another band and click an already linked lamp to change its response. Lamps use the shared audio analysis independently of the visualizer settings menu.
 
+Configure the shared light release in `discs.toml`:
+
+```toml
+light_falloff = 0.2
+```
+
+This is the fraction of the previous flash retained per lighting update (normally 50 ms).
+The default `0.2` preserves the crisp response; try `0.8` for longer flashes. `0` drops the
+previous pulse immediately, while `1` holds a triggered peak until playback resets.
+Values are clamped to `0..1`; non-finite values use the default. Run `/disc reload` to apply
+changes to all existing linked lights and beacon shutters. Frequency-band selection and
+immediate reset on pause/stop are unchanged. This setting is shared, not per light.
+
 ### Carrying jukebox settings
 
 Mining a jukebox saves its volume, loop/shuffle toggles, stereo channel assignment, crossfade duration/toggle, hologram offset, visualizer instances (type, facing, size, position and enable state), and physical links on the dropped jukebox item. Its lore reads **Saved jukebox settings**. Place that item to restore the setup. Ordinary disc drops are unchanged; playback and queue contents do not travel with the jukebox.
@@ -356,3 +369,42 @@ Crossfade envelopes bring the incoming track up early and hold both tracks at eq
 AutoMix may mix out before the ending during the last third of a song, bounded to its last 45 seconds. It requires strong beat estimates, a close tempo match, and similar energy for the selected next-song section. It schedules four beats ahead, leaves room for the full blend, and must finish at least four seconds before the original transition point. The ready status shows **mix out at** for an earlier exit; that decision remains committed.
 
 Low-pass and high-pass filters are available in **Audio effects** as cutoff-cycle buttons, or with `/disc effect lowpass <20-20000|off>` and `/disc effect highpass <20-20000|off>` (cutoffs in Hz). Low-pass removes treble; high-pass removes bass. Both can be combined and are saved with jukebox settings. Beat-matched AutoMix transitions also sweep an incoming high-pass open and an outgoing low-pass closed. Temporary sweeps reset after the transition and preserve the manually selected cutoffs. Unmatched fades do not apply automatic sweeps.
+
+## Handheld jukeboxes
+
+Craft a portable jukebox with seven copper nuggets, one amethyst shard, and one jukebox:
+
+```text
+Copper Nugget | Jukebox       | Copper Nugget
+Copper Nugget | Amethyst Shard | Copper Nugget
+Copper Nugget | Copper Nugget | Copper Nugget
+```
+
+The crafted item is an amethyst shard named **Handheld Jukebox**. Right-click it to open the same playback dialog style as a placed jukebox. Choose **Open Queue** to manage its own track inventory.
+The queue is a plain **18-slot chest inventory** containing real burned music discs. Put discs
+in, take them out, shift-click, use hotbar keys, or drag them just as in a chest. Adding a
+disc moves it out of your inventory; taking it back returns the same item with its original
+material and metadata. There are no queue buttons or placeholder discs. Playback follows
+slot order. Removing the currently playing disc stops playback; moving it to another slot
+preserves the selection. Close the chest and right-click the device again to return to controls.
+
+The playback dialog provides play/pause, skip, stop, seeking, loop/shuffle, volume, and the
+same audio-effects and equalizer menus as a placed jukebox. Volume, queue modes, and effects
+are saved on the device. World links belong to placed jukeboxes.
+
+Keep the device **anywhere in your player inventory**, including the offhand: audio follows
+the holder. Dropping it, putting it in an external container, dying, or disconnecting stops
+playback. The device cannot be moved or dropped while its queue is open; close the queue
+first. Closing the interface leaves music playing. Goat horns keep their separate playback
+state and duration rules. Nearby listeners use the installed Plasmo Voice or Simple Voice
+Chat integration and the configured horn listening distance.
+
+Older queues only stored copied track references. On first opening the new chest, those
+entries become burned Cat discs because the original disc materials were not recorded.
+Entries exceeding 18 are returned to your inventory, or dropped at your position if full.
+Newly stored discs always preserve their original items.
+
+Queues, volume, and selected track are saved on each item and travel with it; playback
+does not automatically resume after reconnecting or restarting. Separately crafted devices
+receive independent identities on first use. Separate stacked unused devices before using
+them. Crafting is available only on Minecraft versions with copper nuggets and amethyst shards.

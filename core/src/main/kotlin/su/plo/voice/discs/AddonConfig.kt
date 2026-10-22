@@ -13,6 +13,9 @@ import java.net.URI
 
 @Config
 class AddonConfig {
+    @ConfigField(path = "light_falloff", comment = "Shared linked-light release: fraction of pulse retained per 50 ms (0..1). Higher values keep flashes lit longer; 0 drops immediately, 1 holds peaks until playback resets. Default 0.2 preserves the crisp response. Applies with /disc reload.")
+    var lightFalloff = 0.2
+
     @Config
     class PlaylistSourcesConfig {
         @ConfigField(comment = "Optional Spotify user OAuth access token for full API pagination. Leave empty to read public playlist pages without setup. Environment override: SPOTIFY_ACCESS_TOKEN.")
