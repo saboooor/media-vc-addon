@@ -83,14 +83,15 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     }
     private val encryption get() = voiceServer?.defaultEncryption
 
+    @Volatile private var shuttingDown = false
+    private val oauthLock = Any()
+    private var oauthStartedAt = 0L
     private val webhooks = su.plo.voice.discs.webhook.PlaybackWebhooks(scope, { config.webhook },
         { plugin.slF4JLogger.warn(it) }, { startOauth2(force = true) })
     private val oauthPromptLog = su.plo.voice.discs.webhook.OauthPromptLog { prompt ->
         synchronized(oauthLock) { oauthStartedAt = System.currentTimeMillis() }
         webhooks.oauthPrompt(prompt)
     }
-    private val oauthLock = Any()
-    private var oauthStartedAt = 0L
     private val tokenTimers = java.util.concurrent.CopyOnWriteArrayList<java.util.Timer>()
 
     fun reportPlaybackFailure(identifier: String, message: String, error: Throwable? = null, context: String = "Playback") {
@@ -98,6 +99,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     }
 
     fun shutdown() {
+        shuttingDown = true
         oauthPromptLog.close()
         webhooks.close()
         tokenTimers.forEach { it.cancel() }
@@ -483,7 +485,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
             5000L,
             5000L,
         ) {
-            if (System.currentTimeMillis() >= deadline) { timer.cancel(); tokenTimers.remove(timer); return@fixedRateTimer }
+            if (shuttingDown || System.currentTimeMillis() >= deadline) { timer.cancel(); tokenTimers.remove(timer); return@fixedRateTimer }
             val newToken = youtubeSourceManager.oauth2RefreshToken ?: return@fixedRateTimer
             if (currentToken == newToken) return@fixedRateTimer
 
@@ -496,6 +498,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     }
 
     fun startOauth2(force: Boolean = false): Boolean = synchronized(oauthLock) {
+        if (shuttingDown) return@synchronized false
         val ytSource = lavaPlayerManager.sourceManagers.filterIsInstance<YoutubeAudioSourceManager>().firstOrNull()
             ?: return@synchronized false
         if (oauthStartedAt != 0L && System.currentTimeMillis() - oauthStartedAt < 15 * 60_000L) return@synchronized true
@@ -505,6 +508,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
             // Keep the saved credential until the replacement is successfully obtained.
             val refreshToken = if (force) null else tokenFile.takeIf { it.isFile }?.readText()?.trim()
             ytSource.useOauth2(refreshToken, false)
+            if (shuttingDown) return@synchronized false
             listenForTokenChange(ytSource)
             true
         } catch (e: Exception) { oauthStartedAt = 0L; throw e }

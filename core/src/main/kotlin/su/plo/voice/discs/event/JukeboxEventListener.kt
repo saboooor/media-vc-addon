@@ -342,7 +342,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         val playback = scope.launch(start = CoroutineStart.LAZY) {
 
             suspend fun failed(message: String) {
-                audioPlayerManager.reportPlaybackFailure(identifier, message)
+                audioPlayerManager.reportPlaybackFailure(identifier, message, context = "Jukebox ${block.world.name} (${block.x}, ${block.y}, ${block.z})")
                 controls.fail(message)
                 controls.title = "Failed: $message"
                 suspendSyncAt(block.location, voiceServer, plugin) {
