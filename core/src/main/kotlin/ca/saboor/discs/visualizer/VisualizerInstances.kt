@@ -49,13 +49,21 @@ class SpeakerEnvelope {
 class BassLampEnvelope {
     private var previous = 0f
     private var pulse = 0f
+    private var sustained = 0f
     var lit = false
         private set
     fun update(bass: Float, falloff: Double = 0.2): Boolean {
         val value = bass.coerceIn(0f, 1f)
         // Invalid configuration falls back to the original response; endpoints are intentional.
         val retention = if (falloff.isFinite()) falloff.coerceIn(0.0, 1.0).toFloat() else 0.2f
-        pulse = max(max((value - previous).coerceAtLeast(0f) * 3f, pulse * retention), value * 0.25f).coerceIn(0f, 1f)
+        sustained = when {
+            value >= 0.35f -> (sustained * 0.6f + value * 0.4f).coerceIn(0f, 1f)
+            value >= 0.22f -> sustained * 0.75f
+            else -> 0f
+        }
+        val transient = (value - previous).coerceAtLeast(0f) * 3f
+        val hold = max(value * 0.6f, if (sustained >= 0.38f) sustained * 1.05f else sustained * 0.7f)
+        pulse = max(max(transient, pulse * retention), hold).coerceIn(0f, 1f)
         previous = value
         lit = if (lit) pulse > 0.2f else pulse > 0.4f
         return lit

@@ -453,11 +453,13 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                     }
                 }
                 if (dirty.get()) save()
+                val autoFalloffControls = sourceControls.filter { autoFalloffs.contains(it.key) }.values.toSet()
+                autoFalloffControls.forEach { it.tempoAnalysis = true }
                 active.forEach { it.tempoAnalysis = true }
                 active.filterNot { it in consumers }.forEach { it.setVisualizing(true, "bass_lamps") }
                 consumers.filterNot { it in active }.forEach {
                     it.setVisualizing(false, "bass_lamps")
-                    it.tempoAnalysis = false
+                    if (it !in autoFalloffControls) it.tempoAnalysis = false
                 }
                 consumers.clear(); consumers.addAll(active)
                 val elapsedMs = (System.nanoTime() - updateStarted) / 1_000_000L

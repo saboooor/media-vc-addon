@@ -13,8 +13,22 @@ class MixAnalysis(private val scanPastUncertainSections: Boolean = false) {
     @Synchronized fun accept(channels: Array<FloatArray>, offset: Int, length: Int, positionMs: Long, scale: Double = 1.0) {
         if (channels.isEmpty() || length == 0) return
         var sum = 0.0
-        for (channel in channels) for (i in offset until offset + length) sum += channel[i].toDouble().pow(2)
-        add(positionMs, sqrt(sum / (length * channels.size)) * scale)
+        var bassSum = 0.0
+        var lp = 0.0
+        val alpha = 0.035
+        val count = length * channels.size
+        for (channel in channels) {
+            for (i in offset until offset + length) {
+                val s = channel[i].toDouble()
+                sum += s * s
+                lp += alpha * (s - lp)
+                bassSum += lp * lp
+            }
+        }
+        val fullRms = sqrt(sum / count)
+        val bassRms = sqrt(bassSum / count) * 3.5
+        val energyValue = max(fullRms, bassRms)
+        add(positionMs, energyValue * scale)
     }
     @Synchronized fun add(positionMs: Long, rms: Double) {
         energy.addLast(positionMs to rms.coerceIn(0.0, 1.0))
@@ -42,18 +56,20 @@ class MixAnalysis(private val scanPastUncertainSections: Boolean = false) {
         val audible = values.firstOrNull { it.second > 0.003 }?.first ?: 0L
         // Positive energy differences emphasize drum onsets rather than sustained notes.
         val onsets = DoubleArray(values.size) { i -> if (i == 0) 0.0 else max(0.0, values[i].second - values[i - 1].second) }
+        val onsetMean = onsets.average()
+        val thresholded = DoubleArray(onsets.size) { max(0.0, onsets[it] - onsetMean * 0.5) }
         var best = 0.0
         var lag = 0
-        if (values.size >= 150 && rms > 0.003) for (candidate in 17..50) {
+        if (values.size >= 150 && rms > 0.003) for (candidate in 15..60) {
             var dot = 0.0; var a = 0.0; var b = 0.0
-            for (i in candidate until onsets.size) {
-                dot += onsets[i] * onsets[i - candidate]
-                a += onsets[i] * onsets[i]; b += onsets[i - candidate] * onsets[i - candidate]
+            for (i in candidate until thresholded.size) {
+                dot += thresholded[i] * thresholded[i - candidate]
+                a += thresholded[i] * thresholded[i]; b += thresholded[i - candidate] * thresholded[i - candidate]
             }
             val correlation = if (a * b > 1e-12) dot / sqrt(a * b) else 0.0
             if (correlation > best + 0.02) { best = correlation; lag = candidate }
         }
-        val beatMs = if (lag > 0 && best >= 0.55) lag * 20L else null
+        val beatMs = if (lag > 0 && best >= 0.35) lag * 20L else null
         val strongest = onsets.indices.maxByOrNull { onsets[it] } ?: 0
         return tempoTracker.update(MixFeatures(rms, audible, beatMs, values[strongest].first, best), frames).also { cached = it }
     }
@@ -136,14 +152,14 @@ object AutoMix {
         val compatible = beat != null && next.beatMs != null && outgoing.confidence >= 0.55 && next.confidence >= 0.55 &&
             tempoFactor in 0.92..1.08
         val limit = min(if (compatible) 16_000L else 10_000L, min(durationMs / 3, nextDurationMs.takeIf { it > 0 }?.div(3) ?: 16_000L)).coerceAtLeast(250L)
-        val desired = if (compatible) beat!! * 16 else if (outgoing.rms < 0.025 || next.rms < 0.025) 2_000L else 4_000L
+        val desired = if (compatible) beat * 16 else if (outgoing.rms < 0.025 || next.rms < 0.025) 2_000L else 4_000L
         val fade = desired.coerceIn(250L, limit)
         var start = (durationMs - (fade * outgoingRate).toLong()).coerceAtLeast(0)
         if (compatible) start = (start - Math.floorMod(start - outgoing.beatAnchorMs,
-            (beat!! * outgoingRate).toLong().coerceAtLeast(1))).coerceAtLeast(0)
+            (beat * outgoingRate).toLong().coerceAtLeast(1))).coerceAtLeast(0)
         // A later confident section can explicitly cue past an uncertain musical intro.
         val cue = if (compatible) next.mixCueMs ?: (next.audibleStartMs +
-            Math.floorMod(next.beatAnchorMs - next.audibleStartMs, next.beatMs!!)) else next.audibleStartMs
+            Math.floorMod(next.beatAnchorMs - next.audibleStartMs, next.beatMs)) else next.audibleStartMs
         val gain = if (outgoing.rms > 0.003 && next.rms > 0.003) (outgoing.rms / next.rms).coerceIn(0.5, 1.0) else 1.0
         val cueLimit = if (nextDurationMs > 0)
             (nextDurationMs - ceil(fade * incomingBaseRate * (if (compatible) tempoFactor else 1.0)).toLong() - 1).coerceIn(0L, 60_000L)

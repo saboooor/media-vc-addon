@@ -36,12 +36,19 @@ class PlaybackControls(
     @Volatile var autoMixAnalysis = false
         set(value) { if (field != value) { field = value; refreshTimescaleFilters() } }
     @Volatile var tempoAnalysis = false
+    @Volatile var lastDetectedBpm: Double? = null
+        private set
 
     val currentBpm: Double?
         get() {
-            val beatMs = mixAnalysis.snapshot().beatMs ?: return null
-            val rate = playbackRate.takeIf { it > 0.0 } ?: 1.0
-            return 60_000.0 / (beatMs / rate)
+            val beatMs = mixAnalysis.snapshot().beatMs
+            if (beatMs != null) {
+                val rate = playbackRate.takeIf { it > 0.0 } ?: 1.0
+                val bpm = 60_000.0 / (beatMs / rate)
+                lastDetectedBpm = bpm
+                return bpm
+            }
+            return lastDetectedBpm
         }
 
     fun tempoFalloff(): Double? = currentBpm?.let { falloffForBpm(it) }
@@ -215,6 +222,7 @@ class PlaybackControls(
         players.forEach { seekPlayer(it, target) }
         spectrum.reset()
         mixAnalysis.reset()
+        lastDetectedBpm = null
         onSeek?.invoke(target)
     }
 }

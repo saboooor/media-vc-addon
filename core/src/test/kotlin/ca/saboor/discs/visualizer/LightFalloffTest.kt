@@ -68,4 +68,49 @@ class LightFalloffTest {
         assertEquals(0.60, ultraSlow)
         assertEquals(0.10, ultraFast)
     }
+
+    @Test fun `realistic noisy drum rhythm detects tempo and calculates falloff`() {
+        val analysis = ca.saboor.discs.audio.MixAnalysis()
+        // Simulate a real song: 0.25 continuous background music with 120 BPM kicks (period = 25 frames)
+        repeat(200) { i ->
+            val isKick = i % 25 == 0
+            val background = 0.25 + 0.05 * kotlin.math.sin(i.toDouble())
+            val energy = if (isKick) 0.55 else background
+            analysis.add(i * 20L, energy)
+        }
+        val features = analysis.snapshot()
+        assertNotNull(features.beatMs)
+        assertEquals(500L, features.beatMs)
+
+        val falloff = ca.saboor.discs.PlaybackControls.falloffForBeatMs(features.beatMs!!)
+        assertEquals(0.35, falloff)
+    }
+
+    @Test fun `sustained bass or highs keep the light on continuously until the section ends`() {
+        val envelope = BassLampEnvelope()
+        // Initial hit followed by a long sustained bass/highs passage at moderate-high intensity (0.50f)
+        assertTrue(envelope.update(0.75f))
+        repeat(40) {
+            assertTrue(envelope.update(0.50f), "Light should stay lit throughout sustained band activity")
+        }
+        // Brief 1-frame phase dip during sustained note should not flicker off
+        assertTrue(envelope.update(0.26f))
+        assertTrue(envelope.update(0.50f))
+
+        // When the sustained section drops to silence, the light turns off
+        assertFalse(envelope.update(0f))
+    }
+
+    @Test fun `smooth swells without a sharp transient still light up during sustained passages`() {
+        val envelope = BassLampEnvelope()
+        // Gradual fade-in where each step delta is small (< 0.12f)
+        for (level in listOf(0.10f, 0.20f, 0.30f, 0.40f, 0.48f, 0.50f, 0.50f)) {
+            envelope.update(level)
+        }
+        assertTrue(envelope.lit, "Smoothly swelling sustained highs/bass should turn the light on")
+        repeat(20) {
+            assertTrue(envelope.update(0.48f))
+        }
+        assertFalse(envelope.update(0f))
+    }
 }
