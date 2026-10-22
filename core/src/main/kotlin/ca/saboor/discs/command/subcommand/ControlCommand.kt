@@ -265,18 +265,28 @@ class ControlCommand(
         }
         if (lampMenu) {
             val lamps = bassLamps ?: return show(player, block)
+            controls?.let { if (lamps.isAutoFalloff(block)) it.tempoAnalysis = true }
             buttons.clear()
             queueLabels.clear()
             body.clear()
-            body += Component.text("Lights: ${lamps.count(block)} linked", NamedTextColor.GOLD)
+            val count = lamps.count(block)
+            body += Component.text("Lights: $count linked", NamedTextColor.GOLD)
             body += Component.text("Choose a band, then click a lamp to link it or change its response.")
             body += Component.text("Deep bass follows low thumps; low mids follow warmth; vocal range follows mids; sparkle follows bright highs. Full spectrum responds across all bands.", NamedTextColor.GRAY)
+            val isAuto = lamps.isAutoFalloff(block)
             val falloff = (lamps.falloff(block) * 100).toInt()
-            body += Component.text("Light falloff: $falloff% · higher keeps flashes lit longer", NamedTextColor.GRAY)
+            val bpm = lamps.currentBpm(block)?.toInt()
+            if (isAuto) {
+                val bpmText = if (bpm != null) "$bpm BPM → $falloff%" else "detecting tempo..."
+                body += Component.text("Light falloff: Auto ($bpmText) · adapts to song tempo", NamedTextColor.GOLD)
+            } else {
+                body += Component.text("Light falloff: $falloff% · higher keeps flashes lit longer", NamedTextColor.GRAY)
+            }
             buttons += "Falloff −10%" to (prefix + "lamp_falloff_${(falloff - 10).coerceAtLeast(0)}")
             buttons += "Falloff +10%" to (prefix + "lamp_falloff_${(falloff + 10).coerceAtMost(100)}")
+            buttons += (if (isAuto) "✓ Auto falloff (tempo)" else "Auto falloff (tempo)") to (prefix + "lamp_falloff_auto")
             buttons += "Reset falloff (20%)" to (prefix + "lamp_falloff_20")
-            bodyLampButtons(buttons, prefix, lamps.count(block))
+            bodyLampButtons(buttons, prefix, count, lamps.isHighlighting(block))
             buttons += "Back to playback" to (prefix + "refresh")
         }
         if (screenMenu) {
@@ -419,10 +429,16 @@ class ControlCommand(
         }
     }
 
-    private fun bodyLampButtons(buttons: MutableList<Pair<String, String>>, prefix: String, count: Int) {
-        for (band in LightBand.entries)
-            buttons += "Set light: ${band.label}" to (prefix + "lamp_link_${band.name.lowercase()}")
-        if (count > 0) buttons += "Unlink light ($count linked)" to (prefix + "lamp_unlink")
+    companion object {
+        internal fun bodyLampButtons(buttons: MutableList<Pair<String, String>>, prefix: String, count: Int, isShowing: Boolean = false) {
+            for (band in LightBand.entries)
+                buttons += "Set light: ${band.label}" to (prefix + "lamp_link_${band.name.lowercase()}")
+            if (count > 0) {
+                buttons += (if (isShowing) "Hide lights" else "Show lights") to (prefix + "lamp_show")
+                buttons += "Unlink light ($count linked)" to (prefix + "lamp_unlink")
+                buttons += "Unset all lights" to (prefix + "lamp_unset_all")
+            }
+        }
     }
 
     override fun execute(sender: CommandSender, arguments: Array<out String>) {
@@ -441,6 +457,15 @@ class ControlCommand(
         }
         sessions.remove(player.uniqueId, session)
         val controls = session.controls
+        if (arguments[2] == "lamp_falloff_auto") {
+            val lamps = bassLamps ?: return
+            val next = !lamps.isAutoFalloff(session.block)
+            lamps.setAutoFalloff(session.block, next)
+            session.controls?.let { if (next) it.tempoAnalysis = true }
+            player.sendMessage(Component.text(if (next) "Automatic tempo-based light falloff enabled." else "Automatic light falloff disabled."))
+            show(player, session.block, lampMenu = true)
+            return
+        }
         if (arguments[2].startsWith("lamp_falloff_")) {
             val amount = arguments[2].removePrefix("lamp_falloff_").toIntOrNull() ?: return
             if (amount !in 0..100) return
@@ -520,8 +545,28 @@ class ControlCommand(
             }
             "lamp_link", "lamp_link_bass", "lamp_link_mid", "lamp_link_highs",
             "lamp_link_deep_bass", "lamp_link_low_mids", "lamp_link_vocals", "lamp_link_sparkle", "lamp_link_full", "lamp_unlink" -> {
+                if (arguments[2] == "lamp_unlink") {
+                    bassLamps?.showHighlights(session.block)
+                }
                 bassLamps?.beginLink(player, session.block, unlink = arguments[2] == "lamp_unlink",
                     band = LightBand.entries.firstOrNull { arguments[2] == "lamp_link_${it.name.lowercase()}" } ?: LightBand.BASS)
+                return
+            }
+            "lamp_unset_all" -> {
+                val count = bassLamps?.unsetAll(session.block) ?: 0
+                player.sendMessage(Component.text(if (count > 0) "All lights unset." else "No lights linked."))
+                show(player, session.block, lampMenu = true)
+                return
+            }
+            "lamp_show", "lamp_list" -> {
+                val lamps = bassLamps
+                if (lamps == null || lamps.count(session.block) == 0) {
+                    player.sendMessage(Component.text("No lights are linked to this jukebox.", NamedTextColor.GRAY))
+                } else {
+                    val showing = lamps.toggleHighlights(session.block)
+                    player.sendMessage(Component.text(if (showing) "Highlighting linked lights for 30s." else "Light highlights hidden."))
+                }
+                show(player, session.block, lampMenu = true)
                 return
             }
             "holo_queue_edit" -> { worldEditor.editHologram(player, session.block, queue = true); return }

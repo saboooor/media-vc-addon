@@ -314,10 +314,10 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 val sent = synchronized(controls) {
                     if (controls.paused || controls.failure != null) false
                     else playbackPlayer.provide()?.let { frame ->
-                        if (controls.visualizing || controls.autoMixAnalysis) {
+                        if (controls.visualizing || controls.autoMixAnalysis || controls.tempoAnalysis) {
                             val tap = spectrumTap ?: PlaybackSpectrumTap(frame.format).also { spectrumTap = it }
                             tap.accept(frame.data, controls.spectrum.takeIf { controls.visualizing },
-                                controls.mixAnalysis.takeIf { controls.autoMixAnalysis }, controls.position, controls.analysisScale)
+                                controls.mixAnalysis.takeIf { controls.autoMixAnalysis || controls.tempoAnalysis }, controls.position, controls.analysisScale)
                         } else {
                             spectrumTap?.close()
                             spectrumTap = null

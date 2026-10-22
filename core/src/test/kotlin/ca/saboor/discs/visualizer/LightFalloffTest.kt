@@ -35,4 +35,37 @@ class LightFalloffTest {
             assertFalse(envelope.update(0f, invalid))
         }
     }
+
+    @Test fun `automatic falloff scales with tempo`() {
+        val slowBpm = ca.saboor.discs.PlaybackControls.falloffForBpm(60.0)
+        val midBpm = ca.saboor.discs.PlaybackControls.falloffForBpm(120.0)
+        val fastBpm = ca.saboor.discs.PlaybackControls.falloffForBpm(180.0)
+
+        assertEquals(0.60, slowBpm)
+        assertEquals(0.35, midBpm)
+        assertEquals(0.10, fastBpm)
+        assertTrue(slowBpm > midBpm)
+        assertTrue(midBpm > fastBpm)
+    }
+
+    @Test fun `automatic falloff from beat interval accounts for playback rate`() {
+        // 500ms beat interval = 120 BPM at 1.0x rate
+        val normal = ca.saboor.discs.PlaybackControls.falloffForBeatMs(500, 1.0)
+        assertEquals(0.35, normal)
+
+        // 500ms beat interval at 1.25x speed = 150 BPM effective
+        val nightcore = ca.saboor.discs.PlaybackControls.falloffForBeatMs(500, 1.25)
+        assertTrue(nightcore < normal)
+
+        // 500ms beat interval at 0.8x speed = 96 BPM effective
+        val vaporwave = ca.saboor.discs.PlaybackControls.falloffForBeatMs(500, 0.8)
+        assertTrue(vaporwave > normal)
+    }
+
+    @Test fun `extreme tempos clamp within safe retention bounds`() {
+        val ultraSlow = ca.saboor.discs.PlaybackControls.falloffForBpm(20.0)
+        val ultraFast = ca.saboor.discs.PlaybackControls.falloffForBpm(300.0)
+        assertEquals(0.60, ultraSlow)
+        assertEquals(0.10, ultraFast)
+    }
 }

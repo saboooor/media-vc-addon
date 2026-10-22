@@ -35,6 +35,29 @@ class PlaybackControls(
     val mixAnalysis = ca.saboor.discs.audio.MixAnalysis(scanPastUncertainSections = true)
     @Volatile var autoMixAnalysis = false
         set(value) { if (field != value) { field = value; refreshTimescaleFilters() } }
+    @Volatile var tempoAnalysis = false
+
+    val currentBpm: Double?
+        get() {
+            val beatMs = mixAnalysis.snapshot().beatMs ?: return null
+            val rate = playbackRate.takeIf { it > 0.0 } ?: 1.0
+            return 60_000.0 / (beatMs / rate)
+        }
+
+    fun tempoFalloff(): Double? = currentBpm?.let { falloffForBpm(it) }
+
+    companion object {
+        fun falloffForBpm(bpm: Double): Double {
+            val raw = 0.85 - (bpm.coerceIn(60.0, 180.0) / 240.0)
+            return (kotlin.math.round(raw * 100) / 100.0).coerceIn(0.10, 0.70)
+        }
+
+        fun falloffForBeatMs(beatMs: Long, playbackRate: Double = 1.0): Double {
+            val rate = playbackRate.takeIf { it > 0.0 } ?: 1.0
+            val bpm = 60_000.0 / (beatMs / rate)
+            return falloffForBpm(bpm)
+        }
+    }
     @Synchronized private fun refreshTimescaleFilters() { players.forEach { updateFilter(it) } }
     @Volatile var sentAudioMs = 0L
         private set

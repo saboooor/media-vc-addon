@@ -80,7 +80,7 @@ object PaperPlaybackDialog {
         "fx_toggle_nightcore", "fx_toggle_vaporwave" -> "item/clock_00"
         "stop" -> "item/redstone"
         "eject" -> "item/iron_pickaxe"
-        "lamp_menu", "lamp_link", "lamp_link_bass", "lamp_link_mid", "lamp_link_highs", "lamp_unlink" -> "item/glowstone_dust"
+        "lamp_menu", "lamp_link", "lamp_link_bass", "lamp_link_mid", "lamp_link_highs", "lamp_unlink", "lamp_unset_all", "lamp_list", "lamp_show" -> "item/glowstone_dust"
         "screen_menu", "screen_link" -> "item/item_frame"
         "screen_subtitles" -> "item/writable_book"
         "screen_unlink" -> "item/shears"
@@ -100,6 +100,7 @@ object PaperPlaybackDialog {
             command?.substringAfterLast(' ')?.startsWith("viz_") == true -> "item/amethyst_shard"
             command?.substringAfterLast(' ')?.startsWith("seek_minus_") == true -> "item/ender_pearl"
             command?.substringAfterLast(' ')?.startsWith("seek_plus_") == true -> "item/spectral_arrow"
+            command?.substringAfterLast(' ')?.startsWith("lamp_falloff_") == true -> "item/clock_00"
             else -> "item/paper"
         }
     }
