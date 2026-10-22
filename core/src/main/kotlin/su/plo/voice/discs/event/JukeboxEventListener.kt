@@ -1,5 +1,6 @@
 package su.plo.voice.discs.event
 
+import su.plo.voice.discs.audio.PlaybackFailure
 import kotlinx.coroutines.*
 import kotlinx.coroutines.future.await
 import net.kyori.adventure.text.Component
@@ -341,16 +342,19 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         val playback = scope.launch(start = CoroutineStart.LAZY) {
 
             suspend fun failed(message: String) {
+                audioPlayerManager.reportPlaybackFailure(identifier, message, context = "Jukebox ${block.world.name} (${block.x}, ${block.y}, ${block.z})")
                 controls.fail(message)
                 controls.title = "Failed: $message"
                 suspendSyncAt(block.location, voiceServer, plugin) {
                     val jellyfin = identifier.startsWith("jellyfin:")
+                    val keepDisc = jellyfin || PlaybackFailure.keepDisc(message)
                     val error = Component.text(if (jellyfin) "Could not play Jellyfin media. Check the connection; the disc was kept."
+                        else if (keepDisc) "Could not play song: $message. Disc kept; check provider sign-in before retrying."
                         else "Could not play song: $message. Disc unburned; skipping.", NamedTextColor.RED)
                     player?.sendMessage(error)
                     player?.sendActionBar(error)
-                    if (!jellyfin) onFailure?.invoke()
-                    if (!chestQueue && !jellyfin) {
+                    if (!keepDisc) onFailure?.invoke()
+                    if (!chestQueue && !keepDisc) {
                         val jukebox = block.asJukebox() ?: return@suspendSyncAt
                         val record = jukebox.record
                         if (record.customDiscIdentifier(discHelper) == identifier && record.itemMeta == itemMeta) {
@@ -367,7 +371,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             } catch (e: Exception) {
                 if (e is CancellationException && e !is TimeoutCancellationException) throw e
                 currentCoroutineContext().ensureActive()
-                val errorMsg = if (e is TimeoutCancellationException) "Audio lookup timed out after 30 seconds" else e.message ?: "Unexpected error"
+                val errorMsg = if (e is TimeoutCancellationException) "Audio lookup timed out after 30 seconds" else PlaybackFailure.message(e, "Unexpected error")
                 plugin.slF4JLogger.error("Failed to load disc track", e)
                 failed(errorMsg)
                 return@launch
@@ -633,5 +637,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         }
     }
 }
+
+
 
 
