@@ -408,3 +408,20 @@ Queues, volume, and selected track are saved on each item and travel with it; pl
 does not automatically resume after reconnecting or restarting. Separately crafted devices
 receive independent identities on first use. Separate stacked unused devices before using
 them. Crafting is available only on Minecraft versions with copper nuggets and amethyst shards.
+
+Provider sign-in, OAuth, CAPTCHA/bot-verification, and rate-limit errors preserve the disc's burn metadata, including failures during next-song preloading. A chest queue stops on an authentication failure rather than repeatedly retrying or erasing its discs; retry playback after fixing the provider connection. Other unavailable-media failures retain the existing skip/erase behavior.
+
+### Playback and OAuth webhooks
+
+Configure a private Discord-compatible webhook in `discs.toml`, then run `/disc reload`:
+
+```toml
+[webhook]
+url = "https://discord.com/api/webhooks/ID/SECRET"
+cooldown_seconds = 60
+auto_youtube_oauth = true
+```
+
+An empty URL disables delivery and automatic authorization. Playback failures and next-song preload failures are logged asynchronously with duplicate suppression. On YouTube sign-in/bot failures, automatic OAuth requests a replacement authorization and posts the Google verification URL and pairing code to the webhook. Complete that prompt using the intended account; the replacement token is saved automatically and a success notification follows. Retry playback afterward. `/disc oauth force` still starts authorization manually, and its pairing prompt is also posted. Rate limits alone do not trigger OAuth.
+
+Use a private admin channel: a pairing code can authorize this server to use the account you choose. Access/refresh tokens, device codes, passwords, and private source URLs are not included. Error notifications redact credential assignments and URLs, and Discord mentions are disabled. Existing saved credentials remain on disk until replacement authorization succeeds. Repeated pairing starts are suppressed for 15 minutes; delivery has a bounded queue, HTTP timeouts, and no redirect following. Failed deliveries warn in the server console without printing the webhook URL.

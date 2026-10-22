@@ -4,6 +4,7 @@ dependencies {
     compileOnly("com.google.code.gson:gson:2.10.1")
 
     testImplementation(kotlin("stdlib"))
+    testImplementation(libs.log4j.core)
     testImplementation(rootProject.libs.packetevents)
     testImplementation("com.google.code.gson:gson:2.10.1")
     testImplementation(libs.paper.v11605)
@@ -27,3 +28,4 @@ java {
 }
 
 tasks.test { useJUnitPlatform() }
+
