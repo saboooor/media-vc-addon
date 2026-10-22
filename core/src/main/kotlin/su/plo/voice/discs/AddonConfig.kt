@@ -13,6 +13,18 @@ import java.net.URI
 
 @Config
 class AddonConfig {
+    @Config
+    class WebhookConfig {
+        @ConfigField(comment = "Private Discord-compatible webhook URL for playback failures and OAuth notifications. Empty disables delivery. Treat this URL as a secret.")
+        var url = ""
+        @ConfigField(comment = "Minimum seconds between repeated notifications of the same issue (1..3600).")
+        var cooldownSeconds = 60
+        @ConfigField(comment = "Start replacement YouTube OAuth on login/bot failures and post its verification URL and pairing code. Use a private admin channel. Tokens are never posted. Applies only while a webhook URL is configured.")
+        var autoYoutubeOauth = true
+    }
+    @ConfigField
+    var webhook = WebhookConfig()
+
     @ConfigField(path = "light_falloff", comment = "Shared linked-light release: fraction of pulse retained per 50 ms (0..1). Higher values keep flashes lit longer; 0 drops immediately, 1 holds peaks until playback resets. Default 0.2 preserves the crisp response. Applies with /disc reload.")
     var lightFalloff = 0.2
 
@@ -414,3 +426,4 @@ class AddonConfig {
             File(minecraftServer.configsFolder, "vc-addon-discs")
     }
 }
+

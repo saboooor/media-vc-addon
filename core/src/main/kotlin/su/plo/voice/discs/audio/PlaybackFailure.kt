@@ -10,17 +10,25 @@ object PlaybackFailure {
 
     fun keepDisc(message: String?): Boolean = message != null && authentication.containsMatchIn(message)
 
-    fun keepDisc(error: Throwable): Boolean {
+    fun keepDisc(error: Throwable): Boolean = inspect(error) { cause ->
+        keepDisc(cause.message) || cause.javaClass.simpleName == "AllClientsFailedException"
+    }
+
+    private fun inspect(error: Throwable, matches: (Throwable) -> Boolean): Boolean {
         val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Throwable, Boolean>())
         fun inspect(cause: Throwable): Boolean {
             if (!seen.add(cause)) return false
-            return keepDisc(cause.message) || cause.javaClass.simpleName == "AllClientsFailedException" ||
-                cause.cause?.let(::inspect) == true || cause.suppressed.any(::inspect)
+            return matches(cause) || cause.cause?.let(::inspect) == true || cause.suppressed.any(::inspect)
         }
         return inspect(error)
     }
 
     /** Preserve the classification when a provider wraps the useful error in a generic exception. */
     fun message(error: Throwable, fallback: String): String =
-        if (keepDisc(error)) AUTH_MESSAGE else error.message ?: fallback
+        if (keepDisc(error)) {
+            if (inspect(error) { Regex("rate[ -]?limit|too many requests|429", RegexOption.IGNORE_CASE).containsMatchIn(it.message.orEmpty()) })
+                "Provider rate limit exceeded; retry later"
+            else AUTH_MESSAGE
+        } else error.message ?: fallback
 }
+

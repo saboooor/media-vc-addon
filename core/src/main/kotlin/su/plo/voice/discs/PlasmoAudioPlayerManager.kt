@@ -83,7 +83,25 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     }
     private val encryption get() = voiceServer?.defaultEncryption
 
+    private val webhooks = su.plo.voice.discs.webhook.PlaybackWebhooks(scope, { config.webhook },
+        { plugin.slF4JLogger.warn(it) }, { startOauth2(force = true) })
+    private val oauthPromptLog = su.plo.voice.discs.webhook.OauthPromptLog { prompt ->
+        synchronized(oauthLock) { oauthStartedAt = System.currentTimeMillis() }
+        webhooks.oauthPrompt(prompt)
+    }
+    private val oauthLock = Any()
+    private var oauthStartedAt = 0L
+    private val tokenTimers = java.util.concurrent.CopyOnWriteArrayList<java.util.Timer>()
+
+    fun reportPlaybackFailure(identifier: String, message: String, error: Throwable? = null, context: String = "Playback") {
+        webhooks.failure(identifier, message, error, context)
+    }
+
     fun shutdown() {
+        oauthPromptLog.close()
+        webhooks.close()
+        tokenTimers.forEach { it.cancel() }
+        tokenTimers.clear()
         lavaPlayerManager.shutdown()
         stereoPlayerManager.shutdown()
     }
@@ -441,44 +459,55 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
             ?.takeIf { it.oauth2RefreshToken != null }
             ?.let {
                 val refreshTokenFile = File(plugin.dataFolder, ".youtube-token")
-                refreshTokenFile.writeText(it.oauth2RefreshToken!!)
+                val temporary = java.nio.file.Files.createTempFile(plugin.dataFolder.toPath(), ".youtube-token-", ".tmp").toFile()
+                temporary.writeText(it.oauth2RefreshToken!!)
+                try {
+                    java.nio.file.Files.move(temporary.toPath(), refreshTokenFile.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+                } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                    java.nio.file.Files.move(temporary.toPath(), refreshTokenFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                }
+                webhooks.oauthSuccess()
+                synchronized(oauthLock) { oauthStartedAt = 0L }
                 plugin.slF4JLogger.info("YouTube oauth2 refresh token saved to .youtube-token")
             }
     }
 
     private fun listenForTokenChange(youtubeSourceManager: YoutubeAudioSourceManager) {
         val currentToken = youtubeSourceManager.oauth2RefreshToken
-        fixedRateTimer(
+        val deadline = System.currentTimeMillis() + 15 * 60_000L
+        lateinit var timer: java.util.Timer
+        timer = fixedRateTimer(
             "[vc-addon-discs] [youtube-refresh-token-listener]",
             true,
             5000L,
             5000L,
         ) {
+            if (System.currentTimeMillis() >= deadline) { timer.cancel(); tokenTimers.remove(timer); return@fixedRateTimer }
             val newToken = youtubeSourceManager.oauth2RefreshToken ?: return@fixedRateTimer
             if (currentToken == newToken) return@fixedRateTimer
 
-            saveToken()
-            cancel()
+            try { saveToken() }
+            catch (_: Exception) { plugin.slF4JLogger.warn("Could not save replacement YouTube token; retrying."); return@fixedRateTimer }
+            timer.cancel()
+            tokenTimers.remove(timer)
         }
+        tokenTimers.add(timer)
     }
 
-    fun startOauth2(force: Boolean = false): Boolean {
-        val ytSource = lavaPlayerManager.sourceManagers
-            .filterIsInstance<YoutubeAudioSourceManager>()
-            .firstOrNull() ?: return false
-
-        val tokenFile = File(plugin.dataFolder, ".youtube-token")
-        if (force && tokenFile.exists()) {
-            tokenFile.delete()
-        }
-
-        val refreshToken = if (force) null else {
-            tokenFile.takeIf { it.isFile && it.exists() }?.readText()?.trim()
-        }
-
-        ytSource.useOauth2(refreshToken, false)
-        listenForTokenChange(ytSource)
-        return true
+    fun startOauth2(force: Boolean = false): Boolean = synchronized(oauthLock) {
+        val ytSource = lavaPlayerManager.sourceManagers.filterIsInstance<YoutubeAudioSourceManager>().firstOrNull()
+            ?: return@synchronized false
+        if (oauthStartedAt != 0L && System.currentTimeMillis() - oauthStartedAt < 15 * 60_000L) return@synchronized true
+        oauthStartedAt = System.currentTimeMillis()
+        try {
+            val tokenFile = File(plugin.dataFolder, ".youtube-token")
+            // Keep the saved credential until the replacement is successfully obtained.
+            val refreshToken = if (force) null else tokenFile.takeIf { it.isFile }?.readText()?.trim()
+            ytSource.useOauth2(refreshToken, false)
+            listenForTokenChange(ytSource)
+            true
+        } catch (e: Exception) { oauthStartedAt = 0L; throw e }
     }
 
     private fun proxyHttpBuilder(): Consumer<HttpClientBuilder>? {
@@ -493,6 +522,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     }
 
     fun registerSources() {
+        oauthPromptLog.start()
         lavaPlayerManager.configuration.isFilterHotSwapEnabled = true
         val proxyHttpBuilder = proxyHttpBuilder()
         proxyHttpBuilder?.let { lavaPlayerManager.setHttpBuilderConfigurator(it) }
@@ -617,6 +647,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         private val logger = McLoggerFactory.createLogger("PlasmoAudioPlayerManager")
     }
 }
+
 
 
 

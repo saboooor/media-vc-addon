@@ -427,6 +427,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     } catch (e: Exception) {
                         // Retry through normal playback for a useful error, without erasing a valid URL.
                         preparationFailed = !PlaybackFailure.keepDisc(e)
+                        audioPlayerManager.reportPlaybackFailure(disc.customDiscIdentifier(discHelper)!!,
+                            PlaybackFailure.message(e, "Next-song preload failed"), e, "Next-song preload")
                         null
                     }
                 }
@@ -846,6 +848,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     @EventHandler
     fun onQuit(event: PlayerQuitEvent) { pending.remove(event.player.uniqueId) }
 }
+
 
 
 
