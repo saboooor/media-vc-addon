@@ -24,6 +24,7 @@ class PlaybackWebhooks(
     private val queue = Channel<Delivery>(32)
     private val recent = linkedMapOf<String, Long>()
     private var authPendingUntil = 0L
+    private var pendingPrompt: OauthPrompt? = null
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3))
         .followRedirects(HttpClient.Redirect.NEVER).build()
     private val worker = scope.launch(Dispatchers.IO) {
@@ -46,6 +47,7 @@ class PlaybackWebhooks(
         val source = if (youtube) "YouTube" else if (identifier.startsWith("jellyfin:")) "Jellyfin" else "Media provider"
         post("failure:$source:${if (login) "login" else clean(message)}",
             "$context failed · $source\n${clean(message)}" + if (login) "\nDisc kept. Reauthorize YouTube to retry playback.\nManual command: /disc oauth force" else "")
+        if (login) synchronized(this) { pendingPrompt?.takeIf { clock() < authPendingUntil } }?.let(::sendPrompt)
         if (login && config().autoYoutubeOauth) {
             val start = synchronized(this) {
                 if (clock() < authPendingUntil) false else { authPendingUntil = clock() + 15 * 60_000; true }
@@ -71,14 +73,17 @@ class PlaybackWebhooks(
     private var authJob: Job? = null
 
     fun oauthPrompt(prompt: OauthPrompt) {
-        synchronized(this) { authPendingUntil = clock() + 15 * 60_000 }
+        synchronized(this) { authPendingUntil = clock() + 15 * 60_000; pendingPrompt = prompt }
+        sendPrompt(prompt)
+    }
+    private fun sendPrompt(prompt: OauthPrompt) {
         post("oauth-prompt:${prompt.code}", "YouTube reauthorization required\nOpen ${prompt.url}\nPairing code: ${prompt.code}\nAuthorize the intended account promptly. On success the plugin saves the replacement token automatically.\nOnly authorize a request from your own server.")
     }
     fun oauthSuccess() {
         clearAuthorization()
         post("oauth-success", "YouTube authorization succeeded. The replacement token was saved; retry playback. Discs were kept.")
     }
-    @Synchronized private fun clearAuthorization() { authPendingUntil = 0 }
+    @Synchronized private fun clearAuthorization() { authPendingUntil = 0; pendingPrompt = null }
     fun close() { queue.close(); worker.cancel(); authJob?.cancel() }
 
     private fun destination(): URI? {

@@ -12,6 +12,18 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class PlaybackWebhooksTest {
+    @Test fun `provider OAuth logger forwards pairing prompts and ignores token responses`() {
+        val prompts = mutableListOf<OauthPrompt>()
+        val observer = OauthPromptLog { prompts += it }
+        val name = su.plo.voice.lavaplayer.libs.dev.lavalink.youtube.YoutubeAudioSourceManager::class.java.packageName + ".http.YoutubeOauth2Handler"
+        try {
+            observer.start()
+            val logger = org.apache.logging.log4j.LogManager.getLogger(name)
+            logger.info("fetch device code response: access_token=do-not-forward")
+            logger.info("OAUTH INTEGRATION: go to https://www.google.com/device and enter code ABCD-EFGH")
+            assertEquals(listOf(OauthPrompt("https://www.google.com/device", "ABCD-EFGH")), prompts)
+        } finally { observer.close() }
+    }
     @Test fun `private endpoint receives deduplicated failure and one pairing prompt without mentions`() {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val messages = java.util.concurrent.CopyOnWriteArrayList<String>()
