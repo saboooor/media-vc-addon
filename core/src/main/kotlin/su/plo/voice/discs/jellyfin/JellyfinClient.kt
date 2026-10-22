@@ -18,7 +18,14 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
     class Session(val baseUrl: String, val userId: String, val token: String, val deviceId: String) {
         override fun toString() = "Jellyfin session"
     }
-    data class Media(val id: String, val title: String, val artist: String, val album: String, val durationMs: Long, val type: String = "Audio") {
+    data class Media(val id: String, val title: String, val artist: String, val album: String, val durationMs: Long, val type: String = "Audio",
+                     val seasonNumber: Int? = null, val episodeNumber: Int? = null) {
+        val isSeries get() = type == "Series"
+        val browserLabel get() = if (type == "Episode") {
+            val season = seasonNumber?.let { "S${it.toString().padStart(2, '0')}" } ?: "S?"
+            val episode = episodeNumber?.let { "E${it.toString().padStart(2, '0')}" } ?: "E?"
+            "$season$episode · $label"
+        } else label
         val label get() = su.plo.voice.discs.utils.extend.formatTrackDisplay(title, artist)
     }
     data class Page(val items: List<Media>, val total: Int)
@@ -34,16 +41,31 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
     }
 
     fun browse(session: Session, page: Int, search: String = "", limit: Int = PAGE_SIZE): Page {
-        require(page in 0..100_000 && search.length <= 200)
-        val query = "Items?userId=${session.userId}&recursive=true&includeItemTypes=Audio,AudioBook,Movie,Episode,MusicVideo,Video&sortBy=SortName&sortOrder=Ascending" +
+        require(page in 0..100_000 && search.length <= 200 && limit in 1..PAGE_SIZE)
+        val query = "Items?userId=${session.userId}&recursive=true&includeItemTypes=Audio,AudioBook,Movie,Series,MusicVideo,Video&sortBy=SortName&sortOrder=Ascending" +
             "&startIndex=${page * limit}&limit=$limit&enableImages=false&searchTerm=${encode(search)}"
+        return mediaPage(session, query, limit)
+    }
+
+    /** Sort the entire series numerically on the server before applying pagination. */
+    fun episodes(session: Session, seriesId: String, page: Int, search: String = "", limit: Int = PAGE_SIZE): Page {
+        require(page in 0..100_000 && search.length <= 200 && limit in 1..PAGE_SIZE)
+        val query = "Items?userId=${session.userId}&parentId=${mediaId(seriesId)}&recursive=true&includeItemTypes=Episode" +
+            "&sortBy=ParentIndexNumber,IndexNumber,SortName&sortOrder=Ascending&isMissing=false" +
+            "&startIndex=${page * limit}&limit=$limit&enableImages=false&enableTotalRecordCount=true&searchTerm=${encode(search)}"
+        return mediaPage(session, query, limit)
+    }
+
+    private fun mediaPage(session: Session, query: String, limit: Int): Page {
         val json = request(session.baseUrl, query, session.deviceId, session.token)
         val items = json.getAsJsonArray("Items")?.take(limit)?.map { value ->
             val item = value.asJsonObject
             Media(mediaId(item.get("Id").asString), (item.get("Name")?.asString ?: "Untitled").take(256),
-                (item.getAsJsonArray("Artists")?.joinToString(", ") { it.asString } ?: "").take(256),
+                (item.get("Artists")?.takeUnless { it.isJsonNull }?.asJsonArray?.joinToString(", ") { it.asString } ?: "").take(256),
                 item.get("Album")?.takeUnless { it.isJsonNull }?.asString ?: "",
-                (item.get("RunTimeTicks")?.takeUnless { it.isJsonNull }?.asLong ?: 0L) / 10_000, item.get("Type")?.takeUnless { it.isJsonNull }?.asString ?: "Audio")
+                (item.get("RunTimeTicks")?.takeUnless { it.isJsonNull }?.asLong ?: 0L) / 10_000, item.get("Type")?.takeUnless { it.isJsonNull }?.asString ?: "Audio",
+                item.get("ParentIndexNumber")?.takeUnless { it.isJsonNull }?.asInt,
+                item.get("IndexNumber")?.takeUnless { it.isJsonNull }?.asInt)
         } ?: emptyList()
         return Page(items, json.get("TotalRecordCount")?.asInt ?: items.size)
     }
