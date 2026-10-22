@@ -381,7 +381,12 @@ class ScreenManager : PluginKoinComponent {
                 ytdlpPath = config.screen.ytdlpPath,
                 artworkUrl = artworkUrl,
                 isYouTubeMusic = isYouTubeMusic,
-                highResolution = config.screen.companionRgb && config.screen.companionResolution.lowercase() in setOf("720p", "1080p", "source")
+                highResolution = config.screen.companionRgb && config.screen.companionResolution.lowercase() in setOf("720p", "1080p", "source"),
+                maxVideoHeight = when (config.screen.companionResolution.lowercase()) {
+                    "720p" -> 720
+                    "source" -> 2160
+                    else -> 1080
+                }
             )
 
             val resolvedFfmpegPath = FFmpegResolver.resolve(
@@ -399,6 +404,8 @@ class ScreenManager : PluginKoinComponent {
                 companionRgb = config.screen.companionRgb,
                 companionQuality = config.screen.companionQuality,
                 companionResolution = config.screen.companionResolution,
+                companionCodec = config.screen.companionCodec,
+                companionBitrateKbps = config.screen.companionBitrateKbps,
                 ditherStrength = if (config.screen.dithering) config.screen.ditherStrength.coerceIn(0, 32) else 0,
                 fps = screen.effectiveVideoFps(maxVideoFps),
                 maxDistance = config.screen.maxDistance.coerceIn(8, 128),

@@ -7,8 +7,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class FrameAssemblerTest {
     private static byte[] body(int columns, int rows, byte[] jpeg) {
-        ByteBuffer body = ByteBuffer.allocate(8 + columns * rows * 4 + jpeg.length);
+        ByteBuffer body = ByteBuffer.allocate(36 + columns * rows * 4 + jpeg.length);
         body.putInt(columns).putInt(rows);
+        for (int i = 0; i < 7; i++) body.putInt(0);
         for (int i = 0; i < columns * rows; i++) body.putInt(10 + i);
         return body.put(jpeg).array();
     }
@@ -55,7 +56,7 @@ class FrameAssemblerTest {
         byte[] huge = ByteBuffer.allocate(17).putInt(10).putInt(1).putInt(Integer.MAX_VALUE).putInt(0).put((byte) 0).array();
         assertNull(assembler.accept(huge));
         byte[] duplicate = body(2, 1, new byte[]{1});
-        ByteBuffer.wrap(duplicate).putInt(12, 10);
+        ByteBuffer.wrap(duplicate).putInt(40, 10);
         assertNull(assembler.accept(chunk(1, duplicate, 0, duplicate.length)));
         byte[] invalid = body(1, 1, new byte[]{1});
         ByteBuffer.wrap(invalid).putInt(0, Integer.MAX_VALUE);

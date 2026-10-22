@@ -242,18 +242,7 @@ Place a solid light-emitting block (such as a redstone lamp, copper bulb, shroom
 
 These are ordinary player-placed blocks with actual world lighting. Blocks with a native lit state use it; always-lit blocks temporarily become black concrete while off. Redstone blocks supply power only while on. Beacons stay in place: a black-concrete shutter in the empty space directly above them blocks the beam while off and retracts while on. Leave that space empty when linking a beacon. Beacons still need a valid base and a clear beam path. Shutters are removed when their link is released, the chunk unloads, or the plugin stops. Their original block data is saved and restored when unlinked, unloaded, moved by a piston, broken, or on plugin shutdown. The selected frequency band turns each light on; pausing, stopping, unloading, and plugin shutdown reset them while respecting normal redstone power. Breaking a temporarily darkened block restores its original material before drops are calculated. Breaking the lamp or jukebox removes its link. Links and band selections are saved in `bass_lamp_links.json` across restarts. Existing links default to bass. Choose another band and click an already linked lamp to change its response. Lamps use the shared audio analysis independently of the visualizer settings menu.
 
-Configure the shared light release in `discs.toml`:
-
-```toml
-light_falloff = 0.2
-```
-
-This is the fraction of the previous flash retained per lighting update (normally 50 ms).
-The default `0.2` preserves the crisp response; try `0.8` for longer flashes. `0` drops the
-previous pulse immediately, while `1` holds a triggered peak until playback resets.
-Values are clamped to `0..1`; non-finite values use the default. Run `/disc reload` to apply
-changes to all existing linked lights and beacon shutters. Frequency-band selection and
-immediate reset on pause/stop are unchanged. This setting is shared, not per light.
+Adjust **Light falloff** in **Jukebox controls → Lights**. Higher values keep flashes lit longer; 0% drops the previous pulse immediately, and 100% holds peaks until playback resets. The default is 20%. Changes apply live to that jukebox's linked lights and beacon shutters. The setting is saved with the jukebox and carried when it is broken and placed again. This replaces the global `light_falloff` config option.
 
 ### Carrying jukebox settings
 
@@ -431,3 +420,5 @@ Use a private admin channel: a pairing code can authorize this server to use the
 Jellyfin browsing groups TV episodes under their show. Click a show to open its episodes in numeric season/episode order (including season 0 specials), then click an episode to burn it. Episode lists support pagination and scoped search; **Back to library** restores the library page and filter. Both the dialog and chest views support show navigation.
 
 The Fabric screen companion supports higher-resolution video independently of vanilla map tiles. Set `[screen].companion_resolution` in `discs.toml` to `map`, `720p`, `1080p` (default), or `source` (up to 4K). Video preserves its aspect ratio and source detail without upscaling. Settings apply to newly started playback. Install the updated companion and server together; older companions use vanilla maps. Higher resolution increases server processing, memory, and network use.
+
+Companion video now uses low-latency H.264 by default, with `[screen].companion_codec = "h264"` and `companion_bitrate_kbps = 4000`. FFmpeg must include `libx264`; encoder failures fall back to JPEG. Set the codec to `jpeg` for independent frames. The companion bundles a pure Java decoder, so no client FFmpeg installation is required. H.264 reduces repeated image data but uses client CPU for software decoding. Both jars must use protocol v4; older companions receive vanilla maps. Settings apply to newly started playback. See [companion streaming details](screen-companion/README.md#h264-streaming).

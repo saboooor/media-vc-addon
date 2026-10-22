@@ -11,6 +11,19 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 class SavedJukeboxSettingsTest {
+    @Test fun `light falloff survives saving and rejects invalid values`() {
+        for (falloff in listOf(0.0, 0.2, 0.8, 1.0)) {
+            val settings = SavedJukeboxSettings(lightFalloff = falloff)
+            assertEquals(falloff, SavedJukeboxSettings.decode(settings.encode())!!.lightFalloff)
+        }
+        assertNull(SavedJukeboxSettings.decode("{}")!!.lightFalloff)
+        for (invalid in listOf(-0.1, 1.1, Double.NaN, Double.POSITIVE_INFINITY)) {
+            assertThrows(IllegalArgumentException::class.java) {
+                SavedJukeboxSettings(lightFalloff = invalid).encode()
+            }
+        }
+    }
+
     @Test fun `hologram visibility persists independently and legacy settings keep displays enabled`() {
         for (main in listOf(false, true)) for (queue in listOf(false, true)) {
             val settings = SavedJukeboxSettings(hologramVisibility = ca.saboor.discs.event.HologramVisibility(main, queue))

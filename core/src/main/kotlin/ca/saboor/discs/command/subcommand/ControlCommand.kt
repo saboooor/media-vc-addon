@@ -271,6 +271,11 @@ class ControlCommand(
             body += Component.text("Lights: ${lamps.count(block)} linked", NamedTextColor.GOLD)
             body += Component.text("Choose a band, then click a lamp to link it or change its response.")
             body += Component.text("Deep bass follows low thumps; low mids follow warmth; vocal range follows mids; sparkle follows bright highs. Full spectrum responds across all bands.", NamedTextColor.GRAY)
+            val falloff = (lamps.falloff(block) * 100).toInt()
+            body += Component.text("Light falloff: $falloff% · higher keeps flashes lit longer", NamedTextColor.GRAY)
+            buttons += "Falloff −10%" to (prefix + "lamp_falloff_${(falloff - 10).coerceAtLeast(0)}")
+            buttons += "Falloff +10%" to (prefix + "lamp_falloff_${(falloff + 10).coerceAtMost(100)}")
+            buttons += "Reset falloff (20%)" to (prefix + "lamp_falloff_20")
             bodyLampButtons(buttons, prefix, lamps.count(block))
             buttons += "Back to playback" to (prefix + "refresh")
         }
@@ -436,6 +441,13 @@ class ControlCommand(
         }
         sessions.remove(player.uniqueId, session)
         val controls = session.controls
+        if (arguments[2].startsWith("lamp_falloff_")) {
+            val amount = arguments[2].removePrefix("lamp_falloff_").toIntOrNull() ?: return
+            if (amount !in 0..100) return
+            bassLamps?.setFalloff(session.block, amount / 100.0) ?: return
+            show(player, session.block, lampMenu = true)
+            return
+        }
         if (arguments[2].startsWith("screen_fps_")) {
             if (!player.isOp && !player.hasPermission("pv.addon.discs.screen") &&
                 !player.hasPermission("vc.addon.discs.screen")) return

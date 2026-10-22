@@ -45,12 +45,18 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     }
     data class Link(val lamp: Position, val jukebox: Position, val band: LightBand? = LightBand.BASS, val originalData: String? = null, val shutterData: String? = null)
     private data class Pending(val jukebox: Block, val unlink: Boolean, val band: LightBand = LightBand.BASS, val expires: Long = System.currentTimeMillis() + 120_000)
-    private val config: su.plo.voice.discs.AddonConfig by getter()
     private val plugin: JavaPlugin by inject()
     private val scope: CoroutineScope by inject()
     private val voiceServer: PlasmoVoiceServer? by getterOrNull()
     private val links = ConcurrentHashMap<Position, Link>()
     private val pending = ConcurrentHashMap<UUID, Pending>()
+    private val falloffs = ConcurrentHashMap<Position, Double>()
+    fun falloff(jukebox: Block): Double = falloffs[Position.of(jukebox)] ?: 0.2
+    fun setFalloff(jukebox: Block, value: Double) {
+        require(value.isFinite() && value in 0.0..1.0)
+        falloffs[Position.of(jukebox)] = value
+    }
+
     private val envelopes = ConcurrentHashMap<Position, BassLampEnvelope>()
     private val consumers = ConcurrentHashMap.newKeySet<PlaybackControls>()
     private val gson = GsonBuilder().setPrettyPrinting().create()
@@ -187,7 +193,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                             if (listening) active += controls!!
                             val lit = if (listening && controls?.paused == false)
                                 envelopes.computeIfAbsent(link.lamp) { BassLampEnvelope() }.update(
-                                    (link.band ?: LightBand.BASS).level(controls.spectrum.levels), config.lightFalloff)
+                                    (link.band ?: LightBand.BASS).level(controls.spectrum.levels), falloffs[link.jukebox] ?: 0.2)
                             else { envelopes.remove(link.lamp); false }
                             setLit(lamp, link, lit)
                         }
@@ -242,6 +248,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     }
     private fun unlinkBroken(blocks: Collection<Block>) {
         val broken = blocks.map(Position::of).toSet()
+        broken.forEach { falloffs.remove(it) }
         var changed = false
         for (link in links.values.toList()) if (link.lamp in broken || link.jukebox in broken ||
             (link.shutterData != null && link.lamp.copy(y = link.lamp.y + 1) in broken)) {

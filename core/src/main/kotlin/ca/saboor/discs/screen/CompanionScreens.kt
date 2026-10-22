@@ -14,7 +14,7 @@ import org.bukkit.plugin.messaging.PluginMessageListener
 
 /** Only negotiated clients receive RGB. No media URL or authentication token leaves the server. */
 object CompanionScreens : Listener, PluginMessageListener {
-    const val PROTOCOL = 3
+    const val PROTOCOL = 4
     internal fun supportsProtocol(message: ByteArray) = message.contentEquals(byteArrayOf(PROTOCOL.toByte()))
     const val HELLO = "vcb:screen_hello"
     const val FRAME = "vcb:screen_rgb"
@@ -34,15 +34,16 @@ object CompanionScreens : Listener, PluginMessageListener {
     }
     fun capable(player: Player) = clients.containsKey(player.uniqueId)
     private val sequence = java.util.concurrent.atomic.AtomicInteger()
-    fun frame(screen: Screen, jpeg: ByteArray, players: List<Player>) {
+    fun frame(screen: Screen, jpeg: ByteArray, players: List<Player>, codec: Int = 0, width: Int = 0, height: Int = 0, stream: Int = 0, frame: Int = 0, keyframe: Boolean = true) {
         require(jpeg.size <= 4 * 1024 * 1024)
         val ids = screen.mapIds.flatten()
         require(ids.size == screen.columns * screen.rows && ids.size in 1..256)
         val anchor = ids.first()
         maps.add(anchor)
         // One JPEG for the entire display. Chunks are transport fragments, never render tiles.
-        val body = ByteBuffer.allocate(8 + ids.size * 4 + jpeg.size)
+        val body = ByteBuffer.allocate(36 + ids.size * 4 + jpeg.size)
             .putInt(screen.columns).putInt(screen.rows)
+            .putInt(codec).putInt(width).putInt(height).putInt(stream).putInt(frame).putInt(if (keyframe) 1 else 0).putInt(0)
         ids.forEach { body.putInt(it) }
         body.put(jpeg)
         val bytes = body.array()

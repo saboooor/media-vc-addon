@@ -1,21 +1,28 @@
 package ca.saboor.discs.screen
 
 import java.awt.image.BufferedImage
+import java.awt.image.DataBufferInt
 import java.io.ByteArrayOutputStream
 import javax.imageio.IIOImage
 import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
+import javax.imageio.stream.MemoryCacheImageOutputStream
 
 /** Encodes a complete video display as one JPEG. Transport handles fragmentation. */
 internal class CompanionFrameEncoder {
     private var pixels = IntArray(0)
+    private var image: BufferedImage? = null
     private var cached: ByteArray? = null
     private var cachedWidth = 0
     private var cachedHeight = 0
     private var cachedQuality = 0
     fun encode(rgb: ByteArray, screenWidth: Int, screenHeight: Int, quality: Int): ByteArray {
         require(screenWidth in 1..8192 && screenHeight in 1..8192 && screenWidth.toLong() * screenHeight <= 8_294_400L)
-        if (pixels.size != screenWidth * screenHeight) { pixels = IntArray(screenWidth * screenHeight); cached = null }
+        if (image?.width != screenWidth || image?.height != screenHeight) {
+            image = BufferedImage(screenWidth, screenHeight, BufferedImage.TYPE_INT_RGB)
+            pixels = (image!!.raster.dataBuffer as DataBufferInt).data
+            cached = null
+        }
         val jpegQuality = quality.coerceIn(40, 95)
         var changed = cached == null || cachedWidth != screenWidth || cachedHeight != screenHeight || cachedQuality != jpegQuality
         for (y in 0 until screenHeight) for (x in 0 until screenWidth) {
@@ -27,12 +34,11 @@ internal class CompanionFrameEncoder {
             pixels[index] = color
         }
         if (!changed) return cached!!
-        val image = BufferedImage(screenWidth, screenHeight, BufferedImage.TYPE_INT_RGB)
-        image.setRGB(0, 0, screenWidth, screenHeight, pixels, 0, screenWidth)
+        cached = null // Failed encodes must not reuse a JPEG from the previous pixel buffer.
         val writer = ImageIO.getImageWritersByFormatName("jpeg").next()
         val bytes = ByteArrayOutputStream()
         try {
-            ImageIO.createImageOutputStream(bytes).use { output ->
+            MemoryCacheImageOutputStream(bytes).use { output ->
                 writer.output = output
                 val parameters = writer.defaultWriteParam
                 parameters.compressionMode = ImageWriteParam.MODE_EXPLICIT

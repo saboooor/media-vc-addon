@@ -38,6 +38,8 @@ class VideoPlayer(
     ditherStrength: Int = 12,
     private val companionRgb: Boolean = true,
     private val companionQuality: Int = 85,
+    private val companionCodec: String = "h264",
+    private val companionBitrateKbps: Int = 4000,
     private val companionResolution: String = "map",
     val playbackPositionMs: (() -> Long?)? = null
 ) {
@@ -66,6 +68,7 @@ class VideoPlayer(
             if (field != value && isPlaying) {
                 logger.info("Video on screen '${screen.name}' ${if (value) "paused" else "resumed"}")
             }
+            if (value) closeH264()
             field = value
         }
 
@@ -88,6 +91,8 @@ class VideoPlayer(
     private val tileBuffers = Array(rows) { Array(cols) { ByteArray(16384) } }
 
     private val dither = if (ditherStrength > 0) OrderedMapDither(ditherStrength) else null
+    @Volatile private var h264Encoder: H264StreamEncoder? = null
+    private var h264Failed = false
     private val rgbEncoder = CompanionFrameEncoder()
     private val tileDeltas = Array(rows) { Array(cols) { MapTileDelta() } }
     private val rgbTiles = Array(rows) { Array(cols) { RgbTileCache() } }
@@ -113,6 +118,8 @@ class VideoPlayer(
         displayedPositionMs = positionMs.coerceAtLeast(0)
         coroutineScope.launch(Dispatchers.IO) {
             playbackMutex.withLock {
+                closeH264()
+                h264Failed = false
                 val previous = playbackJob
                 playbackJob = null
                 previous?.cancel()
@@ -464,6 +471,7 @@ class VideoPlayer(
                 logger.error("Error during video playback for screen '${screen.name}': ${e.message}", e)
             }
         } finally {
+            closeH264()
             watchdogJob?.cancel()
             stdinJob?.cancel()
             val p = proc
@@ -488,6 +496,7 @@ class VideoPlayer(
     private class StalledPlayback(val positionMs: Long) : IOException("Video frame read stalled")
 
     private suspend fun renderImagePlayback(imgUrl: String) {
+        closeH264()
         val rawFrameBuffer = ByteArray(totalWidth * totalHeight * 3)
         val loaded = withContext(Dispatchers.IO) {
             loadAndScaleImage(imgUrl, totalWidth, totalHeight, rawFrameBuffer)
@@ -621,27 +630,48 @@ class VideoPlayer(
         if (stopped.get()) return
         mapViewers.update(players.map { it.uniqueId })
         if (players.isEmpty()) {
+            closeH264()
             previousViewers = emptyMap()
             companionRecipients.clear()
             return
         }
-        val rawFrame = mapScaler.scale(sourceFrame, width, height, totalWidth, totalHeight)
-        val newViewers = players.filter { previousViewers[it.uniqueId] !== it }
-        val existingViewers = players.filter { previousViewers[it.uniqueId] === it }
-        val playerManager = PacketEvents.getAPI().playerManager
+        var rgbDelivered = false
 
         if (companionRgb && players.any(CompanionScreens::capable)) {
             try {
                 val capable = players.filter(CompanionScreens::capable)
-                val jpeg = try { rgbEncoder.encode(sourceFrame, width, height, companionQuality) }
-                    catch (_: IllegalArgumentException) { fallbackRgbEncoder.encode(rawFrame, totalWidth, totalHeight, companionQuality) }
-                val recipients = companionRecipients.select(jpeg, capable, System.nanoTime())
-                if (recipients.isNotEmpty()) CompanionScreens.frame(screen, jpeg, recipients)
+                if (companionCodec.equals("h264", true) && !isCurrentlyImage && !h264Failed) {
+                    var encoder = h264Encoder
+                    if (encoder == null || encoder.width != width || encoder.height != height || encoder.fps != fps) {
+                        closeH264()
+                        encoder = H264StreamEncoder(ffmpegPath, width, height, fps, companionBitrateKbps, ::sendH264)
+                        h264Encoder = encoder
+                    }
+                    if (encoder.submit(sourceFrame)) rgbDelivered = true
+                    else { h264Failed = true; closeH264(); logger.warn("H.264 encoding unavailable; using JPEG for screen '${screen.name}'") }
+                }
+                if (!rgbDelivered) {
+                    val jpeg = try { rgbEncoder.encode(sourceFrame, width, height, companionQuality) }
+                    catch (_: IllegalArgumentException) { fallbackRgbEncoder.encode(mapScaler.scale(sourceFrame, width, height, totalWidth, totalHeight), totalWidth, totalHeight, companionQuality) }
+                    val recipients = companionRecipients.select(jpeg, capable, System.nanoTime())
+                    if (recipients.isNotEmpty()) CompanionScreens.frame(screen, jpeg, recipients)
+                    rgbDelivered = true
+                }
             } catch (e: Exception) {
+                h264Failed = true; closeH264()
                 logger.debug("RGB screen encoding failed; palette fallback remains available", e)
             }
         }
 
+        val mapPlayers = if (rgbDelivered) players.filterNot(CompanionScreens::capable) else players
+        if (mapPlayers.isEmpty()) {
+            previousViewers = emptyMap()
+            return
+        }
+        val rawFrame = mapScaler.scale(sourceFrame, width, height, totalWidth, totalHeight)
+        val newViewers = mapPlayers.filter { previousViewers[it.uniqueId] !== it }
+        val existingViewers = mapPlayers.filter { previousViewers[it.uniqueId] === it }
+        val playerManager = PacketEvents.getAPI().playerManager
         for (r in 0 until rows) {
             val startY = r * 128
             for (c in 0 until cols) {
@@ -681,8 +711,18 @@ class VideoPlayer(
                 if (changed != null && existingViewers.isNotEmpty()) send(changed, existingViewers)
             }
         }
-        previousViewers = players.associateBy { it.uniqueId }
+        previousViewers = mapPlayers.associateBy { it.uniqueId }
     }
+
+    @Synchronized
+    private fun sendH264(encoder: H264StreamEncoder, number: Int, data: ByteArray, keyframe: Boolean) {
+        if (stopped.get() || h264Encoder !== encoder || !isPlaying || isPaused) return
+        val viewers = getNearbyPlayers().filter(CompanionScreens::capable)
+        if (viewers.isNotEmpty()) CompanionScreens.frame(screen, data, viewers, 1,
+            encoder.encodedWidth, encoder.encodedHeight, encoder.streamId, number, keyframe)
+    }
+
+    private fun closeH264() { val old = h264Encoder; h264Encoder = null; old?.close() }
 
     @Synchronized
     fun clearScreen() {
@@ -779,6 +819,7 @@ class VideoPlayer(
     }
 
     private fun cleanup() {
+        closeH264()
         isPlaying = false
         playbackJob?.cancel()
         process?.let {

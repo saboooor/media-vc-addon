@@ -16,6 +16,8 @@ subprojects {
     base.archivesName = "vcb-screen-companion-${target[0]}"
     repositories { mavenCentral() }
     dependencies {
+        implementation "org.jcodec:jcodec:0.2.5"
+        include "org.jcodec:jcodec:0.2.5"
         minecraft "com.mojang:minecraft:${target[0]}"
         if (project.name == 'mc12111') mappings loom.officialMojangMappings()
         add(project.name == 'mc12111' ? 'modImplementation' : 'implementation', 'net.fabricmc:fabric-loader:0.19.5')
@@ -27,6 +29,7 @@ subprojects {
         testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
     }
     sourceSets.test.java.srcDirs = [rootProject.file('src/test/java')]
+    sourceSets.test.resources.srcDirs = [rootProject.file('src/test/resources')]
     tasks.withType(Test).configureEach { useJUnitPlatform() }
     java { toolchain.languageVersion = JavaLanguageVersion.of(target[2]) }
     sourceSets.main.java.srcDirs = [rootProject.file('src/main/java'), rootProject.file(project.name == 'mc12111' ? 'src/legacy/java' : 'src/modern/java')]

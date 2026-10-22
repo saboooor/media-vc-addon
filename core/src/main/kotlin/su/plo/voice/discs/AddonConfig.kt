@@ -25,8 +25,6 @@ class AddonConfig {
     @ConfigField
     var webhook = WebhookConfig()
 
-    @ConfigField(path = "light_falloff", comment = "Shared linked-light release: fraction of pulse retained per 50 ms (0..1). Higher values keep flashes lit longer; 0 drops immediately, 1 holds peaks until playback resets. Default 0.2 preserves the crisp response. Applies with /disc reload.")
-    var lightFalloff = 0.2
 
     @Config
     class PlaylistSourcesConfig {
@@ -353,6 +351,12 @@ class AddonConfig {
 
         @ConfigField(comment = "Companion resolution: map, 720p, 1080p, or source (up to 4K). Source content is never upscaled; settings apply to new playback")
         var companionResolution: String = "1080p"
+
+        @ConfigField(comment = "Companion video codec: h264 (native FFmpeg libx264) or jpeg. Artwork uses JPEG. Applies to new playback")
+        var companionCodec: String = "h264"
+
+        @ConfigField(comment = "H.264 maximum bitrate in kilobits/second per screen (256-20000); default 4000")
+        var companionBitrateKbps: Int = 4000
 
         @ConfigField(comment = "Ordered dithering strength in RGB levels (0-32; 0 disables, default 12). Higher values add more visible texture")
         var ditherStrength: Int = 12

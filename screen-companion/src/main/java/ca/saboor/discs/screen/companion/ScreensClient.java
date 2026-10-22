@@ -10,13 +10,14 @@ import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.Identifier;
 
 import javax.imageio.ImageIO;
+import javax.imageio.stream.MemoryCacheImageInputStream;
 import java.io.ByteArrayInputStream;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ScreensClient implements ClientModInitializer {
-    private record Encoded(long session, long revision, byte[] jpeg, int columns, int rows, int[] maps) {}
+    private record Encoded(long session, long revision, byte[] jpeg, int columns, int rows, int[] maps, FrameAssembler.Frame video) {}
     private record Decoded(long session, long revision, int[] pixels, int width, int height, int columns, int rows, int[] maps) {}
     public record Texture(Identifier id, DynamicTexture image, int columns, int rows, int[] maps) {}
     private static final FrameAssembler assembler = new FrameAssembler();
@@ -25,6 +26,8 @@ public class ScreensClient implements ClientModInitializer {
     private static final Map<Integer, Texture> textures = new LinkedHashMap<>(16, .75f, true);
     private static final Map<Integer, Long> revisions = new HashMap<>();
     private static final ConcurrentMap<Integer, Encoded> pending = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Integer, H264VideoDecoder> videos = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Integer, Encoded> videoSessions = new ConcurrentHashMap<>();
     private static final ConcurrentMap<Integer, Decoded> decoded = new ConcurrentHashMap<>();
     private static final ExecutorService decoder = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "vcb-screen-decoder"); t.setDaemon(true); return t;
@@ -40,7 +43,7 @@ public class ScreensClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(ClearPayload.TYPE, (payload, context) -> {
             int id = payload.mapId();
             int anchor = anchors.getOrDefault(id, id);
-            revisions.remove(anchor); pending.remove(anchor); decoded.remove(anchor); assembler.clear(anchor); release(anchor);
+            revisions.remove(anchor); pending.remove(anchor); videos.remove(anchor); videoSessions.remove(anchor); decoded.remove(anchor); assembler.clear(anchor); release(anchor);
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> reset());
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
@@ -68,7 +71,15 @@ public class ScreensClient implements ClientModInitializer {
         int id = frame.anchor();
         if (!revisions.containsKey(id) && revisions.size() >= LIMIT) return;
         long next = revisions.computeIfAbsent(id, key -> ++revision);
-        pending.put(id, new Encoded(session, next, frame.jpeg(), frame.columns(), frame.rows(), frame.maps()));
+        var encoded = new Encoded(session, next, frame.jpeg(), frame.columns(), frame.rows(), frame.maps(), frame);
+        if (frame.codec() == 1) {
+            pending.remove(id);
+            videoSessions.put(id, encoded);
+            videos.computeIfAbsent(id, key -> new H264VideoDecoder()).offer(frame);
+        } else {
+            videos.remove(id); videoSessions.remove(id);
+            pending.put(id, encoded);
+        }
         scheduleDecode();
     }
 
@@ -76,10 +87,21 @@ public class ScreensClient implements ClientModInitializer {
         if (!decoding.compareAndSet(false, true)) return;
         decoder.execute(() -> {
             try {
-                while (!pending.isEmpty()) for (int id : pending.keySet()) {
+                while (hasPending()) {
+                for (int id : videos.keySet()) {
+                    var video = videos.get(id);
+                    var owner = videoSessions.get(id);
+                    if (video == null || owner == null) continue;
+                    var encoded = video.poll();
+                    if (encoded == null) continue;
+                    var image = video.decode(encoded);
+                    if (image != null && videos.get(id) == video) decoded.put(id, new Decoded(owner.session, owner.revision,
+                        image.pixels(), image.width(), image.height(), encoded.columns(), encoded.rows(), encoded.maps()));
+                }
+                for (int id : pending.keySet()) {
                     Encoded frame = pending.remove(id);
                     if (frame == null) continue;
-                    try (var input = ImageIO.createImageInputStream(new ByteArrayInputStream(frame.jpeg))) {
+                    try (var input = new MemoryCacheImageInputStream(new ByteArrayInputStream(frame.jpeg))) {
                         var readers = ImageIO.getImageReaders(input);
                         if (!readers.hasNext()) continue;
                         var reader = readers.next();
@@ -91,12 +113,15 @@ public class ScreensClient implements ClientModInitializer {
                         } finally { reader.dispose(); }
                     } catch (Exception ignored) { /* Keep palette or last valid RGB texture. */ }
                 }
+                }
             } finally {
                 decoding.set(false);
-                if (!pending.isEmpty()) scheduleDecode();
+                if (hasPending()) scheduleDecode();
             }
         });
     }
+
+    private static boolean hasPending() { return !pending.isEmpty() || videos.values().stream().anyMatch(H264VideoDecoder::hasFrames); }
 
     private static void upload(int id, Decoded frame) {
         int width = frame.width, height = frame.height;
@@ -134,7 +159,7 @@ public class ScreensClient implements ClientModInitializer {
         }
     }
     private static void reset() {
-        session++; pending.clear(); decoded.clear(); revisions.clear(); assembler.reset();
+        session++; videos.clear(); videoSessions.clear(); pending.clear(); decoded.clear(); revisions.clear(); assembler.reset();
         for (int id : new ArrayList<>(textures.keySet())) release(id);
         ticks = 0; level = null;
     }

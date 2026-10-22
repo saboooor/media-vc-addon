@@ -51,6 +51,7 @@ object VideoSourceResolver {
         artworkUrl: String? = null,
         isYouTubeMusic: Boolean = false,
         highResolution: Boolean = false,
+        maxVideoHeight: Int = 1080,
     ): String {
         val trimmed = identifier.trim()
         val videoId = extractYouTubeVideoId(trimmed)
@@ -59,7 +60,7 @@ object VideoSourceResolver {
 
         if (isYt) {
             // Option 1: Try yt-dlp if installed on server
-            val ytdlpResolved = tryResolveWithYtDlp(trimmed, ytdlpPath, highResolution)
+            val ytdlpResolved = tryResolveWithYtDlp(trimmed, ytdlpPath, highResolution, maxVideoHeight)
             if (ytdlpResolved != null) {
                 logger.info("Resolved video stream via yt-dlp for '$trimmed'")
                 return ytdlpResolved
@@ -67,7 +68,7 @@ object VideoSourceResolver {
 
             // Option 2: Try resolving via Lavaplayer's YouTube source formats
             if (targetId != null && audioPlayerManager != null) {
-                val lpResolved = tryResolveWithLavaPlayer(targetId, audioPlayerManager, highResolution)
+                val lpResolved = tryResolveWithLavaPlayer(targetId, audioPlayerManager, highResolution, maxVideoHeight)
                 if (lpResolved != null) return lpResolved
             }
 
@@ -81,13 +82,13 @@ object VideoSourceResolver {
         return trimmed
     }
 
-    private fun tryResolveWithYtDlp(url: String, ytdlpPath: String, highResolution: Boolean): String? {
+    private fun tryResolveWithYtDlp(url: String, ytdlpPath: String, highResolution: Boolean, maxVideoHeight: Int): String? {
         return try {
             val process = ProcessBuilder(
                 ytdlpPath,
                 "-g",
                 "-f",
-                if (highResolution) "bestvideo[ext=mp4]/bestvideo/best" else "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio/best",
+                if (highResolution) "bestvideo[ext=mp4][height<=${maxVideoHeight.coerceIn(144, 2160)}]/bestvideo[height<=${maxVideoHeight.coerceIn(144, 2160)}]/best[height<=${maxVideoHeight.coerceIn(144, 2160)}]" else "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio/best",
                 "--no-playlist",
                 url
             ).redirectErrorStream(true).start()
@@ -108,7 +109,7 @@ object VideoSourceResolver {
         }
     }
 
-    private fun tryResolveWithLavaPlayer(videoId: String, audioPlayerManager: PlasmoAudioPlayerManager, highResolution: Boolean): String? {
+    private fun tryResolveWithLavaPlayer(videoId: String, audioPlayerManager: PlasmoAudioPlayerManager, highResolution: Boolean, maxVideoHeight: Int): String? {
         val ytSource = audioPlayerManager.getYoutubeSourceManager() ?: return null
         return try {
             val http = ytSource.`interface`
@@ -130,7 +131,15 @@ object VideoSourceResolver {
 
                         if (videoFormats.isEmpty()) continue
 
-                        val selected = (if (highResolution) videoFormats.maxByOrNull { it.bitrate } else videoFormats.filter { (it.type?.mimeType ?: "").contains("mp4") }
+                        // Lavaplayer exposes bitrate rather than reliable dimensions here.
+                        // Prefer a matching bitrate budget instead of decoding the largest stream.
+                        val targetBitrate = when {
+                            !highResolution -> 1_500_000L
+                            maxVideoHeight <= 720 -> 3_000_000L
+                            maxVideoHeight <= 1080 -> 6_000_000L
+                            else -> 25_000_000L
+                        }
+                        val selected = (if (highResolution) videoFormats.minByOrNull { kotlin.math.abs(it.bitrate.toLong() - targetBitrate) } else videoFormats.filter { (it.type?.mimeType ?: "").contains("mp4") }
                             .minByOrNull { kotlin.math.abs(it.bitrate - 1_500_000) }
                             ?: videoFormats.minByOrNull { kotlin.math.abs(it.bitrate - 1_500_000) }
                             ?: videoFormats.firstOrNull())
