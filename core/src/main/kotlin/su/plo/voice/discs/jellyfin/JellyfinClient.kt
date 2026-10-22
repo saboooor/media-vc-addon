@@ -61,7 +61,7 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
         val items = json.getAsJsonArray("Items")?.take(limit)?.map { value ->
             val item = value.asJsonObject
             Media(mediaId(item.get("Id").asString), (item.get("Name")?.asString ?: "Untitled").take(256),
-                (item.getAsJsonArray("Artists")?.joinToString(", ") { it.asString } ?: "").take(256),
+                (item.get("Artists")?.takeUnless { it.isJsonNull }?.asJsonArray?.joinToString(", ") { it.asString } ?: "").take(256),
                 item.get("Album")?.takeUnless { it.isJsonNull }?.asString ?: "",
                 (item.get("RunTimeTicks")?.takeUnless { it.isJsonNull }?.asLong ?: 0L) / 10_000, item.get("Type")?.takeUnless { it.isJsonNull }?.asString ?: "Audio",
                 item.get("ParentIndexNumber")?.takeUnless { it.isJsonNull }?.asInt,

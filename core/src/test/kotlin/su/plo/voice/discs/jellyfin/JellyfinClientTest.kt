@@ -23,7 +23,7 @@ class JellyfinClientTest {
             assertTrue(exchange.requestHeaders.getFirst("Authorization").contains("test-token"))
             val response = if (query["parentId"] == null) {
                 assertEquals("Audio,AudioBook,Movie,Series,MusicVideo,Video", query["includeItemTypes"])
-                """{"Items":[{"Id":"$seriesId","Name":"A show","Type":"Series","RunTimeTicks":null}],"TotalRecordCount":1}"""
+                """{"Items":[{"Id":"$seriesId","Name":"A show","Type":"Series","Artists":null,"RunTimeTicks":null}],"TotalRecordCount":1}"""
             } else {
                 assertEquals(seriesId, query["parentId"])
                 assertEquals("Episode", query["includeItemTypes"])
