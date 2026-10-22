@@ -100,7 +100,7 @@ class VideoPlayer(
     private var audienceChecked = Long.MIN_VALUE
     private var cachedAudience: List<Player> = emptyList()
     private var previousViewers: Map<UUID, Player> = emptyMap()
-    private val mapViewers = ScreenMapViewers(screen.mapIds.flatten())
+    private val mapViewers = ScreenMapViewers(screen.flatMapIds)
 
     internal fun isDisplayingMap(viewerId: UUID, mapId: Int): Boolean =
         isPlaying && mapViewers.owns(viewerId, mapId)
@@ -218,11 +218,11 @@ class VideoPlayer(
             }
         }
 
-        val seekProxy = if (isNetworkStream && !pipeNetworkStream) VideoSeekProxy(sourceUrl, when {
-            sourceUrl.contains("c=TVHTML5") -> "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
-            sourceUrl.contains("c=ANDROID") -> "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip"
-            else -> "Mozilla/5.0"
-        }, sourceAuthorization) else null
+        val seekProxy = if (isNetworkStream && !pipeNetworkStream) VideoSeekProxy(
+            sourceUrl,
+            chooseUserAgent(sourceUrl),
+            sourceAuthorization
+        ) else null
 
         val outputSizeReady = CompletableDeferred<CompanionResolution.Size>()
         val colorInfoReady = CompletableDeferred<VideoColorInfo>()
@@ -527,11 +527,7 @@ class VideoPlayer(
             conn.instanceFollowRedirects = true
             conn.connectTimeout = 10000
             conn.readTimeout = 20000
-            val ua = when {
-                urlStr.contains("c=TVHTML5") -> "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
-                urlStr.contains("c=ANDROID") -> "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip"
-                else -> "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-            }
+            val ua = chooseUserAgent(urlStr, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36")
             conn.setRequestProperty("User-Agent", ua)
             conn.connect()
             val code = conn.responseCode
@@ -669,9 +665,7 @@ class VideoPlayer(
             return
         }
         val rawFrame = mapScaler.scale(sourceFrame, width, height, totalWidth, totalHeight)
-        val newViewers = mapPlayers.filter { previousViewers[it.uniqueId] !== it }
-        val existingViewers = mapPlayers.filter { previousViewers[it.uniqueId] === it }
-        val playerManager = PacketEvents.getAPI().playerManager
+        val (existingViewers, newViewers) = mapPlayers.partition { previousViewers[it.uniqueId] === it }
         for (r in 0 until rows) {
             val startY = r * 128
             for (c in 0 until cols) {
@@ -695,23 +689,25 @@ class VideoPlayer(
                 }
 
                 val changed = if (rgbChanged) tileDeltas[r][c].update(tileBuffer) else null
-                fun send(region: MapTileRegion, viewers: List<Player>) {
-                    val packet = WrapperPlayServerMapData(
-                        mapId, 0.toByte(), false, false, emptyList(),
-                        region.width, region.height, region.x, region.y, region.colors
-                    )
-                    for (player in viewers) playerManager.sendPacketSilently(player, packet)
-                }
                 // New and returning viewers need a complete tile, even if nothing changed.
                 if (newViewers.isNotEmpty()) {
                     val full = if (changed?.width == 128 && changed.height == 128) changed
                         else MapTileRegion(0, 0, 128, 128, tileBuffer.copyOf())
-                    send(full, newViewers)
+                    sendMapTile(mapId, full, newViewers)
                 }
-                if (changed != null && existingViewers.isNotEmpty()) send(changed, existingViewers)
+                if (changed != null && existingViewers.isNotEmpty()) sendMapTile(mapId, changed, existingViewers)
             }
         }
         previousViewers = mapPlayers.associateBy { it.uniqueId }
+    }
+
+    private fun sendMapTile(mapId: Int, region: MapTileRegion, viewers: List<Player>) {
+        val packet = WrapperPlayServerMapData(
+            mapId, 0.toByte(), false, false, emptyList(),
+            region.width, region.height, region.x, region.y, region.colors
+        )
+        val playerManager = PacketEvents.getAPI().playerManager
+        for (player in viewers) playerManager.sendPacketSilently(player, packet)
     }
 
     @Synchronized
@@ -730,7 +726,7 @@ class VideoPlayer(
         audienceChecked = Long.MIN_VALUE
         mapViewers.update(emptyList())
         // Also release overrides held by clients that have already left viewing range.
-        for (row in screen.mapIds) for (mapId in row) CompanionScreens.clear(mapId)
+        for (mapId in screen.flatMapIds) CompanionScreens.clear(mapId)
         val players = getNearbyPlayers()
         if (players.isEmpty()) return
 
@@ -761,6 +757,12 @@ class VideoPlayer(
     }
 
     companion object {
+        internal fun chooseUserAgent(url: String, fallback: String = "Mozilla/5.0"): String = when {
+            url.contains("c=TVHTML5") -> "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
+            url.contains("c=ANDROID") -> "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip"
+            else -> fallback
+        }
+
         internal fun proxiedInputOptions(): List<String> = listOf(
             // Buffer compressed packets independently of timestamp-paced frame delivery.
             "-thread_queue_size", "256",

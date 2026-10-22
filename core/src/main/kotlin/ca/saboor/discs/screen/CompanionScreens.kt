@@ -5,6 +5,7 @@ import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerPl
 import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import org.bukkit.Bukkit
 import org.bukkit.entity.Player
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
@@ -19,7 +20,7 @@ object CompanionScreens : Listener, PluginMessageListener {
     const val HELLO = "vcb:screen_hello"
     const val FRAME = "vcb:screen_rgb"
     const val CLEAR = "vcb:screen_clear"
-    private val clients = ConcurrentHashMap<UUID, Player>()
+    private val clients = ConcurrentHashMap.newKeySet<UUID>()
     private val maps = ConcurrentHashMap.newKeySet<Int>()
     fun start(plugin: JavaPlugin) {
         plugin.server.messenger.registerIncomingPluginChannel(plugin, HELLO, this)
@@ -29,14 +30,14 @@ object CompanionScreens : Listener, PluginMessageListener {
     }
     override fun onPluginMessageReceived(channel: String, player: Player, message: ByteArray) {
         if (channel == HELLO && supportsProtocol(message)) {
-            clients[player.uniqueId] = player
+            clients.add(player.uniqueId)
         }
     }
-    fun capable(player: Player) = clients.containsKey(player.uniqueId)
+    fun capable(player: Player) = clients.contains(player.uniqueId)
     private val sequence = java.util.concurrent.atomic.AtomicInteger()
     fun frame(screen: Screen, jpeg: ByteArray, players: List<Player>, codec: Int = 0, width: Int = 0, height: Int = 0, stream: Int = 0, frame: Int = 0, keyframe: Boolean = true) {
         require(jpeg.size <= 4 * 1024 * 1024)
-        val ids = screen.mapIds.flatten()
+        val ids = screen.flatMapIds
         require(ids.size == screen.columns * screen.rows && ids.size in 1..256)
         val anchor = ids.first()
         maps.add(anchor)
@@ -60,7 +61,9 @@ object CompanionScreens : Listener, PluginMessageListener {
     fun clear(mapId: Int) {
         maps.remove(mapId)
         val packet = WrapperPlayServerPluginMessage(CLEAR, ByteBuffer.allocate(4).putInt(mapId).array())
-        clients.values.forEach { PacketEvents.getAPI().playerManager.sendPacketSilently(it, packet) }
+        clients.forEach { id ->
+            Bukkit.getPlayer(id)?.let { PacketEvents.getAPI().playerManager.sendPacketSilently(it, packet) }
+        }
     }
     @EventHandler fun onQuit(event: PlayerQuitEvent) { clients.remove(event.player.uniqueId) }
     fun shutdown() {

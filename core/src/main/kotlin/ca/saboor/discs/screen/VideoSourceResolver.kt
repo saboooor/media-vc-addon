@@ -11,13 +11,14 @@ import su.plo.voice.lavaplayer.libs.dev.lavalink.youtube.YoutubeAudioSourceManag
 
 object VideoSourceResolver {
 
+    private val EXACT_VIDEO_ID_REGEX = Regex("^[\\w-]{11}$")
     private val YOUTUBE_VIDEO_ID_REGEX = Pattern.compile(
         "(?:youtu\\.be/|youtube\\.com/(?:embed/|v/|shorts/|watch\\?v=|watch\\?.+&v=))([\\w-]{11})"
     )
 
     fun extractYouTubeVideoId(url: String): String? {
         val trimmed = url.trim()
-        if (trimmed.matches(Regex("^[\\w-]{11}$"))) {
+        if (trimmed.matches(EXACT_VIDEO_ID_REGEX)) {
             return trimmed
         }
         val matcher = YOUTUBE_VIDEO_ID_REGEX.matcher(trimmed)
@@ -55,8 +56,8 @@ object VideoSourceResolver {
     ): String {
         val trimmed = identifier.trim()
         val videoId = extractYouTubeVideoId(trimmed)
-        val isYt = videoId != null || isYouTubeUrl(trimmed)
-        val targetId = videoId ?: extractYouTubeVideoId(trimmed)
+        val isYt = videoId != null || trimmed.contains("youtube.com") || trimmed.contains("youtu.be")
+        val targetId = videoId
 
         if (isYt) {
             // Option 1: Try yt-dlp if installed on server
@@ -139,7 +140,7 @@ object VideoSourceResolver {
                             maxVideoHeight <= 1080 -> 6_000_000L
                             else -> 25_000_000L
                         }
-                        val selected = (if (highResolution) videoFormats.minByOrNull { kotlin.math.abs(it.bitrate.toLong() - targetBitrate) } else videoFormats.filter { (it.type?.mimeType ?: "").contains("mp4") }
+                        val selected = (if (highResolution) videoFormats.minByOrNull { kotlin.math.abs(it.bitrate - targetBitrate) } else videoFormats.filter { (it.type?.mimeType ?: "").contains("mp4") }
                             .minByOrNull { kotlin.math.abs(it.bitrate - 1_500_000) }
                             ?: videoFormats.minByOrNull { kotlin.math.abs(it.bitrate - 1_500_000) }
                             ?: videoFormats.firstOrNull())

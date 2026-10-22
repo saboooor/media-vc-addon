@@ -37,7 +37,13 @@ import su.plo.voice.discs.utils.extend.*
 
 /** Portable devices have their own persistent queue; they never use horn playback state. */
 class HandheldJukeboxes : Listener, PluginKoinComponent {
-    companion object { const val MAX_DISCS = 18 }
+    companion object {
+        const val MAX_DISCS = 18
+        private val DEVICE_ID_REGEX = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"")
+        private val LOW_PASS_VALUES = listOf(0.0, 12000.0, 6000.0, 3000.0, 1500.0, 750.0)
+        private val HIGH_PASS_VALUES = listOf(0.0, 80.0, 150.0, 300.0, 600.0, 1200.0)
+        private val SEEK_OPTIONS = listOf(15 to "15s", 30 to "30s", 60 to "1m", 300 to "5m")
+    }
     private val plugin: JavaPlugin by inject()
     private val scope: CoroutineScope by inject()
     private val config: AddonConfig by getter()
@@ -46,6 +52,8 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
     private val sourceLine: ServerSourceLine? by getterOrNull()
     private val svc: SvcDiscsPlugin? by getterOrNull()
     private val key = NamespacedKey.fromString("vc-addon-discs:handheld_jukebox")!!
+    private val idKey = NamespacedKey.fromString("vc-addon-discs:handheld_jukebox_id")!!
+    private val bundleMaterial = Material.matchMaterial("BUNDLE")
     private val gson = Gson()
     private val active = ConcurrentHashMap<UUID, Session>()
     private var monitor: Job? = null
@@ -106,7 +114,10 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
         val result = ItemStack(shard)
         write(result, Device())
         // Identity is assigned on first use, so separate crafts never share a device ID.
-        result.editMeta { it.persistentDataContainer.set(key, PersistentDataType.STRING, "new") }
+        result.editMeta {
+            it.persistentDataContainer.set(key, PersistentDataType.STRING, "new")
+            it.persistentDataContainer.remove(idKey)
+        }
         val recipeKey = NamespacedKey(plugin, "handheld_jukebox")
         Bukkit.removeRecipe(recipeKey)
         Bukkit.addRecipe(ShapedRecipe(recipeKey, result).apply {
@@ -130,6 +141,15 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
     private fun marked(item: ItemStack?): Boolean = item?.itemMeta?.persistentDataContainer
         ?.has(key, PersistentDataType.STRING) == true
 
+    private fun deviceId(item: ItemStack): String? {
+        val meta = item.itemMeta ?: return null
+        meta.persistentDataContainer.get(idKey, PersistentDataType.STRING)?.let { return it }
+        val json = meta.persistentDataContainer.get(key, PersistentDataType.STRING) ?: return null
+        if (json == "new") return null
+        DEVICE_ID_REGEX.find(json)?.groupValues?.get(1)?.let { return it }
+        return read(item)?.id
+    }
+
     private fun read(item: ItemStack): Device? {
         val json = item.itemMeta?.persistentDataContainer?.get(key, PersistentDataType.STRING) ?: return null
         return try {
@@ -144,16 +164,19 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
     private fun write(item: ItemStack, device: Device) {
         item.editMeta { meta ->
             meta.persistentDataContainer.set(key, PersistentDataType.STRING, gson.toJson(device))
+            meta.persistentDataContainer.set(idKey, PersistentDataType.STRING, device.id)
             meta.displayName(Component.text("Handheld Jukebox", NamedTextColor.GOLD))
             meta.lore(listOf(Component.text("Right-click to open your music queue.", NamedTextColor.GRAY),
                 Component.text("Keep in your inventory to play. Open Queue stores real discs.", NamedTextColor.GRAY)))
         }
     }
 
-    private fun carried(player: Player, id: UUID): ItemStack? =
-        player.inventory.contents.filterNotNull().firstOrNull {
-            marked(it) && read(it)?.id == id.toString()
+    private fun carried(player: Player, id: UUID): ItemStack? {
+        val idStr = id.toString()
+        return player.inventory.contents.filterNotNull().firstOrNull {
+            marked(it) && deviceId(it) == idStr
         }
+    }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     fun interact(event: PlayerInteractEvent) {
@@ -173,8 +196,9 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
     // Protect legacy bundle devices crafted before the amethyst-shard item change.
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     fun protectLegacyBundle(event: InventoryClickEvent) {
-        if ((event.cursor?.type?.name == "BUNDLE" && marked(event.cursor)) ||
-            (event.currentItem?.type?.name == "BUNDLE" && marked(event.currentItem))) {
+        val bundle = bundleMaterial ?: return
+        if ((event.cursor?.type == bundle && marked(event.cursor)) ||
+            (event.currentItem?.type == bundle && marked(event.currentItem))) {
             if (event.isRightClick) event.isCancelled = true
         }
     }
@@ -319,7 +343,7 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
     fun onDeath(event: org.bukkit.event.entity.PlayerDeathEvent) {
         val menu = event.entity.openInventory.topInventory.holder as? Menu ?: return
         saveQueue(event.entity, menu)
-        event.drops.filter { marked(it) && read(it)?.id == menu.device.id }.forEach { write(it, menu.device) }
+        event.drops.filter { marked(it) && deviceId(it) == menu.device.id }.forEach { write(it, menu.device) }
         event.entity.closeInventory()
     }
 
@@ -390,8 +414,10 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
             "fx_timescale_reset" -> cur.copy(tempo = 1.0, pitchSemitones = 0.0)
             "fx_lowpass", "fx_highpass" -> {
                 val low = action == "fx_lowpass"
-                val values = if (low) listOf(0.0, 12000.0, 6000.0, 3000.0, 1500.0, 750.0) else listOf(0.0, 80.0, 150.0, 300.0, 600.0, 1200.0)
-                val next = values[(values.indexOf(if (low) cur.lowPassHz else cur.highPassHz) + 1) % values.size]
+                val values = if (low) LOW_PASS_VALUES else HIGH_PASS_VALUES
+                val current = if (low) cur.lowPassHz else cur.highPassHz
+                val idx = values.indexOf(current)
+                val next = values[if (idx >= 0) (idx + 1) % values.size else 0]
                 if (low) cur.copy(lowPassHz = next) else cur.copy(highPassHz = next)
             }
             else -> cur
@@ -417,7 +443,7 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
                     body += Component.text("${if (controls.paused) "Paused" else "Playing"} · Volume ${controls.volume}%", NamedTextColor.GRAY)
                 } else body += Component.text("Jukebox is idle.")
                 if (menu == "seek" && controls?.seekable == true) {
-                    for ((seconds, label) in listOf(15 to "15s", 30 to "30s", 60 to "1m", 300 to "5m")) {
+                    for ((seconds, label) in SEEK_OPTIONS) {
                         buttons += "−$label" to (prefix + "seek_minus_$seconds")
                         buttons += "+$label" to (prefix + "seek_plus_$seconds")
                     }

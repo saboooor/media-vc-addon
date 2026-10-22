@@ -426,7 +426,6 @@ class ScreenManager : PluginKoinComponent {
                     "Screen '${screen.name}' playback starting: source='${VideoPlayer.describeSource(resolvedUrl)}', ffmpeg='$resolvedFfmpegPath'"
                 )
                 activePlayers[lower] = videoPlayer
-                videoPlayer.updateFrameRate(screen.effectiveVideoFps(maxVideoFps))
                 videoPlayer.start(requestedPositions[lower] ?: startPositionMs)
             }
             if (jellyfin != null) {

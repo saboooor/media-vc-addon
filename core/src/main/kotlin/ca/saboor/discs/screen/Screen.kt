@@ -33,6 +33,12 @@ data class Screen(
         return (videoFps ?: maximum).coerceIn(1, maximum)
     }
 
+    @Transient
+    private var cachedFlatMapIds: List<Int>? = null
+
+    val flatMapIds: List<Int>
+        get() = cachedFlatMapIds ?: mapIds.flatten().also { cachedFlatMapIds = it }
+
     val facing: BlockFace
         get() = try {
             BlockFace.valueOf(facingName)
