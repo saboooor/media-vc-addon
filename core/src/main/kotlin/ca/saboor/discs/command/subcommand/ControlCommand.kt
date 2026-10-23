@@ -1,5 +1,6 @@
 package ca.saboor.discs.command.subcommand
 
+import ca.saboor.discs.utils.playlistContainer
 import ca.saboor.discs.PlaybackControls
 import ca.saboor.discs.PlaybackDialogView
 import ca.saboor.discs.dialog.PaperPlaybackDialog
@@ -139,9 +140,9 @@ class ControlCommand(
             buttons += "Skip" to (prefix + "skip")
         }
         val queueLabels = mutableMapOf<String, Component>()
-        val chest = block.getRelative(org.bukkit.block.BlockFace.UP).state as? org.bukkit.block.Chest
+        val chest = block.getRelative(org.bukkit.block.BlockFace.UP).state.playlistContainer()
         if (controls == null && !playlists.isQueued(block) && chest != null)
-            buttons += "Play chest" to (prefix + "playchest")
+            buttons += "Play container" to (prefix + "playchest")
         val modes = playlists.playbackModes(block)
         buttons += "Queue" to (prefix + "queue_menu")
         buttons += "Volume" to (prefix + "volume_menu")
@@ -566,7 +567,7 @@ class ControlCommand(
             "queue_menu" -> { show(player, session.block, queueMenu = true); return }
             "volume_menu" -> { show(player, session.block, volumeMenu = true); return }
             "playchest" -> {
-                val chest = session.block.getRelative(org.bukkit.block.BlockFace.UP).state as? org.bukkit.block.Chest ?: return
+                val chest = session.block.getRelative(org.bukkit.block.BlockFace.UP).state.playlistContainer() ?: return
                 playlists.startChestQueue(session.block, chest, player)
                 return
             }

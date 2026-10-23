@@ -47,7 +47,7 @@ class HologramCommand(
         }
 
         val targetJukebox = findTargetJukebox(player) ?: run {
-            player.sendMessage(Component.text("Look at a jukebox (or chest above a jukebox) within 6 blocks.", NamedTextColor.RED))
+            player.sendMessage(Component.text("Look at a jukebox (or chest/shulker box above a jukebox) within 6 blocks.", NamedTextColor.RED))
             return
         }
 

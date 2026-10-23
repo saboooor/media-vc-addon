@@ -1,5 +1,6 @@
 package ca.saboor.discs.event
 
+import ca.saboor.discs.utils.playlistContainer
 import ca.saboor.discs.PlaybackDialogView
 import ca.saboor.discs.utils.extend.suspendSyncAt
 import com.google.gson.Gson
@@ -267,13 +268,13 @@ class JukeboxProgressDisplay(private val jukeboxes: JukeboxEventListener) : List
 
         fun getBaseDisplayLocation(block: Block): Location {
             val aboveBlock = block.getRelative(0, 1, 0)
-            val chestState = aboveBlock.state as? Chest
-            if (chestState == null) {
+            val container = aboveBlock.state.playlistContainer()
+            if (container == null) {
                 return block.location.add(0.5, 1.35, 0.5)
             }
 
             // Try getting both halves from DoubleChest inventory holder
-            val doubleChest = chestState.inventory.holder as? DoubleChest
+            val doubleChest = container.inventory.holder as? DoubleChest
             if (doubleChest != null) {
                 val leftBlock = (doubleChest.leftSide as? Chest)?.block
                 val rightBlock = (doubleChest.rightSide as? Chest)?.block
