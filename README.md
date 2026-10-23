@@ -436,3 +436,9 @@ Open placed or handheld jukebox controls and choose **Restart playback**. The ol
 Chest and handheld queues retain the selected song, loop/shuffle settings, and shuffle history. Restarting a chest queue ends an in-progress crossfade and rebuilds its next-song analysis without advancing the queue. If an incoming song has not produced audio yet, the still-audible outgoing song is resumed. Speaker links and other saved jukebox settings remain attached. Stop, eject, or disc replacement during a restart prevents an old playback request from reappearing.
 
 Shulker boxes (all colors) can be placed above jukeboxes and used like chest queues: playlist burning, disc insertion, hopper input, playback controls, and chunk resume are supported. Sneak-click to open the box.
+
+### Theatre lights
+
+Open jukebox controls → **Lights → Configure theatre lights** to receive a temporary, reusable `minecraft:light` tool for that jukebox. Right-click a surface to place a free level-15 light beside it, or right-click air to place one four blocks ahead. Existing light blocks can also be linked. Theatre lights can be anywhere in the same world, with up to 1,024 total linked lights per jukebox; placement respects build protection. Use slot 9 to unlink a light, then click the jukebox or sneak-right-click air to finish and restore your hotbar.
+
+Theatre lights fade to level 0 over three seconds of playback and brighten back to their original level on pause, stop, or the end of a queue. They stay dark across queue tracks/crossfades while playback continues. Links survive restarts and travel with saved jukebox settings. Unlinking, shutdown, and chunk unload restore the saved brightness; replaced blocks are left alone. Requires Minecraft 1.17+ and the existing play/control permissions. Beat-reactive lights remain available through **Configure lights**.

@@ -277,6 +277,7 @@ class ControlCommand(
             body += Component.text("Lights: $count linked", NamedTextColor.GOLD)
             body += Component.text("Click 'Configure lights' to receive a dye for each frequency band, then right-click light blocks with the dye to set their type (sneak-click or click the jukebox when done).")
             body += Component.text("Deep bass follows low thumps; low mids follow warmth; vocal range follows mids; sparkle follows bright highs. Full spectrum responds across all bands.", NamedTextColor.GRAY)
+            body += Component.text("Theatre lights: place free invisible light blocks anywhere in this world. They dim over three seconds during playback and brighten on pause/stop.", NamedTextColor.GRAY)
             body += Component.text("Supported blocks: ${LightBlock.supportedBlockNames.joinToString(", ")}", NamedTextColor.AQUA)
             val isAuto = lamps.isAutoFalloff(block)
             val falloff = (lamps.falloff(block) * 100).toInt()
@@ -464,6 +465,7 @@ class ControlCommand(
             chaseMode: Boolean = false,
         ) {
             buttons += "Configure lights" to (prefix + "lamp_link")
+            buttons += "Configure theatre lights" to (prefix + "lamp_theatre")
             buttons += "Falloff settings" to (prefix + "lamp_falloff_menu")
             buttons += (if (waveMode) "✓ Wave ripple mode" else "Wave ripple mode") to (prefix + "lamp_wave")
             buttons += (if (chaseMode) "✓ Beat chase mode" else "Beat chase mode") to (prefix + "lamp_chase")
@@ -588,12 +590,13 @@ class ControlCommand(
                 }
                 return
             }
-            "lamp_link", "lamp_link_bass", "lamp_link_mid", "lamp_link_highs",
+            "lamp_theatre", "lamp_link", "lamp_link_bass", "lamp_link_mid", "lamp_link_highs",
             "lamp_link_deep_bass", "lamp_link_low_mids", "lamp_link_vocals", "lamp_link_sparkle", "lamp_link_full", "lamp_unlink" -> {
                 if (arguments[2] == "lamp_unlink") {
                     bassLamps?.showHighlights(session.block)
                 }
                 bassLamps?.beginLink(player, session.block, unlink = arguments[2] == "lamp_unlink",
+                    theatre = arguments[2] == "lamp_theatre",
                     band = LightBand.entries.firstOrNull { arguments[2] == "lamp_link_${it.name.lowercase()}" } ?: LightBand.BASS)
                 return
             }

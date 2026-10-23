@@ -42,7 +42,7 @@ class JukeboxSettingsListener(
         return SavedJukeboxSettings(volume = playback.volumeSetting(block),
             loop = playlists.playbackModes(block).first, shuffle = playlists.playbackModes(block).second, stereo = playback.stereoMode(block), autoMix = playlists.autoMixEnabled(block), crossfade = fade.first, lastCrossfade = fade.second,
             hologram = holograms.getOffset(block).copy(), queueHologram = holograms.getOffset(block, queue = true).copy(), hologramVisibility = holograms.visibility(block), visualizers = visualizers.instances(block),
-            lightFalloff = if (lamps.isAutoFalloff(block)) null else lamps.falloff(block), lamps = lamps.linkedPositions(block), lampBands = lamps.linkedBands(block), screenName = screens.getScreenForJukebox(block)?.name, noteBlock = playback.noteLink(block),
+            lightFalloff = if (lamps.isAutoFalloff(block)) null else lamps.falloff(block), lamps = lamps.linkedPositions(block), lampBands = lamps.linkedBands(block), theatreLamps = lamps.theatrePositions(block), screenName = screens.getScreenForJukebox(block)?.name, noteBlock = playback.noteLink(block),
             leftNoteBlock = playback.channelNoteLink(block, true), rightNoteBlock = playback.channelNoteLink(block, false),
             filterConfig = playback.filterConfig(block))
     }
@@ -126,7 +126,7 @@ class JukeboxSettingsListener(
         holograms.setVisibility(block, settings.hologramVisibility)
         if (settings.lightFalloff == null) lamps.setAutoFalloff(block, true)
         else lamps.setFalloff(block, settings.lightFalloff)
-        if (settings.lamps.isNotEmpty()) lamps.restoreLinks(block, settings.lamps, settings.lampBands)
+        if (settings.lamps.isNotEmpty()) lamps.restoreLinks(block, settings.lamps, settings.lampBands, settings.theatreLamps)
         settings.screenName?.let { name ->
             val screen = screens.getScreen(name)
             if (screen != null && screen.worldName == block.world.name && (screen.jukeboxWorld == null || screen.isLinkedTo(block))) {

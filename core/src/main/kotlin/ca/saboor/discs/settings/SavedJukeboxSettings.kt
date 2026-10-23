@@ -20,6 +20,7 @@ data class SavedJukeboxSettings(
     val hologramVisibility: ca.saboor.discs.event.HologramVisibility = ca.saboor.discs.event.HologramVisibility(),
     val visualizers: List<VisualizerInstance> = emptyList(),
     val lamps: List<JukeboxBassLamps.Position> = emptyList(),
+    val theatreLamps: List<JukeboxBassLamps.Position> = emptyList(),
     val lightFalloff: Double? = null,
     val lampBands: List<ca.saboor.discs.visualizer.LightBand> = emptyList(),
     val screenName: String? = null,
@@ -48,6 +49,7 @@ data class SavedJukeboxSettings(
         }
         require(lightFalloff == null || (lightFalloff.isFinite() && lightFalloff in 0.0..1.0))
         require(lamps.size <= 1024)
+        require(theatreLamps.all { it in lamps })
         require(lampBands.isEmpty() || lampBands.size == lamps.size)
         lampBands.forEach { requireNotNull(it) }
         for (lamp in lamps + listOfNotNull(noteBlock, leftNoteBlock, rightNoteBlock)) {
