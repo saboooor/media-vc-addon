@@ -316,6 +316,7 @@ class DiscsPlugin : JavaPlugin(), Listener {
             .addSubCommand { jellyfinCommand }
             .addSubCommand { playlistCommand }
             .addSubCommand { controlCommand }
+            .addSubCommand { ca.saboor.discs.command.subcommand.NearbyCommand(jukeboxEventListener) }
             .addSubCommand { ca.saboor.discs.command.subcommand.PortableCommand(handheldJukeboxes!!) }
             .addSubCommand { hologramCommand }
             .addSubCommand { visualizerCommand }
