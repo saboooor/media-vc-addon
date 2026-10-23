@@ -6,6 +6,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Path
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -17,8 +20,10 @@ class JellyfinAudioSourceManagerTest {
     @TempDir lateinit var folder: Path
     @Test fun `registered disc tolerates slow stream startup and keeps authentication out of URLs`() {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        var authorization: String? = null
-        var requestedPath: String? = null
+        val serverExecutor = Executors.newCachedThreadPool()
+        server.executor = serverExecutor
+        val authorization = AtomicReference<String?>()
+        val requestedPath = AtomicReference<String?>()
         val wav = ByteBuffer.allocate(44 + 16000).order(ByteOrder.LITTLE_ENDIAN).apply {
             put("RIFF".toByteArray()); putInt(36 + 16000); put("WAVEfmt ".toByteArray()); putInt(16)
             putShort(1); putShort(1); putInt(8000); putInt(16000); putShort(2); putShort(16)
@@ -27,8 +32,8 @@ class JellyfinAudioSourceManagerTest {
         server.createContext("/jellyfin/Audio/") { exchange ->
             // Exceed LavaPlayer's default three-second socket timeout.
             Thread.sleep(3_500)
-            authorization = exchange.requestHeaders.getFirst("Authorization")
-            requestedPath = exchange.requestURI.toString()
+            authorization.set(exchange.requestHeaders.getFirst("Authorization"))
+            requestedPath.set(exchange.requestURI.toString())
             exchange.responseHeaders.set("Content-Type", "audio/wav")
             exchange.sendResponseHeaders(200, wav.size.toLong())
             exchange.responseBody.use { it.write(wav) }; exchange.close()
@@ -43,8 +48,8 @@ class JellyfinAudioSourceManagerTest {
             val connection = library.connect(UUID.randomUUID(), session)
             val ref = library.grant(connection, JellyfinClient.Media("abcdef0123456789abcdef0123456789", "Song", "", "", 1000))
             val track = source.loadItem(playerManager, AudioReference(ref, null)) as AudioTrack
-            assertTrue(authorization!!.contains("Token=\"private-token\""))
-            assertTrue(requestedPath!!.endsWith("/stream?static=true"))
+            assertTrue(authorization.get()!!.contains("Token=\"private-token\""))
+            assertTrue(requestedPath.get()!!.endsWith("/stream?static=true"))
             assertFalse(track.info.uri.contains("private-token"))
             assertFalse(track.identifier.contains("private-token"))
             assertNotNull(track.makeClone())
@@ -78,16 +83,28 @@ class JellyfinAudioSourceManagerTest {
                 assertEquals(65, player.volume)
                 assertFalse(player.playingTrack.isSeekable) // Native MP3 byte seeking stays disabled.
                 assertEquals(50_000L, player.playingTrack.makeClone().position)
-                val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
-                while (requestedPath?.contains("startTimeTicks=500000000") != true && System.nanoTime() < deadline) {
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+                var path: String? = null
+                while (System.nanoTime() < deadline) {
+                    val current = requestedPath.get()
+                    if (current != null && current.contains("startTimeTicks=500000000")) {
+                        path = current
+                        break
+                    }
                     Thread.sleep(20)
                 }
-                assertTrue(requestedPath!!.contains("startTimeTicks=500000000"))
-                assertTrue(authorization!!.contains("Token=\"private-token\""))
+                assertNotNull(path)
+                assertTrue(path!!.contains("startTimeTicks=500000000"))
+                assertTrue(authorization.get()!!.contains("Token=\"private-token\""))
             } finally { controls.detach(player); player.destroy() }
             assertNull(source.loadItem(playerManager, AudioReference("https://example.com/", null)))
             library.disconnect(connection.owner)
             assertThrows(JellyfinException::class.java) { source.loadItem(playerManager, AudioReference(ref, null)) }
-        } finally { source.shutdown(); playerManager.shutdown(); server.stop(0) }
+        } finally {
+            source.shutdown()
+            playerManager.shutdown()
+            server.stop(0)
+            serverExecutor.shutdownNow()
+        }
     }
 }

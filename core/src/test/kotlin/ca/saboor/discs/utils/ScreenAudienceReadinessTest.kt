@@ -2,6 +2,7 @@ package ca.saboor.discs.utils
 
 import java.lang.reflect.Proxy
 import java.util.UUID
+import net.kyori.adventure.text.Component
 import org.bukkit.Location
 import org.bukkit.entity.Player
 import org.bukkit.event.player.PlayerJoinEvent
@@ -29,16 +30,16 @@ class ScreenAudienceReadinessTest {
         val from = Location(null, 0.0, 64.0, 0.0)
         val to = from.clone().apply { yaw = 90f }
         try {
-            PlayerAudience.onJoin(PlayerJoinEvent(first, null as String?))
+            PlayerAudience.onJoin(PlayerJoinEvent(first, Component.empty()))
             assertFalse(PlayerAudience.canReceiveScreen(first))
             PlayerAudience.onMove(PlayerTeleportEvent(first, from, to))
             assertFalse(PlayerAudience.canReceiveScreen(first))
             PlayerAudience.onMove(PlayerMoveEvent(first, from, to))
             assertTrue(PlayerAudience.canReceiveScreen(first))
-            PlayerAudience.onQuit(PlayerQuitEvent(first, null as String?))
+            PlayerAudience.onQuit(PlayerQuitEvent(first, Component.empty(), PlayerQuitEvent.QuitReason.DISCONNECTED))
             assertFalse(PlayerAudience.canReceiveScreen(first))
             val second = player(id)
-            PlayerAudience.onJoin(PlayerJoinEvent(second, null as String?))
+            PlayerAudience.onJoin(PlayerJoinEvent(second, Component.empty()))
             assertFalse(PlayerAudience.canReceiveScreen(second))
             PlayerAudience.onMove(PlayerMoveEvent(second, from, to))
             assertTrue(PlayerAudience.canReceiveScreen(second))

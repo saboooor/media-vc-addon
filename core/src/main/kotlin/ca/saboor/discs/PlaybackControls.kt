@@ -173,6 +173,27 @@ class PlaybackControls(
         it.isSeekable || (it as? JellyfinTranscodedTrack)?.canRestart == true
     } == true
 
+    private fun jellyfinTrack() = players.firstOrNull()?.playingTrack as? JellyfinTranscodedTrack
+    val hasJellyfinAudioTracks: Boolean get() = jellyfinTrack()?.audioTracks != null
+    val selectedJellyfinAudioTrack: Int? get() = jellyfinTrack()?.selectedAudioTrack?.index
+    fun loadJellyfinAudioTracks() = jellyfinTrack()?.audioTracks?.invoke().orEmpty()
+
+    @Synchronized fun selectJellyfinAudioTrack(track: ca.saboor.discs.jellyfin.JellyfinClient.AudioTrack?): Boolean {
+        if (transitionPartner != null || !hasJellyfinAudioTracks) return false
+        val target = position
+        val replacements = players.map { player ->
+            val current = player.playingTrack as? JellyfinTranscodedTrack ?: return false
+            player to current.withAudioTrack(track, target).also { it.userData = current.userData }
+        }
+        transmittedPositionMs = null
+        initialPositionMs = target
+        timescaleClock.reset(target)
+        replacements.forEach { (player, replacement) -> player.stopTrack(); player.playTrack(replacement) }
+        spectrum.reset(); mixAnalysis.reset(); lastDetectedBpm = null
+        onSeek?.invoke(target)
+        return true
+    }
+
     private fun seekPlayer(player: AudioPlayer, position: Long) {
         val track = player.playingTrack ?: return
         if (track is JellyfinTranscodedTrack && track.canRestart) {

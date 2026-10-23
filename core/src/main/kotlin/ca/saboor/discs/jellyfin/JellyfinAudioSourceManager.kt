@@ -5,6 +5,8 @@ import java.io.DataOutput
 import java.net.SocketTimeoutException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.container.MediaContainer
+import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.container.MediaContainerRegistry
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.source.AudioSourceManager
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.source.http.HttpAudioSourceManager
@@ -24,7 +26,10 @@ class JellyfinAudioSourceManager(private val library: JellyfinLibrary) : AudioSo
         val backend = backends.compute(connection.id) { _, old ->
             if (old?.session === connection.session) old else {
                 old?.source?.shutdown()
-                Backend(connection.session, HttpAudioSourceManager().apply {
+                val registry = MediaContainerRegistry(MediaContainer.asList().map {
+                    if (it === MediaContainer.MKV.probe) ProgressiveMatroskaContainerProbe() else it
+                })
+                Backend(connection.session, HttpAudioSourceManager(registry).apply {
                     // Jellyfin may need to start FFmpeg before sending response headers.
                     configureRequests { request -> RequestConfig.copy(request)
                         .setConnectTimeout(10_000)
@@ -50,6 +55,17 @@ class JellyfinAudioSourceManager(private val library: JellyfinLibrary) : AudioSo
                 val seekUrl = client.streamUrl(connection.session, grant.mediaId, grant.type ?: "Audio", position)
                 backend.source.loadItem(manager, AudioReference(seekUrl, grant.label)) as? InternalAudioTrack
                     ?: throw JellyfinException("Jellyfin did not return a supported audio file.")
+            }, audioTracks = {
+                val current = library.resolve(reference.identifier)
+                client.getAudioTracks(current.first.session, current.second.mediaId)
+            }, reloadAudio = { position, selected ->
+                // Recheck the grant on every language switch/restart, including disconnected owners.
+                val current = library.resolve(reference.identifier)
+                if (current.first.session !== connection.session) throw JellyfinException("Jellyfin connection changed. Restart playback.")
+                val audioUrl = if (selected == null) client.streamUrl(connection.session, grant.mediaId, grant.type ?: "Audio", position)
+                    else client.selectedAudioStreamUrl(connection.session, grant.mediaId, selected, position)
+                backend.source.loadItem(manager, AudioReference(audioUrl, grant.label)) as? InternalAudioTrack
+                    ?: throw JellyfinException("Jellyfin did not return supported audio for this track.")
             })
         } catch (e: FriendlyException) {
             if (generateSequence<Throwable>(e) { it.cause }.any { it is SocketTimeoutException }) {

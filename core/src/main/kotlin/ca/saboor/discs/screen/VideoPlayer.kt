@@ -339,6 +339,9 @@ class VideoPlayer(
             }
 
             val input = proc.inputStream
+            // Probing/decoder initialization may block before showinfo reports the first size.
+            // Include that wait in recovery instead of leaving a silent black screen forever.
+            readMonitor.beginRead(System.nanoTime())
             watchdogJob = coroutineScope.launch(Dispatchers.IO) {
                 while (isActive && proc.isAlive && !stopped.get()) {
                     delay(1000L)
@@ -360,7 +363,8 @@ class VideoPlayer(
                 }
             }
 
-            val outputSize = outputSizeReady.await()
+            val outputSize = try { outputSizeReady.await() } finally { readMonitor.endRead() }
+            if (stalled.get()) throw StalledPlayback(startPositionMs + outputPositionUs.get() / 1000)
             val frameSizeBytes = outputSize.width * outputSize.height * 3
             val rawFrameBuffer = ByteArray(frameSizeBytes)
             val decodedFrameBuffer = ByteArray(frameSizeBytes * 2)
@@ -381,13 +385,20 @@ class VideoPlayer(
                 if (!ok) break // End of stream
 
                 framesRendered++
+                if (framesRendered == 1L) logger.info("Screen '${screen.name}': first decoded video frame (${outputSize.width}x${outputSize.height})")
                 val relativeMs = frameTimes.receiveCatching().getOrNull()
                     ?: throw IOException("Missing video frame timestamp")
                 val videoMs = startPositionMs + relativeMs
                 if (audioClock != null) {
+                    val syncStarted = System.nanoTime()
+                    var syncWarned = false
                     while (!stopped.get() && currentCoroutineContext().isActive) {
                         if (isPaused) { delay(20L); continue }
                         val audioMs = audioClock()
+                        if (!syncWarned && System.nanoTime() - syncStarted >= TimeUnit.SECONDS.toNanos(5)) {
+                            logger.warn("Screen '${screen.name}' is waiting for audio synchronization: video=${videoMs}ms, audio=${audioMs?.let { "${it}ms" } ?: "not available"}")
+                            syncWarned = true
+                        }
                         if (audioMs == null) { delay(20L); continue }
                         val waitMs = VideoAudioSync.waitMillis(videoMs, audioMs)
                         if (waitMs == 0L) break
