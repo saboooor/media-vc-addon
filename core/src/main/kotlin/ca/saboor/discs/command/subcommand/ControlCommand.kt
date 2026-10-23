@@ -154,6 +154,7 @@ class ControlCommand(
         buttons += "Speaker setup" to (prefix + "speakers")
         if (controls != null) {
             buttons += "Refresh" to (prefix + "refresh")
+            buttons += "Restart playback" to (prefix + "restart")
             buttons += "Stop playback" to (prefix + "stop")
 
             if (controls.seekable) {
@@ -570,6 +571,14 @@ class ControlCommand(
                 return
             }
             "play" -> { if (controls == null) jukeboxes.playStoredDisc(session.block, player); return }
+            "restart" -> {
+                val queued = playlists.isQueued(session.block)
+                val accepted = if (queued) playlists.restartTrack(session.block)
+                    else jukeboxes.restartStoredDisc(session.block, player)
+                player.sendMessage(Component.text(if (accepted) "Restarting playback. Seekable tracks resume at the saved position."
+                    else "Playback is already restarting or is no longer active.", NamedTextColor.YELLOW))
+                return
+            }
             "pause" -> controls?.togglePause()
             "skip" -> {
                 if (controls != null) {
@@ -835,4 +844,5 @@ class ControlCommand(
     @EventHandler
     fun onQuit(event: PlayerQuitEvent) { sessions.remove(event.player.uniqueId); noteRequests.remove(event.player.uniqueId) }
 }
+
 

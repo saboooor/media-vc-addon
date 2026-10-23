@@ -122,8 +122,12 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         }
     }
 
+    private val restarting = ConcurrentHashMap.newKeySet<Block>()
+    fun restartTrack(block: Block): Boolean = isQueued(block) && restarting.add(block)
+
     fun isQueued(block: Block) = queues.containsKey(block)
     fun stopQueue(block: Block) {
+        restarting.remove(block)
         pendingLoopQueues.remove(block)
         pendingLoopQueues.remove(block.getRelative(BlockFace.DOWN))
         queues.remove(block)?.cancel()
@@ -443,13 +447,13 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 block.type == Material.JUKEBOX && chest.block.state is Chest &&
                     block.asJukebox()?.record?.type == Material.AIR
             }
-            suspend fun start(index: Int, nextControls: PlaybackControls, overlap: Boolean, prepared: PreparedMix? = null): Job? =
+            suspend fun start(index: Int, nextControls: PlaybackControls, overlap: Boolean, prepared: PreparedMix? = null, discOverride: ItemStack? = null): Job? =
                 suspendSyncAt(block.location, voiceServer, plugin) {
                     if (chest.block.state !is Chest || block.type != Material.JUKEBOX ||
                         block.asJukebox()?.record?.type != Material.AIR || (!overlap && jukeboxes.isPlaying(block))) null
                     else {
                         state.currentIndex = index
-                        val disc = liveDiscs.getOrNull(index) ?: return@suspendSyncAt null
+                        val disc = discOverride ?: liveDiscs.getOrNull(index) ?: return@suspendSyncAt null
                         activeDisc = disc
                         val occurrence = liveDiscs.take(index).count { it == disc }
                         jukeboxes.playChestTrack(disc.customDiscIdentifier(discHelper)!!, block, disc.itemMeta,
@@ -537,6 +541,23 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 while (isActive) {
                     delay(50)
                     if (!intact()) break
+                    if (restarting.remove(block)) {
+                        // During an incoming load, retain the song that is still audible.
+                        if (controls.sentAudioMs == 0L && outgoing != null) recoverOutgoing()
+                        val resumed = controls.copyForRestart()
+                        val resumeDisc = activeDisc
+                        controls.transitionPartner = null
+                        preparing?.cancelAndJoin(); preparing = null; preparingDisc = null; preparationFailed = false
+                        current?.cancelAndJoin()
+                        outgoing?.cancelAndJoin(); outgoing = null; oldControls = null; outgoingDisc = null; envelope = null
+                        mixCommitment.clear()
+                        fadeOutStart = null; haltAtEnd = false
+                        recoveryGain = 1.0; recoveryTempo = 1.0; recoveryStart = 0L
+                        skipping.remove(block); jumpTargets.remove(block)
+                        controls = resumed
+                        current = start(index, controls, false, discOverride = resumeDisc) ?: break
+                        continue
+                    }
                     controls.autoMixAnalysis = autoMixEnabled(block)
                     if (!controls.autoMixAnalysis) { controls.autoMixStatus = null; mixCommitment.clear() }
                     if (preparing?.isCompleted == true && preparationFailed) {
@@ -727,7 +748,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         queues[block] = queue
         queue.invokeOnCompletion {
             queueStates.remove(block, state)
-            if (queues.remove(block, queue)) { skipping.remove(block); jumpTargets.remove(block) }
+            if (queues.remove(block, queue)) { skipping.remove(block); jumpTargets.remove(block); restarting.remove(block) }
         }
         queue.start()
 
@@ -797,6 +818,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     }
 
     private fun stop(block: Block) {
+        restarting.remove(block)
+        restarting.remove(block.getRelative(BlockFace.DOWN))
         pendingLoopQueues.remove(block)
         pendingLoopQueues.remove(block.getRelative(BlockFace.DOWN))
         queues.remove(block)?.cancel()
@@ -852,4 +875,5 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     @EventHandler
     fun onQuit(event: PlayerQuitEvent) { pending.remove(event.player.uniqueId) }
 }
+
 

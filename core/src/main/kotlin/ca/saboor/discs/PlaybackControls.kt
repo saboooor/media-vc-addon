@@ -213,6 +213,19 @@ class PlaybackControls(
         transitionPartner?.applyVolume(volume)
     }
 
+    /** Fresh decoder state at the last transmitted position; saved user settings survive. */
+    @Synchronized fun copyForRestart(): PlaybackControls {
+        val resumePosition = if (players.isEmpty() || seekable) position else 0L
+        return PlaybackControls(initialVolume = volume, initialPositionMs = resumePosition,
+            initialFilterConfig = filterConfig).also { restarted ->
+            restarted.title = title
+            restarted.autoMixAnalysis = autoMixAnalysis
+            restarted.tempoAnalysis = tempoAnalysis
+            analysisConsumers.forEach { restarted.setVisualizing(true, it) }
+            if (paused) restarted.togglePause()
+        }
+    }
+
     @Synchronized fun seekTo(positionMs: Long) {
         if (!seekable) return
         val target = positionMs.coerceIn(trimmedStartMs.coerceAtMost((duration - 1).coerceAtLeast(0)), (duration - 1).coerceAtLeast(0))
@@ -226,4 +239,5 @@ class PlaybackControls(
         onSeek?.invoke(target)
     }
 }
+
 

@@ -428,3 +428,9 @@ Companion video now uses low-latency H.264 by default, with `[screen].companion_
 Use `/disc nearby [radius] [page]` to locate placed jukeboxes around your current position. The default radius is 64 blocks; choose 1–256, for example `/disc nearby 128`. Results list custom playback (including chest queues and paused tracks) and playing vanilla jukeboxes in your current world, nearest first, with XYZ coordinates, distance, state, and track name. Click coordinates to copy them; lists longer than ten entries have clickable page controls. Hidden jukeboxes above and below you are included within the three-dimensional radius.
 
 The search only inspects already-loaded chunks and does not load additional chunks. It is operator-only by default; grant `vc.addon.discs.nearby` or `pv.addon.discs.nearby` to allow other players to use it. The command does not stop playback or move the player.
+
+### Restart playback without losing your place
+
+Open placed or handheld jukebox controls and choose **Restart playback**. The old decoder and voice channels are stopped and cleaned up before fresh playback starts. Seekable tracks resume at the last transmitted media position with pause state, volume, EQ/effects, and visualizer/light analysis settings preserved. Linked screens restart at the same saved media position. Live/non-seekable streams reconnect without seeking.
+
+Chest and handheld queues retain the selected song, loop/shuffle settings, and shuffle history. Restarting a chest queue ends an in-progress crossfade and rebuilds its next-song analysis without advancing the queue. If an incoming song has not produced audio yet, the still-audible outgoing song is resumed. Speaker links and other saved jukebox settings remain attached. Stop, eject, or disc replacement during a restart prevents an old playback request from reappearing.

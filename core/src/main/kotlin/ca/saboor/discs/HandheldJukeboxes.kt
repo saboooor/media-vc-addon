@@ -98,7 +98,10 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
             return true
         }
     }
-    private class Session(val owner: UUID, val device: Device, val controls: PlaybackControls, var job: Job? = null)
+    private class Session(val owner: UUID, val device: Device, @Volatile var controls: PlaybackControls, var job: Job? = null) {
+        val restart = java.util.concurrent.atomic.AtomicReference<PlaybackControls?>()
+        @Volatile var audio: Job? = null
+    }
     private class Menu(val device: Device) : InventoryHolder {
         val view: Inventory = Bukkit.createInventory(this, MAX_DISCS, "Handheld Jukebox Queue")
         override fun getInventory(): Inventory = view
@@ -360,6 +363,10 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
             action == "queue_menu" -> { later(player) { openQueue(player, device) }; return }
             action in setOf("volume_menu", "effects_menu", "fx_eq_menu", "seek") -> page = action
             action == "play" -> play(player, device)
+            action == "restart" -> active[id]?.let { session ->
+                session.restart.set(session.controls.copyForRestart())
+                session.audio?.cancel()
+            }
             action == "pause" -> controls?.togglePause()
             action == "stop" -> stop(id)
             action == "skip" -> { stop(id); if (device.advance()) play(player, device) }
@@ -461,6 +468,7 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
                     buttons += "Shuffle: ${if (device.shuffle) "On" else "Off"}" to (prefix + "shuffle")
                     buttons += "Refresh" to (prefix + "refresh")
                     if (controls != null) {
+                        buttons += "Restart playback" to (prefix + "restart")
                         buttons += "Stop playback" to (prefix + "stop")
                         if (controls.seekable) buttons += "Seek" to (prefix + "seek")
                     }
@@ -498,10 +506,12 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
         session.job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 while (isActive) {
+                    session.restart.getAndSet(null)?.let { session.controls = it }
                     val song = suspendSyncFor(player, voiceServer, plugin) {
                         if (carried(player, id) == null) null else device.queue.getOrNull(device.selected)
                     } ?: break
                     val track = manager.getTrack(song.identifier).await()
+                    if (session.restart.get() != null) continue
                     session.controls.title = track.info.title
                     val destinations = suspendSyncFor(player, voiceServer, plugin) {
                         if (carried(player, id) == null) return@suspendSyncFor null
@@ -523,8 +533,14 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
                     try {
                         val audio = manager.startTrackJob(track, pvSource = pv, distance = config.goatHorn.distance,
                             svcChannel = channel, controls = session.controls)
-                        try { audio.join() } finally { withContext(NonCancellable) { audio.cancelAndJoin() } }
+                        session.audio = audio
+                        if (session.restart.get() != null) audio.cancel()
+                        try { audio.join() } finally {
+                            withContext(NonCancellable) { audio.cancelAndJoin() }
+                            session.audio = null
+                        }
                     } finally { pv?.remove() }
+                    if (session.restart.get() != null) continue
                     if (session.controls.failure != null) error(session.controls.failure!!)
                     val more = suspendSyncFor(player, voiceServer, plugin) {
                         val item = carried(player, id) ?: return@suspendSyncFor false
@@ -555,3 +571,4 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
         Bukkit.removeRecipe(NamespacedKey(plugin, "handheld_jukebox"))
     }
 }
+

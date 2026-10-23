@@ -310,6 +310,31 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     fun isPlaying(block: Block): Boolean =
         jobByBlock.containsKey(block)
 
+    /** Reserve the slot until cleanup finishes so stop/eject/replacement can cancel the restart. */
+    fun restartStoredDisc(block: Block, player: Player): Boolean {
+        val previous = jobByBlock[block] ?: return false
+        val controls = controlsByBlock[block] ?: return false
+        val record = block.asJukebox()?.record?.clone() ?: return false
+        val identifier = record.customDiscIdentifier(discHelper) ?: return false
+        val resumed = controls.copyForRestart()
+        lateinit var restarting: Job
+        restarting = scope.launch(start = CoroutineStart.LAZY) {
+            previous.cancelAndJoin()
+            suspendSyncAt(block.location, voiceServer, plugin) {
+                if (!isActive || jobByBlock[block] !== restarting ||
+                    !block.world.isChunkLoaded(block.x shr 4, block.z shr 4) ||
+                    block.asJukebox()?.record != record) return@suspendSyncAt
+                playChestTrack(identifier, block, record.itemMeta, player, chestQueue = false,
+                    controls = resumed, overlap = true)
+            }
+        }
+        previous.cancel(DiscEjectCause())
+        jobByBlock[block] = restarting
+        restarting.invokeOnCompletion { jobByBlock.remove(block, restarting) }
+        restarting.start()
+        return true
+    }
+
     fun playStoredDisc(block: Block, player: Player) {
         val record = block.asJukebox()?.record ?: return
         val identifier = record.customDiscIdentifier(discHelper) ?: return
@@ -499,7 +524,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     identifier.contains("music.youtube.com") || (track.info.uri ?: "").contains("music.youtube.com")
                 screenManager?.onJukeboxPlay(block, if (identifier.startsWith("jellyfin:")) identifier else videoIdentifier,
                     artworkUrl = track.info.artworkUrl, isYouTubeMusic = isYouTubeMusic,
-                    playbackPositionMs = { controls.transmittedPositionMs })
+                    playbackPositionMs = { controls.transmittedPositionMs }, startPositionMs = controls.initialPositionMs)
                 var lastExistenceCheck = System.currentTimeMillis()
                 var lastRecordReset = System.currentTimeMillis()
                 var lastAudioCheck = System.currentTimeMillis()
@@ -644,4 +669,5 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         }
     }
 }
+
 
