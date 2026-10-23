@@ -618,7 +618,7 @@ class VideoPlayer(
                 screen.worldName, screen.centerX, screen.centerY, screen.centerZ, maxDistance.toDouble())
             audienceChecked = now
         }
-        return cachedAudience
+        return cachedAudience.filter(ca.saboor.discs.utils.PlayerAudience::canReceiveScreen)
     }
 
     @Synchronized
@@ -707,7 +707,10 @@ class VideoPlayer(
             region.width, region.height, region.x, region.y, region.colors
         )
         val playerManager = PacketEvents.getAPI().playerManager
-        for (player in viewers) playerManager.sendPacketSilently(player, packet)
+        for (player in viewers) {
+            if (ca.saboor.discs.utils.PlayerAudience.canReceiveScreen(player))
+                playerManager.sendPacketSilently(player, packet)
+        }
     }
 
     @Synchronized
@@ -750,7 +753,8 @@ class VideoPlayer(
                     blankBuffer
                 )
                 for (player in players) {
-                    playerManager.sendPacketSilently(player, packet)
+                    if (ca.saboor.discs.utils.PlayerAudience.canReceiveScreen(player))
+                        playerManager.sendPacketSilently(player, packet)
                 }
             }
         }
