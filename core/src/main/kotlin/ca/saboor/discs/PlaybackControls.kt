@@ -14,7 +14,8 @@ class PlaybackControls(
     initialVolume: Int = 100,
     initialGain: Double = 1.0,
     initialPositionMs: Long = 0L,
-    initialFilterConfig: AudioFilterConfig = AudioFilterConfig()
+    initialFilterConfig: AudioFilterConfig = AudioFilterConfig(),
+    private val exactInitialPosition: Boolean = false
 ) {
     @Volatile var failure: String? = null
         private set
@@ -188,7 +189,9 @@ class PlaybackControls(
             seekPlayer(player, current.position)
         } else if (initialPositionMs > 0L) {
             val track = player.playingTrack
-            val target = if (track != null && track.duration > 0 && initialPositionMs >= track.duration - 1000) 0L else initialPositionMs
+            val target = if (track != null && track.duration > 0 && initialPositionMs >= track.duration - 1000) {
+                if (exactInitialPosition) initialPositionMs.coerceAtMost((track.duration - 1).coerceAtLeast(0L)) else 0L
+            } else initialPositionMs
             if (target > 0L) seekPlayer(player, target)
         }
         player.isPaused = paused
@@ -217,7 +220,7 @@ class PlaybackControls(
     @Synchronized fun copyForRestart(): PlaybackControls {
         val resumePosition = if (players.isEmpty() || seekable) position else 0L
         return PlaybackControls(initialVolume = volume, initialPositionMs = resumePosition,
-            initialFilterConfig = filterConfig).also { restarted ->
+            initialFilterConfig = filterConfig, exactInitialPosition = true).also { restarted ->
             restarted.title = title
             restarted.autoMixAnalysis = autoMixAnalysis
             restarted.tempoAnalysis = tempoAnalysis

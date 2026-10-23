@@ -549,6 +549,9 @@ class HandheldJukeboxes : Listener, PluginKoinComponent {
                         hasNext
                     }
                     if (!more) break
+                    val wasPaused = session.controls.paused
+                    session.controls = PlaybackControls(initialVolume = device.volume, initialFilterConfig = device.effects)
+                    if (wasPaused) session.controls.togglePause()
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {

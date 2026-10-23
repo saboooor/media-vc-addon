@@ -44,6 +44,17 @@ class PlaybackControlsTest {
         }
     }
 
+    @Test fun `restart during the final second resumes there instead of wrapping to the beginning`() {
+        val old = Decoder()
+        val controls = PlaybackControls()
+        controls.attach(old.player)
+        controls.frameSent(old.player, 89_500)
+        val restarted = controls.copyForRestart()
+        val fresh = Decoder()
+        restarted.attach(fresh.player)
+        assertEquals(89_500L, fresh.position)
+    }
+
     @Test fun `restart preserves transmitted position pause user filters and volume in fresh controls`() {
         val decoder = Decoder()
         val controls = PlaybackControls(initialVolume = 65)
