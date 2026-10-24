@@ -422,3 +422,33 @@ Jellyfin browsing groups TV episodes under their show. Click a show to open its 
 The Fabric screen companion supports higher-resolution video independently of vanilla map tiles. Set `[screen].companion_resolution` in `discs.toml` to `map`, `720p`, `1080p` (default), or `source` (up to 4K). Video preserves its aspect ratio and source detail without upscaling. Settings apply to newly started playback. Install the updated companion and server together; older companions use vanilla maps. Higher resolution increases server processing, memory, and network use.
 
 Companion video now uses low-latency H.264 by default, with `[screen].companion_codec = "h264"` and `companion_bitrate_kbps = 4000`. FFmpeg must include `libx264`; encoder failures fall back to JPEG. Set the codec to `jpeg` for independent frames. The companion bundles a pure Java decoder, so no client FFmpeg installation is required. H.264 reduces repeated image data but uses client CPU for software decoding. Both jars must use protocol v4; older companions receive vanilla maps. Settings apply to newly started playback. See [companion streaming details](screen-companion/README.md#h264-streaming).
+
+### Find nearby playing jukeboxes
+
+Use `/disc nearby [radius] [page]` to locate placed jukeboxes around your current position. The default radius is 64 blocks; choose 1–256, for example `/disc nearby 128`. Results list custom playback (including chest queues and paused tracks) and playing vanilla jukeboxes in your current world, nearest first, with XYZ coordinates, distance, state, and track name. Click coordinates to copy them; lists longer than ten entries have clickable page controls. Hidden jukeboxes above and below you are included within the three-dimensional radius.
+
+The search only inspects already-loaded chunks and does not load additional chunks. It is operator-only by default; grant `vc.addon.discs.nearby` or `pv.addon.discs.nearby` to allow other players to use it. The command does not stop playback or move the player.
+
+### Restart playback without losing your place
+
+Open placed or handheld jukebox controls and choose **Restart playback**. The old decoder and voice channels are stopped and cleaned up before fresh playback starts. Seekable tracks resume at the last transmitted media position with pause state, volume, EQ/effects, and visualizer/light analysis settings preserved. Linked screens restart at the same saved media position. Live/non-seekable streams reconnect without seeking.
+
+Chest and handheld queues retain the selected song, loop/shuffle settings, and shuffle history. Restarting a chest queue ends an in-progress crossfade and rebuilds its next-song analysis without advancing the queue. If an incoming song has not produced audio yet, the still-audible outgoing song is resumed. Speaker links and other saved jukebox settings remain attached. Stop, eject, or disc replacement during a restart prevents an old playback request from reappearing.
+
+Shulker boxes (all colors) can be placed above jukeboxes and used like chest queues: playlist burning, disc insertion, hopper input, playback controls, and chunk resume are supported. Sneak-click to open the box.
+
+### Theatre lights
+
+Open jukebox controls → **Lights → Configure theatre lights** to receive a temporary, reusable `minecraft:light` tool for that jukebox. Right-click a surface to place a free level-15 light beside it, or right-click air to place one four blocks ahead. Existing light blocks can also be linked. Theatre lights can be anywhere in the same world, with up to 1,024 total linked lights per jukebox; placement respects build protection. Use slot 9 to unlink a light, then click the jukebox or sneak-right-click air to finish and restore your hotbar.
+
+Theatre lights fade to level 0 over three seconds of playback and brighten back to their original level on pause, stop, or the end of a queue. They stay dark across queue tracks/crossfades while playback continues. Links survive restarts and travel with saved jukebox settings. Unlinking, shutdown, and chunk unload restore the saved brightness; replaced blocks are left alone. Requires Minecraft 1.17+ and the existing play/control permissions. Beat-reactive lights remain available through **Configure lights**.
+
+### Jellyfin audio tracks
+
+During movie, episode, or music-video playback, open jukebox controls → **Audio track** to choose a language or commentary track. **Automatic / default** restores Jellyfin's default. Switching resumes at the current position and preserves pause, volume, effects, and speaker settings; linked video/subtitles follow the resumed position. Seek and decoder clones retain the selection for the current playback. Wait for an active crossfade to finish before switching. Each new queue song uses its own default audio.
+
+For explicit track selections, Jellyfin sends Matroska containing the copied video stream and the selected audio transcoded to stereo AAC; the audio decoder ignores video. This works around Jellyfin servers that ignore audio-track indices on their audio-only route, but uses more bandwidth and requires video playback/audio-transcoding permission. Authentication remains in headers.
+
+Individual Spotify track links (including `spotify:track:` URIs) and Apple Music song share links can be burned with `/disc burn <song-link> [label]`. For Apple Music album links, keep the `?i=...` song selection. Like playlist imports, these read public metadata and burn a playable YouTube search match; public page availability and match accuracy can vary. No Spotify or Apple Music subscription audio is streamed.
+
+Wind charges, including breeze wind charges, no longer stop custom jukebox playback or container queues when triggering blocks.

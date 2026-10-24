@@ -44,6 +44,66 @@ class PlaybackControlsTest {
         }
     }
 
+    @Test fun `restart during the final second resumes there instead of wrapping to the beginning`() {
+        val old = Decoder()
+        val controls = PlaybackControls()
+        controls.attach(old.player)
+        controls.frameSent(old.player, 89_500)
+        val restarted = controls.copyForRestart()
+        val fresh = Decoder()
+        restarted.attach(fresh.player)
+        assertEquals(89_500L, fresh.position)
+    }
+
+    @Test fun `restart preserves transmitted position pause user filters and volume in fresh controls`() {
+        val decoder = Decoder()
+        val controls = PlaybackControls(initialVolume = 65)
+        controls.attach(decoder.player)
+        controls.frameSent(decoder.player, 12_340)
+        val effects = ca.saboor.discs.audio.AudioFilterConfig(tempo = 1.25, pitchSemitones = 2.0)
+        controls.applyFilterConfig(effects)
+        controls.autoMixAnalysis = true
+        controls.tempoAnalysis = true
+        controls.setVisualizing(true, "lights")
+        controls.setMixTempoFactor(0.95)
+        controls.setGain(0.25)
+        controls.togglePause()
+        controls.fail("Old decoder failure")
+        val restarted = controls.copyForRestart()
+        assertEquals(12_340L, restarted.initialPositionMs)
+        assertEquals(65, restarted.volume)
+        assertEquals(effects, restarted.filterConfig)
+        assertTrue(restarted.paused)
+        assertTrue(restarted.autoMixAnalysis)
+        assertTrue(restarted.tempoAnalysis)
+        assertTrue(restarted.visualizing)
+        assertNull(restarted.failure)
+        assertNull(restarted.transmittedPositionMs)
+        assertNull(restarted.transitionPartner)
+        assertEquals(0L, restarted.sentAudioMs)
+        assertEquals(1.0, restarted.currentGain)
+        assertEquals(1.0, restarted.mixTempoFactor)
+        val fresh = Decoder()
+        restarted.attach(fresh.player)
+        assertEquals(12_340L, fresh.position)
+        assertTrue(fresh.paused)
+        assertEquals(65, fresh.volume)
+        assertTrue(decoder.paused)
+    }
+
+    @Test fun `restart of non-seekable audio reconnects live without inventing a seek position`() {
+        val decoder = Decoder(seekable = false)
+        val controls = PlaybackControls()
+        controls.attach(decoder.player)
+        controls.frameSent(decoder.player, 42_000)
+        assertEquals(0L, controls.copyForRestart().initialPositionMs)
+    }
+
+    @Test fun `restart while loading retains the requested starting position`() {
+        val controls = PlaybackControls(initialPositionMs = 27_000)
+        assertEquals(27_000L, controls.copyForRestart().initialPositionMs)
+    }
+
     @Test fun `mix clock advances only for attached transmitted frames and is independent of seeks`() {
         val controls = PlaybackControls()
         val decoder = Decoder()
@@ -252,4 +312,5 @@ class PlaybackControlsTest {
         assertEquals(0L, decoder.position)
     }
 }
+
 

@@ -18,6 +18,7 @@ class PerceptualColorTest {
         assertEquals(0.12584630, red.b, 1e-6)
     }
 
+    @Suppress("DEPRECATION")
     @Test fun `lookup reduces average perceptual error compared with previous five bit matching`() {
         var previousError = 0.0
         var improvedError = 0.0

@@ -1,5 +1,6 @@
 package ca.saboor.discs.command.subcommand
 
+import ca.saboor.discs.utils.playlistContainer
 import ca.saboor.discs.event.JukeboxProgressDisplay
 import ca.saboor.discs.event.JukeboxVisualizer
 import ca.saboor.discs.utils.EditingWand
@@ -17,7 +18,6 @@ import org.bukkit.Bukkit
 import org.bukkit.GameMode
 import org.bukkit.Material
 import org.bukkit.block.Block
-import org.bukkit.block.Chest
 import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
 import org.bukkit.event.*
@@ -50,7 +50,7 @@ class VisualizerCommand(private val visualizers: JukeboxVisualizer) : SubCommand
 
     private fun message(player: Player, text: String) = player.sendMessage(Component.text(text, NamedTextColor.YELLOW))
     private fun anchor(block: Block, spec: VisualizerInstance) = block.location.add(0.5 + spec.layout.x,
-        (if (block.getRelative(0, 1, 0).state is Chest) 2.1 else 1.1) + spec.layout.y, 0.5 + spec.layout.z).toVector()
+        (if (block.getRelative(0, 1, 0).state.playlistContainer() != null) 2.1 else 1.1) + spec.layout.y, 0.5 + spec.layout.z).toVector()
     private fun select(editor: Editor, id: Int) {
         editor.id = id
         editor.grabbed = false
@@ -121,9 +121,9 @@ class VisualizerCommand(private val visualizers: JukeboxVisualizer) : SubCommand
             val target = player.getTargetBlockExact(6)
             val block = when {
                 target?.type == Material.JUKEBOX -> target
-                target?.state is Chest && target.getRelative(0, -1, 0).type == Material.JUKEBOX -> target.getRelative(0, -1, 0)
+                target != null && target.state.playlistContainer() != null && target.getRelative(0, -1, 0).type == Material.JUKEBOX -> target.getRelative(0, -1, 0)
                 else -> null
-            } ?: run { message(player, "Look at a jukebox or its chest within 6 blocks."); return }
+            } ?: run { message(player, "Look at a jukebox or its chest/shulker box within 6 blocks."); return }
             editVisualizer(player, block)
             return
         }

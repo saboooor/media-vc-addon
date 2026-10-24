@@ -49,6 +49,7 @@ internal class VideoSeekProxy(private val source: String, private val userAgent:
                 if (status in listOf(301, 302, 303, 307, 308)) {
                     // Authenticated Jellyfin streams must never forward credentials to redirects.
                     if (authorization != null) {
+                        logger.warn("Video upstream returned redirect $status for ${VideoPlayer.describeSource(source)}; use the final Jellyfin server URL (credentials were not forwarded)")
                         exchange.sendResponseHeaders(502, -1)
                         return
                     }
@@ -59,6 +60,7 @@ internal class VideoSeekProxy(private val source: String, private val userAgent:
                     upstream.disconnect()
                     continue
                 }
+                if (status >= 400) logger.warn("Video upstream returned HTTP $status for ${VideoPlayer.describeSource(source)}")
                 for (header in listOf("Content-Type", "Content-Range", "Accept-Ranges", "Content-Length")) {
                     upstream.getHeaderField(header)?.let { exchange.responseHeaders.set(header, it) }
                 }
@@ -76,6 +78,8 @@ internal class VideoSeekProxy(private val source: String, private val userAgent:
         } catch (e: Exception) {
             if (e is java.net.SocketTimeoutException) {
                 logger.warn("Video upstream timed out for ${VideoPlayer.describeSource(source)}; FFmpeg may reconnect")
+            } else if (e is java.net.ConnectException || e is javax.net.ssl.SSLException) {
+                logger.warn("Video upstream connection failed for ${VideoPlayer.describeSource(source)} (${e.javaClass.simpleName})")
             }
             // FFmpeg closes outstanding range requests when it seeks again or playback stops.
             runCatching { exchange.sendResponseHeaders(502, -1) }

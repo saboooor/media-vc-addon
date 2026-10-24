@@ -308,10 +308,11 @@ class ScreenManager : PluginKoinComponent {
         identifier: String,
         artworkUrl: String? = null,
         isYouTubeMusic: Boolean = false,
-        playbackPositionMs: (() -> Long?)? = null
+        playbackPositionMs: (() -> Long?)? = null,
+        startPositionMs: Long? = null
     ) {
         val screen = getScreenForJukebox(block) ?: return
-        val startPos = playbackPositionMs?.invoke() ?: 0L
+        val startPos = startPositionMs ?: playbackPositionMs?.invoke() ?: 0L
         playVideo(screen, identifier, startPos, artworkUrl, isYouTubeMusic, playbackPositionMs)
     }
 
@@ -546,4 +547,5 @@ class ScreenManager : PluginKoinComponent {
         }
     }
 }
+
 

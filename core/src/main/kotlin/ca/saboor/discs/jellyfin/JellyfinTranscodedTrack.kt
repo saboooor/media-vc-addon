@@ -12,11 +12,19 @@ internal class JellyfinTranscodedTrack(
     private val reload: (Long) -> InternalAudioTrack,
     private val startPositionMs: Long = 0,
     private val deferred: Boolean = false,
+    val audioTracks: (() -> List<JellyfinClient.AudioTrack>)? = null,
+    private val reloadAudio: ((Long, JellyfinClient.AudioTrack?) -> InternalAudioTrack)? = null,
+    val selectedAudioTrack: JellyfinClient.AudioTrack? = null,
 ) : DelegatedAudioTrack(delegate.info) {
     val canRestart: Boolean get() = durationMs > 0
     fun restartAt(positionMs: Long): JellyfinTranscodedTrack =
         JellyfinTranscodedTrack(delegate, durationMs, reload,
-            positionMs.coerceIn(0, (durationMs - 1).coerceAtLeast(0)), true)
+            positionMs.coerceIn(0, (durationMs - 1).coerceAtLeast(0)), true, audioTracks, reloadAudio, selectedAudioTrack)
+    fun withAudioTrack(track: JellyfinClient.AudioTrack?, positionMs: Long): JellyfinTranscodedTrack {
+        check(reloadAudio != null)
+        return JellyfinTranscodedTrack(delegate, durationMs, reload, positionMs.coerceAtLeast(0), true,
+            audioTracks, reloadAudio, track)
+    }
     fun absoluteFramePosition(timecodeMs: Long): Long = startPositionMs + timecodeMs
     override fun getPosition() = startPositionMs + super.getPosition()
     override fun isSeekable() = false
@@ -26,7 +34,7 @@ internal class JellyfinTranscodedTrack(
     override fun getDuration() = if (durationMs > 0) durationMs else super.getDuration()
     override fun getSourceManager() = delegate.sourceManager
     override fun process(executor: LocalAudioTrackExecutor) =
-        processDelegate(if (deferred) reload(startPositionMs) else delegate, executor)
+        processDelegate(if (deferred) reloadAudio?.invoke(startPositionMs, selectedAudioTrack) ?: reload(startPositionMs) else delegate, executor)
     override fun makeShallowClone(): AudioTrack =
-        JellyfinTranscodedTrack(delegate.makeClone() as InternalAudioTrack, durationMs, reload, startPositionMs, deferred)
+        JellyfinTranscodedTrack(delegate.makeClone() as InternalAudioTrack, durationMs, reload, startPositionMs, deferred, audioTracks, reloadAudio, selectedAudioTrack)
 }

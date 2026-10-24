@@ -6,6 +6,7 @@ import ca.saboor.discs.utils.extend.suspendSyncAt
 import ca.saboor.discs.visualizer.BassLampEnvelope
 import ca.saboor.discs.visualizer.BeaconShutter
 import ca.saboor.discs.visualizer.LightBand
+import ca.saboor.discs.visualizer.TheatreLightFade
 import ca.saboor.discs.visualizer.LightBlock
 import com.google.gson.GsonBuilder
 import java.io.File
@@ -22,7 +23,7 @@ import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.NamespacedKey
 import org.bukkit.block.Block
-import org.bukkit.block.data.Lightable
+import org.bukkit.block.data.Levelled
 import org.bukkit.entity.Entity
 import org.bukkit.entity.EntityType
 import org.bukkit.entity.Player
@@ -56,7 +57,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         }
         companion object { fun of(block: Block) = Position(block.world.uid.toString(), block.x, block.y, block.z) }
     }
-    data class Link(val lamp: Position, val jukebox: Position, val band: LightBand? = LightBand.BASS, val originalData: String? = null, val shutterData: String? = null) {
+    data class Link(val lamp: Position, val jukebox: Position, val band: LightBand? = LightBand.BASS, val originalData: String? = null, val shutterData: String? = null, val theatre: Boolean = false) {
         val blockTypeName: String
             get() {
                 val raw = originalData?.substringBefore('[')?.substringAfter(':')
@@ -67,7 +68,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                 return mat.name.lowercase().split('_').joinToString(" ") { it.replaceFirstChar(Char::titlecase) }
             }
     }
-    private data class Pending(val jukebox: Block, val unlink: Boolean = false, val band: LightBand = LightBand.BASS, val savedHotbar: Array<ItemStack?>? = null, val expires: Long = System.currentTimeMillis() + 180_000)
+    private data class Pending(val jukebox: Block, val theatre: Boolean = false, val unlink: Boolean = false, val band: LightBand = LightBand.BASS, val savedHotbar: Array<ItemStack?>? = null, val expires: Long = System.currentTimeMillis() + 180_000)
     private val toolKey by lazy { NamespacedKey(plugin, "light_dye_tool") }
 
     companion object {
@@ -228,7 +229,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
             entity.isGlowing = true
             val blockData = LightBlock.original(link.originalData) ?: block.blockData
             entity.javaClass.getMethod("setBlock", org.bukkit.block.data.BlockData::class.java).invoke(entity, blockData)
-            val glowColor = bandGlowColor(link.band ?: LightBand.BASS)
+            val glowColor = if (link.theatre) org.bukkit.Color.fromRGB(255, 215, 0) else bandGlowColor(link.band ?: LightBand.BASS)
             runCatching {
                 entity.javaClass.getMethod("setGlowColorOverride", org.bukkit.Color::class.java).invoke(entity, glowColor)
             }
@@ -251,7 +252,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
             entity.isPersistent = false
             val band = link.band ?: LightBand.BASS
             val textComponent = Component.text("✦ ", NamedTextColor.GOLD)
-                .append(Component.text(band.label, bandTextColor(band)))
+                .append(Component.text(if (link.theatre) "Theatre" else band.label, bandTextColor(band)))
                 .append(Component.text(" ✦", NamedTextColor.GOLD))
                 .append(Component.newline())
                 .append(Component.text(link.blockTypeName, NamedTextColor.GRAY))
@@ -296,6 +297,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     private data class BandTickState(val lit: Boolean = false, val beatCount: Int = 0, val isBuzzing: Boolean = false, val colorStep: Int = 0)
     private val envelopes = ConcurrentHashMap<SourceBandKey, BassLampEnvelope>()
     private val bandHistories = ConcurrentHashMap<SourceBandKey, ArrayDeque<BandTickState>>()
+    private val theatreFades = ConcurrentHashMap<Position, TheatreLightFade>()
     private val litLamps = ConcurrentHashMap.newKeySet<Position>()
     private val consumers = ConcurrentHashMap.newKeySet<PlaybackControls>()
     private val gson = GsonBuilder().setPrettyPrinting().create()
@@ -350,7 +352,11 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
 
     fun isLinking(player: Player): Boolean = pending.containsKey(player.uniqueId)
 
-    fun beginLink(player: Player, jukebox: Block, unlink: Boolean = false, band: LightBand = LightBand.BASS) {
+    fun beginLink(player: Player, jukebox: Block, unlink: Boolean = false, band: LightBand = LightBand.BASS, theatre: Boolean = false) {
+        val lightMaterial = Material.matchMaterial("LIGHT")
+        if (theatre && lightMaterial == null) {
+            player.sendMessage(Component.text("Theatre lights require Minecraft 1.17 or newer.")); return
+        }
         cancelLink(player, notify = false)
         val inv = player.inventory
         val savedHotbar = Array(9) { slot -> inv.getItem(slot)?.clone() }
@@ -372,12 +378,22 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
             )
         )
         inv.setItem(8, unlinkItem)
+        if (theatre) {
+            for (slot in 0..7) inv.setItem(slot, null)
+            inv.setItem(0, createToolItem("THEATRE", lightMaterial!!,
+                Component.text("Theatre light — place / link", NamedTextColor.GOLD),
+                listOf(Component.text("Right-click to place a free light or link an existing light"),
+                    Component.text("Click the jukebox or sneak-click air to finish"))))
+            inv.setItem(8, createToolItem("UNLINK", lightMaterial,
+                Component.text("Unlink theatre light", NamedTextColor.RED),
+                listOf(Component.text("Right-click a light to unlink it"))))
+        }
         inv.heldItemSlot = if (unlink) 8 else band.ordinal.coerceIn(0, 7)
-        pending[player.uniqueId] = Pending(jukebox, unlink, band, savedHotbar)
+        pending[player.uniqueId] = Pending(jukebox, theatre, unlink, band, savedHotbar)
         showHighlights(jukebox, durationMs = 180_000L)
         player.sendMessage(
             Component.text(
-                "Equipped light dyes in your hotbar! Select a dye and right-click lights within 32 blocks to set their type (slot 9 unlinks). Sneak-right-click or click the jukebox when done.",
+                if (theatre) "Right-click a surface or air to place a free theatre light, or an existing light to link it. Slot 9 unlinks. Click the jukebox or sneak-click air to finish." else "Equipped light dyes in your hotbar! Select a dye and right-click lights within 32 blocks to set their type (slot 9 unlinks). Sneak-right-click or click the jukebox when done.",
                 NamedTextColor.GOLD
             )
         )
@@ -392,19 +408,20 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         }
     }
     fun linkedPositions(jukebox: Block) = linkedIndex().sources[Position.of(jukebox)].orEmpty().map { it.lamp }
+    fun theatrePositions(jukebox: Block) = linkedLights(jukebox).filter { it.theatre }.map { it.lamp }
     fun linkedBands(jukebox: Block) = linkedIndex().sources[Position.of(jukebox)].orEmpty().map { it.band ?: LightBand.BASS }
     fun linkedLights(jukebox: Block) = linkedIndex().sources[Position.of(jukebox)].orEmpty()
-    fun restoreLinks(jukebox: Block, lamps: List<Position>, bands: List<LightBand> = emptyList()) {
+    fun restoreLinks(jukebox: Block, lamps: List<Position>, bands: List<LightBand> = emptyList(), theatre: List<Position> = emptyList()) {
         val source = Position.of(jukebox)
         var changed = false
         for ((index, lamp) in lamps.withIndex()) {
             if (lamp.world != source.world) continue
             val distance = (lamp.x.toLong() - source.x).let { it * it } + (lamp.y.toLong() - source.y).let { it * it } + (lamp.z.toLong() - source.z).let { it * it }
-            if (distance > 1024) continue
+            if (distance > 1024 && lamp !in theatre) continue
             if (links[lamp]?.jukebox?.let { it != source } == true) continue
             val existing = links[lamp]
-            val original = existing?.originalData ?: lamp.loadedBlock()?.blockData?.takeIf(LightBlock::supports)?.asString ?: continue
-            val link = Link(lamp, source, bands.getOrElse(index) { LightBand.BASS }, original, existing?.shutterData)
+            val original = existing?.originalData ?: lamp.loadedBlock()?.blockData?.takeIf { if (lamp in theatre) it.material.name == "LIGHT" else LightBlock.supports(it) }?.asString ?: continue
+            val link = Link(lamp, source, bands.getOrElse(index) { LightBand.BASS }, original, existing?.shutterData, lamp in theatre)
             if (links.put(lamp, link) != link) changed = true
         }
         if (changed) save()
@@ -438,24 +455,51 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         return count
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    private fun canConfigure(player: Player) =
+        (player.hasPermission("pv.addon.discs.control") || player.hasPermission("vc.addon.discs.control")) &&
+        (player.hasPermission("pv.addon.discs.play") || player.hasPermission("vc.addon.discs.play"))
+
+    @EventHandler(priority = EventPriority.HIGHEST)
     fun onClick(event: PlayerInteractEvent) {
         if (event.hand != EquipmentSlot.HAND) return
         val player = event.player
         val request = pending[player.uniqueId] ?: return
+        // Vanilla marks air interactions as cancelled when only block use is denied.
+        if (event.useItemInHand() == Event.Result.DENY ||
+            (event.action == Action.RIGHT_CLICK_BLOCK && event.useInteractedBlock() == Event.Result.DENY)) return
         if (System.currentTimeMillis() > request.expires) {
             cancelLink(player, notify = true)
             return
         }
         val rightClick = event.action == Action.RIGHT_CLICK_BLOCK || event.action == Action.RIGHT_CLICK_AIR
         if (!rightClick) return
-        val lamp = event.clickedBlock
+        var lamp = event.clickedBlock
         if (lamp == request.jukebox) {
             cancelLink(player, notify = true)
             return
         }
         val heldAction = toolAction(player.inventory.itemInMainHand)
-        if (player.isSneaking && (lamp == null || (!links.containsKey(Position.of(lamp)) && !LightBlock.supports(lamp.blockData)))) {
+        if (request.theatre && heldAction == "THEATRE" && !player.isSneaking && lamp?.type?.name != "LIGHT") {
+            event.isCancelled = true
+            val target = lamp?.getRelative(event.blockFace)
+                ?: player.eyeLocation.let { it.add(it.direction.multiply(4.0)).block }
+            if (count(request.jukebox) >= 1024) {
+                player.sendMessage(Component.text("This jukebox already has 1,024 linked lights.")); return
+            }
+            val minHeight = runCatching { target.world.javaClass.getMethod("getMinHeight").invoke(target.world) as Int }.getOrDefault(0)
+            if (target.y !in minHeight until target.world.maxHeight || !target.type.isAir || target.world != request.jukebox.world) return
+            if (!canConfigure(player)) { cancelLink(player); return }
+            val replaced = target.state
+            target.setBlockData(Bukkit.createBlockData("minecraft:light[level=15]"), false)
+            val placement = BlockPlaceEvent(target, replaced, lamp ?: target.getRelative(org.bukkit.block.BlockFace.DOWN), player.inventory.itemInMainHand, player, true, EquipmentSlot.HAND)
+            Bukkit.getPluginManager().callEvent(placement)
+            if (placement.isCancelled || !placement.canBuild()) {
+                replaced.update(true, false)
+                return
+            }
+            lamp = target
+        }
+        if (player.isSneaking && (lamp == null || (!links.containsKey(Position.of(lamp)) && !(if (request.theatre) lamp.type.name == "LIGHT" else LightBlock.supports(lamp.blockData))))) {
             event.isCancelled = true
             cancelLink(player, notify = true)
             return
@@ -464,7 +508,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
             if (heldAction != null) event.isCancelled = true
             return
         }
-        if (!links.containsKey(Position.of(lamp)) && !LightBlock.supports(lamp.blockData)) {
+        if (!links.containsKey(Position.of(lamp)) && !(if (request.theatre) lamp.type.name == "LIGHT" else LightBlock.supports(lamp.blockData))) {
             if (heldAction != null) event.isCancelled = true
             return
         }
@@ -473,12 +517,13 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
             cancelLink(player)
             return
         }
-        if (lamp.world != request.jukebox.world || lamp.location.distanceSquared(request.jukebox.location) > 32 * 32 ||
-            request.jukebox.type != Material.JUKEBOX) {
+        if (lamp.world != request.jukebox.world || (!request.theatre && lamp.location.distanceSquared(request.jukebox.location) > 32 * 32) ||
+            (!request.theatre && request.jukebox.type != Material.JUKEBOX)) {
             event.isCancelled = true
-            player.sendMessage(Component.text("Choose a supported light block within 32 blocks of the jukebox."))
+            player.sendMessage(Component.text(if (request.theatre) "Choose a light in the same world as the jukebox." else "Choose a supported light block within 32 blocks of the jukebox."))
             return
         }
+        if (!request.theatre && lamp.type.name == "LIGHT") return
         val unlink = heldAction == "UNLINK" || (heldAction == null && request.unlink)
         val band = heldAction?.let { act -> LightBand.entries.firstOrNull { it.name == act } } ?: request.band
         if (!unlink && lamp.type == Material.BEACON && links[Position.of(lamp)]?.shutterData == null &&
@@ -489,6 +534,12 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         }
         event.isCancelled = true
         val key = Position.of(lamp)
+        if (!unlink && links[key]?.jukebox?.let { it != Position.of(request.jukebox) } == true) {
+            player.sendMessage(Component.text("That light is already linked to another jukebox.")); return
+        }
+        if (!unlink && !links.containsKey(key) && count(request.jukebox) >= 1024) {
+            player.sendMessage(Component.text("This jukebox already has 1,024 linked lights.")); return
+        }
         if (unlink) {
             if (links[key]?.jukebox != Position.of(request.jukebox)) {
                 player.sendMessage(Component.text("That lamp is not linked to this jukebox.")); return
@@ -499,18 +550,19 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         } else {
             val original = links[key]?.originalData ?: lamp.blockData.asString
             val shutter = links[key]?.shutterData ?: if (lamp.type == Material.BEACON) BeaconShutter.capture(lamp)?.asString else null
-            links[key] = Link(key, Position.of(request.jukebox), band, original, shutter)
+            theatreFades.remove(key)
+            links[key] = Link(key, Position.of(request.jukebox), band, original, shutter, request.theatre)
             litLamps.remove(key)
         }
         save()
         val remaining = count(request.jukebox)
         if (player.isSneaking) {
             cancelLink(player, notify = false)
-            player.sendMessage(Component.text(if (unlink) "Light unlinked (finished)." else "Light set to ${band.label.lowercase()} (finished).", NamedTextColor.GREEN))
+            player.sendMessage(Component.text(if (unlink) "Light unlinked (finished)." else "Light set to ${if (request.theatre) "theatre" else band.label.lowercase()} (finished).", NamedTextColor.GREEN))
         } else {
             pending[player.uniqueId] = request.copy(expires = System.currentTimeMillis() + 180_000)
             if (remaining > 0) showHighlights(request.jukebox, durationMs = 180_000L) else hideHighlights(request.jukebox)
-            player.sendMessage(Component.text(if (unlink) "Light unlinked ($remaining linked). Sneak-click or click jukebox when done." else "Light set to ${band.label} ($remaining linked).", bandTextColor(band)))
+            player.sendMessage(Component.text(if (unlink) "Light unlinked ($remaining linked). Sneak-click or click jukebox when done." else "Light set to ${if (request.theatre) "theatre" else band.label} ($remaining linked).", bandTextColor(band)))
         }
     }
 
@@ -659,6 +711,18 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                                             continue
                                         }
                                         val controls = sourceControls[link.jukebox]
+                                        if (link.theatre) {
+                                            val data = lamp.blockData as? Levelled ?: continue
+                                            val brightness = (original(link) as? Levelled)?.level ?: 15
+                                            val playing = controls != null && !controls.paused &&
+                                                (controls.sentAudioMs > 0L || controls.transitionPartner?.let { !it.paused && it.sentAudioMs > 0L } == true)
+                                            val fade = theatreFades.computeIfAbsent(link.lamp) { TheatreLightFade(data.level, updateStarted) }
+                                            val level = fade.update(playing, brightness, updateStarted)
+                                            if (data.level != level) lamp.setBlockData(data.apply { this.level = level }, false)
+                                            // Keep scheduling while dark or fading back up, even after playback disappears.
+                                            if (playing || level != brightness) litLamps.add(link.lamp) else litLamps.remove(link.lamp)
+                                            continue
+                                        }
                                         val listening = controls != null && audiences[link.jukebox].orEmpty().any {
                                             it.within(link.lamp.x.toDouble(), link.lamp.y.toDouble(), link.lamp.z.toDouble(), 32.0)
                                         }
@@ -717,7 +781,8 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
 
     private fun original(link: Link) = LightBlock.original(link.originalData)
         ?: Bukkit.createBlockData(Material.REDSTONE_LAMP)
-    private fun matches(block: Block, link: Link) = LightBlock.matches(block, original(link))
+    private fun matches(block: Block, link: Link) =
+        if (link.theatre) block.type.name == "LIGHT" else LightBlock.matches(block, original(link))
     private fun setLit(block: Block, link: Link, lit: Boolean, colorStep: Int = 0) {
         val original = original(link)
         if (original.material != Material.BEACON) {
@@ -738,6 +803,8 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         BeaconShutter.update(block, empty, Bukkit.createBlockData(Material.BLACK_CONCRETE), lit, litData)
     }
     private fun restore(block: Block, link: Link) {
+        theatreFades.remove(link.lamp)
+        if (link.theatre && !matches(block, link)) return
         val original = original(link)
         if (original.material == Material.BEACON) {
             link.shutterData?.let(LightBlock::original)?.let {
@@ -831,6 +898,6 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         highlights.values.flatten().forEach { safeRemove(it.blockDisplay); safeRemove(it.textDisplay) }
         highlights.clear()
         pending.forEach { (uuid, req) -> Bukkit.getPlayer(uuid)?.let { restoreHotbar(it, req.savedHotbar) } }
-        pending.clear(); envelopes.clear(); bandHistories.clear(); litLamps.clear()
+        pending.clear(); envelopes.clear(); bandHistories.clear(); litLamps.clear(); theatreFades.clear()
     }
 }

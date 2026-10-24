@@ -78,6 +78,29 @@ class JukeboxProgressDisplayTest {
     }
 
     @Test
+    fun `shulker box above jukebox raises display above the box`() {
+        val world = mockWorld()
+        val inventory = proxy(Inventory::class.java) { _, _ -> null }
+        val shulker = proxy(org.bukkit.block.ShulkerBox::class.java) { name, _ ->
+            if (name == "getInventory") inventory else null
+        }
+        val above = proxy(Block::class.java) { name, _ ->
+            if (name == "getState") shulker else null
+        }
+        val jukebox = proxy(Block::class.java) { name, _ ->
+            when (name) {
+                "getRelative" -> above
+                "getLocation" -> Location(world, 10.0, 64.0, 20.0)
+                else -> null
+            }
+        }
+        val location = JukeboxProgressDisplay.getDisplayLocation(jukebox)
+        assertEquals(10.5, location.x, 0.001)
+        assertEquals(66.35, location.y, 0.001)
+        assertEquals(20.5, location.z, 0.001)
+    }
+
+    @Test
     fun `double chest above jukebox centers at midpoint of both chest blocks`() {
         val world = mockWorld()
         val leftBlock = mockBlock(10, 65, 20, world, Material.CHEST)

@@ -29,6 +29,46 @@ class PublicPlaylistClient(private val fetch: (URI) -> String = ::fetchPage) {
         return if (reference.service == "Spotify") spotify(html) else apple(html)
     }
 
+    /** Resolve a single catalog song; the caller matches it through the normal audio sources. */
+    fun loadSong(value: String): CatalogPlaylistClient.Song? {
+        val normalized = if (value.startsWith("spotify:track:"))
+            "https://open.spotify.com/track/${value.removePrefix("spotify:track:")}" else value
+        val uri = runCatching { URI(normalized) }.getOrNull() ?: return null
+        if (uri.host !in setOf("open.spotify.com", "music.apple.com")) return null
+        require(uri.scheme == "https" && uri.userInfo == null && uri.port == -1) { "Use an HTTPS song share link." }
+        val parts = uri.path.split('/').filter(String::isNotBlank)
+        if (uri.host == "open.spotify.com") {
+            val path = parts.dropWhile { it.startsWith("intl-") }
+            require(path.size == 2 && path[0] == "track" && path[1].matches(Regex("[A-Za-z0-9]+"))) { "Use a Spotify track link for /disc burn; use /disc playlist for playlists." }
+            val entity = script(fetch(URI("https://open.spotify.com/embed/track/${path[1]}")), "__NEXT_DATA__")
+                .asJsonObject.getAsJsonObject("props")?.getAsJsonObject("pageProps")
+                ?.getAsJsonObject("state")?.getAsJsonObject("data")?.getAsJsonObject("entity")
+                ?: error("Spotify song metadata is unavailable.")
+            val artists = entity.getAsJsonArray("artists")?.map { text(it.asJsonObject, "name") }
+                ?.filter(String::isNotBlank)?.joinToString(", ").orEmpty()
+            return song(text(entity, "name"), artists) ?: error("Spotify song metadata is unavailable.")
+        }
+        require(parts.size >= 3 && parts[0].matches(Regex("[a-zA-Z]{2}"))) { "Use an Apple Music song share link." }
+        val selected = uri.rawQuery?.split('&')?.firstOrNull { it.startsWith("i=") }?.removePrefix("i=")
+            ?: parts.last().takeIf { parts[1] == "song" }
+        require(selected != null && selected.matches(Regex("[0-9]+"))) { "Use an Apple Music song link, including ?i= for album links." }
+        // Album pages contain multiple songs: select the requested ID from its song row.
+        val root = script(fetch(uri), "serialized-server-data")
+        fun find(value: JsonElement): CatalogPlaylistClient.Song? {
+            if (value.isJsonArray) return value.asJsonArray.firstNotNullOfOrNull(::find)
+            if (!value.isJsonObject) return null
+            val obj = value.asJsonObject
+            val descriptor = obj.getAsJsonObject("contentDescriptor")
+            if (descriptor != null && text(descriptor, "kind") == "song" &&
+                descriptor.get("id")?.asString == selected) {
+                val artists = obj.getAsJsonArray("subtitleLinks")?.map { text(it.asJsonObject, "title") }?.joinToString(", ").orEmpty()
+                song(text(obj, "title"), artists)?.let { return it }
+            }
+            return obj.entrySet().firstNotNullOfOrNull { find(it.value) }
+        }
+        return find(root) ?: error("Apple Music song metadata is unavailable for the selected song.")
+    }
+
     companion object {
         private fun text(value: JsonObject, key: String): String = value.get(key)
             ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString.orEmpty()

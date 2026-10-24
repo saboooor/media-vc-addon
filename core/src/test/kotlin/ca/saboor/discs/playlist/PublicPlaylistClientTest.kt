@@ -44,4 +44,31 @@ class PublicPlaylistClientTest {
             assertThrows(IllegalStateException::class.java) { PublicPlaylistClient { html }.load(spotify) }
         }
     }
+    @Test fun `single spotify tracks resolve title and artists from embed`() {
+        val client = PublicPlaylistClient { uri ->
+            assertEquals("https://open.spotify.com/embed/track/abc", uri.toString())
+            """<script id="__NEXT_DATA__">{"props":{"pageProps":{"state":{"data":{"entity":{"name":"Song","artists":[{"name":"Artist"}]}}}}}}</script>"""
+        }
+        assertEquals(CatalogPlaylistClient.Song("Song", "Artist"), client.loadSong("spotify:track:abc"))
+        assertEquals(CatalogPlaylistClient.Song("Song", "Artist"), client.loadSong("https://open.spotify.com/intl-en/track/abc?si=share"))
+    }
+
+    @Test fun `apple album song link selects requested track rather than first song`() {
+        val client = PublicPlaylistClient {
+            """<script id="serialized-server-data">{"items":[
+              {"title":"Other","contentDescriptor":{"kind":"song","id":"1"},"subtitleLinks":[{"title":"Artist"}]},
+              {"title":"Selected","contentDescriptor":{"kind":"song","id":"2"},"subtitleLinks":[{"title":"Artist"}]}
+            ]}</script>"""
+        }
+        assertEquals(CatalogPlaylistClient.Song("Selected", "Artist"), client.loadSong("https://music.apple.com/us/album/name/123?i=2"))
+        assertThrows(IllegalStateException::class.java) { client.loadSong("https://music.apple.com/us/song/name/3") }
+    }
+
+    @Test fun `song resolver passes other sources through and rejects unsafe catalog links`() {
+        val client = PublicPlaylistClient { error("Must not fetch") }
+        assertNull(client.loadSong("https://example.com/song.mp3"))
+        assertThrows(IllegalArgumentException::class.java) { client.loadSong("http://open.spotify.com/track/abc") }
+        assertThrows(IllegalArgumentException::class.java) { client.loadSong("https://music.apple.com/us/album/name/123") }
+        assertThrows(IllegalArgumentException::class.java) { client.loadSong("spotify:track:../abc") }
+    }
 }

@@ -83,6 +83,34 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
     fun videoStreamUrl(session: Session, itemId: String): String =
         session.baseUrl + "Videos/${mediaId(itemId)}/stream?static=true"
 
+    data class AudioTrack(val index: Int, val displayTitle: String, val language: String,
+                          val isDefault: Boolean, val mediaSourceId: String)
+
+    fun getAudioTracks(session: Session, itemId: String): List<AudioTrack> {
+        val json = request(session.baseUrl, "Items/${mediaId(itemId)}/PlaybackInfo?userId=${session.userId}", session.deviceId, session.token)
+        val source = json.getAsJsonArray("MediaSources")?.firstOrNull()?.asJsonObject ?: return emptyList()
+        val sourceId = source.get("Id")?.asString ?: return emptyList()
+        return source.getAsJsonArray("MediaStreams")?.mapNotNull { element ->
+            val obj = element.asJsonObject
+            fun text(key: String) = obj.get(key)?.takeUnless { it.isJsonNull }?.asString
+            if (!text("Type").equals("Audio", true)) return@mapNotNull null
+            val index = obj.get("Index")?.takeUnless { it.isJsonNull }?.asInt ?: return@mapNotNull null
+            if (index < 0) return@mapNotNull null
+            AudioTrack(index, text("DisplayTitle") ?: "Audio $index", text("Language") ?: "und",
+                obj.get("IsDefault")?.takeUnless { it.isJsonNull }?.asBoolean ?: false, sourceId)
+        }.orEmpty()
+    }
+
+    /** The video route maps the requested stream; Jellyfin's audio route can ignore it for movies. */
+    fun selectedAudioStreamUrl(session: Session, itemId: String, track: AudioTrack, positionMs: Long): String {
+        require(track.index >= 0)
+        return session.baseUrl + "Videos/${mediaId(itemId)}/stream.mkv?static=false" +
+            "&mediaSourceId=${URLEncoder.encode(track.mediaSourceId, Charsets.UTF_8)}&audioStreamIndex=${track.index}" +
+            "&videoCodec=copy&allowVideoStreamCopy=true&audioCodec=aac&allowAudioStreamCopy=false" +
+            "&audioBitRate=192000&audioChannels=2&subtitleStreamIndex=-1" +
+            "&startTimeTicks=${positionMs.coerceIn(0, Long.MAX_VALUE / 10_000) * 10_000}&playSessionId=${UUID.randomUUID()}"
+    }
+
     data class SubtitleTrack(
         val index: Int,
         val displayTitle: String,

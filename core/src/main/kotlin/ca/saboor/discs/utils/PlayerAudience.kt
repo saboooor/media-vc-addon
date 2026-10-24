@@ -31,12 +31,20 @@ object PlayerAudience : Listener {
         }
     }
     private val entries = ConcurrentHashMap<UUID, Viewer>()
+    // Joining precedes the client world being created. Client movement after join
+    // confirms login has been processed; use player identity to reject old sessions.
+    private val screenReady = ConcurrentHashMap<UUID, Player>()
+    fun canReceiveScreen(player: Player): Boolean = screenReady[player.uniqueId] === player
     fun start(plugin: JavaPlugin, scope: CoroutineScope, voiceServer: PlasmoVoiceServer?) {
         entries.clear()
+        screenReady.clear()
         val players = Bukkit.getOnlinePlayers().toList()
         scope.launch {
             for (player in players) suspendSyncFor(player, voiceServer, plugin) {
-                if (player.isOnline) update(player, player.location)
+                if (player.isOnline) {
+                    update(player, player.location)
+                    screenReady[player.uniqueId] = player
+                }
             }
         }
         plugin.server.pluginManager.registerEvents(this, plugin)
@@ -47,6 +55,7 @@ object PlayerAudience : Listener {
     }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onMove(event: PlayerMoveEvent) {
+        if (event !is PlayerTeleportEvent) screenReady[event.player.uniqueId] = event.player
         val to = event.to ?: return
         val from = event.from
         if (event !is PlayerTeleportEvent && from.world == to.world && from.x == to.x && from.y == to.y && from.z == to.z) return
@@ -56,7 +65,7 @@ object PlayerAudience : Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onTeleport(event: PlayerTeleportEvent) { event.to?.let { update(event.player, it) } }
     @EventHandler(priority = EventPriority.MONITOR)
-    fun onRespawn(event: PlayerRespawnEvent) { update(event.player, event.respawnLocation) }
+    fun onRespawn(event: PlayerRespawnEvent) { screenReady.remove(event.player.uniqueId); update(event.player, event.respawnLocation) }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onVehicleMove(event: VehicleMoveEvent) {
         fun samplePassengers(entity: org.bukkit.entity.Entity) {
@@ -68,9 +77,9 @@ object PlayerAudience : Listener {
         }
         samplePassengers(event.vehicle)
     }
-    @EventHandler fun onJoin(event: PlayerJoinEvent) { update(event.player, event.player.location) }
-    @EventHandler fun onWorld(event: PlayerChangedWorldEvent) { update(event.player, event.player.location) }
-    @EventHandler fun onQuit(event: PlayerQuitEvent) { entries.remove(event.player.uniqueId) }
+    @EventHandler fun onJoin(event: PlayerJoinEvent) { screenReady.remove(event.player.uniqueId); update(event.player, event.player.location) }
+    @EventHandler fun onWorld(event: PlayerChangedWorldEvent) { screenReady.remove(event.player.uniqueId); update(event.player, event.player.location) }
+    @EventHandler fun onQuit(event: PlayerQuitEvent) { screenReady.remove(event.player.uniqueId); entries.remove(event.player.uniqueId) }
     fun positions(world: String, x: Double, y: Double, z: Double, range: Double): List<Viewer> =
         entries.values.filter { (it.world == world || it.worldId == world) && it.within(x, y, z, range) }
     fun nearby(world: String, x: Double, y: Double, z: Double, range: Double): List<Player> =
@@ -82,5 +91,5 @@ object PlayerAudience : Listener {
         val dx = entry.x - x; val dy = entry.y - y; val dz = entry.z - z
         return dx * dx + dy * dy + dz * dz <= squared
     }
-    fun shutdown() { entries.clear() }
+    fun shutdown() { entries.clear(); screenReady.clear() }
 }

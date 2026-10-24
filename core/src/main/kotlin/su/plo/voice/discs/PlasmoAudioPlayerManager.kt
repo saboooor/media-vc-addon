@@ -338,7 +338,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                     } ?: false
                 }
                 if (!sent) {
-                    if (playbackPlayer.playingTrack == null) break
+                    if (synchronized(controls) { playbackPlayer.playingTrack == null }) break
                     delay(5)
                     nextFrameTime = System.nanoTime()
                     continue

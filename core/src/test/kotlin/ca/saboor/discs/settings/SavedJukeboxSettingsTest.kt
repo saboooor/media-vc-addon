@@ -11,6 +11,16 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 class SavedJukeboxSettingsTest {
+    @Test fun `theatre links survive saving and legacy links remain beat reactive`() {
+        val lamp = JukeboxBassLamps.Position("00000000-0000-0000-0000-000000000001", 100, 64, 100)
+        val settings = SavedJukeboxSettings(lamps = listOf(lamp), theatreLamps = listOf(lamp))
+        assertEquals(settings, SavedJukeboxSettings.decode(settings.encode()))
+        assertTrue(SavedJukeboxSettings.decode("{}")!!.theatreLamps.isEmpty())
+        assertThrows(IllegalArgumentException::class.java) {
+            SavedJukeboxSettings(theatreLamps = listOf(lamp)).encode()
+        }
+    }
+
     @Test fun `light falloff survives saving and rejects invalid values`() {
         for (falloff in listOf(0.0, 0.2, 0.8, 1.0)) {
             val settings = SavedJukeboxSettings(lightFalloff = falloff)

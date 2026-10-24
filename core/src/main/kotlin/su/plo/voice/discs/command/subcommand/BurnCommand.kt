@@ -6,6 +6,11 @@ import ca.saboor.discs.utils.extend.suspendSyncAt
 import ca.saboor.discs.utils.extend.suspendSyncFor
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.CancellationException
+import ca.saboor.discs.playlist.PublicPlaylistClient
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
@@ -130,8 +135,14 @@ class BurnCommand : SubCommand() {
             }) return@launch
         }
 
+        var burnIdentifier = identifier
         val track = try {
-            audioPlayerManager.getTrack(identifier).await()
+            val song = withContext(Dispatchers.IO) { PublicPlaylistClient().loadSong(identifier) }
+            if (song == null) audioPlayerManager.getTrack(identifier).await()
+            else withTimeout(30_000L) {
+                audioPlayerManager.getPlaylist("ytsearch:${song.query}").await().tracks.firstOrNull()
+                    ?: error("No playable match for ${song.artist} - ${song.title}")
+            }
         } catch (e: Exception) {
             val errorMsg = e.message ?: "Unexpected error"
             if (voicePlayer != null) {
@@ -142,6 +153,9 @@ class BurnCommand : SubCommand() {
             debugLogger.log("Failed to load track", e)
             return@launch
         }
+
+        if (identifier.startsWith("spotify:") || runCatching { java.net.URI(identifier).host }.getOrNull() in setOf("open.spotify.com", "music.apple.com"))
+            burnIdentifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.identifier
 
         val name = arguments.drop(2)
             .joinToString(" ")
@@ -183,7 +197,7 @@ class BurnCommand : SubCommand() {
                     meta.persistentDataContainer.set(AddonKeys.instrumentKey, PersistentDataType.STRING, instrument)
                 }
             }
-            item.burnMetadata(identifier, name, config, discHelper)
+            item.burnMetadata(burnIdentifier, name, config, discHelper)
 
             if (isGoatHorn) {
                 hornHelper.setEmptyInstrument(item)

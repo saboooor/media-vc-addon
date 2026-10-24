@@ -1,5 +1,12 @@
 package ca.saboor.discs.command.subcommand
 
+import ca.saboor.discs.utils.playlistContainer
+import ca.saboor.discs.jellyfin.JellyfinClient
+import ca.saboor.discs.utils.extend.suspendSyncFor
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ca.saboor.discs.PlaybackControls
 import ca.saboor.discs.PlaybackDialogView
 import ca.saboor.discs.dialog.PaperPlaybackDialog
@@ -54,7 +61,7 @@ class ControlCommand(
     private val screenManager: ScreenManager? by getterOrNull<ScreenManager>()
     private val progressDisplay: JukeboxProgressDisplay? by getterOrNull<JukeboxProgressDisplay>()
     private data class Session(val token: UUID, val block: Block, val controls: PlaybackControls?,
-                               val record: ItemStack, val visualizerId: Int? = null, val expires: Long = System.currentTimeMillis() + 120_000)
+                               val record: ItemStack, val audioTracks: List<JellyfinClient.AudioTrack> = emptyList(), val visualizerId: Int? = null, val expires: Long = System.currentTimeMillis() + 120_000)
     private data class NoteRequest(val block: Block, val left: Boolean? = null, val expires: Long = System.currentTimeMillis() + 120_000)
     private val noteRequests = ConcurrentHashMap<UUID, NoteRequest>()
     private val sessions = ConcurrentHashMap<UUID, Session>()
@@ -125,12 +132,12 @@ class ControlCommand(
         show(player, block, hologram = true)
     }
 
-    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null, speakers: Boolean = false, visualizerSelection: Boolean = false, queueMenu: Boolean = false, volumeMenu: Boolean = false, lampMenu: Boolean = false, lampFalloffMenu: Boolean = false, screenMenu: Boolean = false, effectsMenu: Boolean = false, eqMenu: Boolean = false, subtitlesMenu: Boolean = false) {
+    fun show(player: Player, block: Block, crossfade: Boolean = false, hologram: Boolean = false, seek: Boolean = false, visualization: Boolean = false, selectedVisualizerId: Int? = null, speakers: Boolean = false, visualizerSelection: Boolean = false, queueMenu: Boolean = false, volumeMenu: Boolean = false, lampMenu: Boolean = false, lampFalloffMenu: Boolean = false, screenMenu: Boolean = false, effectsMenu: Boolean = false, eqMenu: Boolean = false, subtitlesMenu: Boolean = false, jellyfinAudioTracks: List<JellyfinClient.AudioTrack>? = null) {
         val record = block.asJukebox()?.record?.clone() ?: return
         val controls = jukeboxes.controlsByBlock[block]
         val visualizers = visualizer?.instances(block).orEmpty()
         val selectedVisualizer = visualizers.firstOrNull { it.id == selectedVisualizerId } ?: visualizers.firstOrNull()
-        val session = Session(UUID.randomUUID(), block, controls, record, visualizerId = selectedVisualizer?.id)
+        val session = Session(UUID.randomUUID(), block, controls, record, audioTracks = jellyfinAudioTracks.orEmpty(), visualizerId = selectedVisualizer?.id)
         sessions[player.uniqueId] = session
         val prefix = "/disc control ${session.token} "
         val buttons = mutableListOf<Pair<String, String>>()
@@ -139,14 +146,15 @@ class ControlCommand(
             buttons += "Skip" to (prefix + "skip")
         }
         val queueLabels = mutableMapOf<String, Component>()
-        val chest = block.getRelative(org.bukkit.block.BlockFace.UP).state as? org.bukkit.block.Chest
+        val chest = block.getRelative(org.bukkit.block.BlockFace.UP).state.playlistContainer()
         if (controls == null && !playlists.isQueued(block) && chest != null)
-            buttons += "Play chest" to (prefix + "playchest")
+            buttons += "Play container" to (prefix + "playchest")
         val modes = playlists.playbackModes(block)
         buttons += "Queue" to (prefix + "queue_menu")
         buttons += "Volume" to (prefix + "volume_menu")
         buttons += "Mixing" to (prefix + "audio_menu")
         buttons += "Audio effects" to (prefix + "effects_menu")
+        if (controls?.hasJellyfinAudioTracks == true) buttons += "Audio track" to (prefix + "jellyfin_audio")
         val stereoLabel = when (jukeboxes.stereoMode(block)) {
             3 -> "Note block L / Note block R"
             else -> "Off"
@@ -154,6 +162,7 @@ class ControlCommand(
         buttons += "Speaker setup" to (prefix + "speakers")
         if (controls != null) {
             buttons += "Refresh" to (prefix + "refresh")
+            buttons += "Restart playback" to (prefix + "restart")
             buttons += "Stop playback" to (prefix + "stop")
 
             if (controls.seekable) {
@@ -275,6 +284,7 @@ class ControlCommand(
             body += Component.text("Lights: $count linked", NamedTextColor.GOLD)
             body += Component.text("Click 'Configure lights' to receive a dye for each frequency band, then right-click light blocks with the dye to set their type (sneak-click or click the jukebox when done).")
             body += Component.text("Deep bass follows low thumps; low mids follow warmth; vocal range follows mids; sparkle follows bright highs. Full spectrum responds across all bands.", NamedTextColor.GRAY)
+            body += Component.text("Theatre lights: place free invisible light blocks anywhere in this world. They dim over three seconds during playback and brighten on pause/stop.", NamedTextColor.GRAY)
             body += Component.text("Supported blocks: ${LightBlock.supportedBlockNames.joinToString(", ")}", NamedTextColor.AQUA)
             val isAuto = lamps.isAutoFalloff(block)
             val falloff = (lamps.falloff(block) * 100).toInt()
@@ -437,7 +447,19 @@ class ControlCommand(
             }
             buttons += "Back to playback" to (prefix + "refresh")
         }
-        val dialogTitle = if (lampFalloffMenu) "Light falloff" else if (lampMenu) "Lights" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Manage holograms" else if (crossfade) "Mixing" else if (eqMenu) "Equalizer" else if (effectsMenu) "Audio effects" else "Jukebox controls"
+        if (jellyfinAudioTracks != null) {
+            body.clear(); buttons.clear()
+            body += Component.text("Choose the Jellyfin audio language or commentary track. Playback resumes at the current position.")
+            buttons += (if (controls?.selectedJellyfinAudioTrack == null) "✓ Automatic / default" else "Automatic / default") to (prefix + "jf_audio_auto")
+            jellyfinAudioTracks.forEach { track ->
+                val selected = controls?.selectedJellyfinAudioTrack == track.index
+                buttons += "${if (selected) "✓ " else ""}${track.displayTitle} (${track.language})" to (prefix + "jf_audio_${track.index}")
+            }
+            if (jellyfinAudioTracks.isEmpty()) body += Component.text("No alternate audio tracks were found.", NamedTextColor.YELLOW)
+            buttons += "Refresh tracks" to (prefix + "jellyfin_audio")
+            buttons += "Back to playback" to (prefix + "refresh")
+        }
+        val dialogTitle = if (jellyfinAudioTracks != null) "Jellyfin audio track" else if (lampFalloffMenu) "Light falloff" else if (lampMenu) "Lights" else if (screenMenu) "Screen" else if (queueMenu) "Queue" else if (volumeMenu) "Volume" else if (speakers) "Speaker setup" else if (visualizerSelection) "Select visualizer" else if (visualization) "Visualizer settings" else if (seek) "Seek" else if (hologram) "Manage holograms" else if (crossfade) "Mixing" else if (eqMenu) "Equalizer" else if (effectsMenu) "Audio effects" else "Jukebox controls"
         try {
             PaperPlaybackDialog.show(player, listOf(Component.join(net.kyori.adventure.text.JoinConfiguration.newlines(), body)), buttons, queueLabels, dialogTitle, 2)
         } catch (_: ClassNotFoundException) {
@@ -462,6 +484,7 @@ class ControlCommand(
             chaseMode: Boolean = false,
         ) {
             buttons += "Configure lights" to (prefix + "lamp_link")
+            buttons += "Configure theatre lights" to (prefix + "lamp_theatre")
             buttons += "Falloff settings" to (prefix + "lamp_falloff_menu")
             buttons += (if (waveMode) "✓ Wave ripple mode" else "Wave ripple mode") to (prefix + "lamp_wave")
             buttons += (if (chaseMode) "✓ Beat chase mode" else "Beat chase mode") to (prefix + "lamp_chase")
@@ -565,11 +588,19 @@ class ControlCommand(
             "queue_menu" -> { show(player, session.block, queueMenu = true); return }
             "volume_menu" -> { show(player, session.block, volumeMenu = true); return }
             "playchest" -> {
-                val chest = session.block.getRelative(org.bukkit.block.BlockFace.UP).state as? org.bukkit.block.Chest ?: return
+                val chest = session.block.getRelative(org.bukkit.block.BlockFace.UP).state.playlistContainer() ?: return
                 playlists.startChestQueue(session.block, chest, player)
                 return
             }
             "play" -> { if (controls == null) jukeboxes.playStoredDisc(session.block, player); return }
+            "restart" -> {
+                val queued = playlists.isQueued(session.block)
+                val accepted = if (queued) playlists.restartTrack(session.block)
+                    else jukeboxes.restartStoredDisc(session.block, player)
+                player.sendMessage(Component.text(if (accepted) "Restarting playback. Seekable tracks resume at the saved position."
+                    else "Playback is already restarting or is no longer active.", NamedTextColor.YELLOW))
+                return
+            }
             "pause" -> controls?.togglePause()
             "skip" -> {
                 if (controls != null) {
@@ -578,12 +609,13 @@ class ControlCommand(
                 }
                 return
             }
-            "lamp_link", "lamp_link_bass", "lamp_link_mid", "lamp_link_highs",
+            "lamp_theatre", "lamp_link", "lamp_link_bass", "lamp_link_mid", "lamp_link_highs",
             "lamp_link_deep_bass", "lamp_link_low_mids", "lamp_link_vocals", "lamp_link_sparkle", "lamp_link_full", "lamp_unlink" -> {
                 if (arguments[2] == "lamp_unlink") {
                     bassLamps?.showHighlights(session.block)
                 }
                 bassLamps?.beginLink(player, session.block, unlink = arguments[2] == "lamp_unlink",
+                    theatre = arguments[2] == "lamp_theatre",
                     band = LightBand.entries.firstOrNull { arguments[2] == "lamp_link_${it.name.lowercase()}" } ?: LightBand.BASS)
                 return
             }
@@ -789,6 +821,28 @@ class ControlCommand(
                 show(player, session.block, screenMenu = true)
                 return
             }
+            "jellyfin_audio" -> {
+                val controls = session.controls ?: return
+                sessions[player.uniqueId] = session
+                scope.launch {
+                    try {
+                        val tracks = withContext(Dispatchers.IO) { controls.loadJellyfinAudioTracks() }
+                        suspendSyncFor(player, voiceServer, plugin) {
+                            if (sessions[player.uniqueId] !== session || !player.isOnline || !checkCanExecute(player) ||
+                                System.currentTimeMillis() > session.expires || player.world != session.block.world ||
+                                player.location.distanceSquared(session.block.location.add(0.5, 0.5, 0.5)) > 64 ||
+                                jukeboxes.controlsByBlock[session.block] !== controls) return@suspendSyncFor
+                            show(player, session.block, jellyfinAudioTracks = tracks)
+                        }
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) {
+                        suspendSyncFor(player, voiceServer, plugin) {
+                            if (sessions.remove(player.uniqueId, session)) player.sendMessage(Component.text("Could not load Jellyfin audio tracks: ${e.message}", NamedTextColor.RED))
+                        }
+                    }
+                }
+                return
+            }
             "screen_subtitles" -> { show(player, session.block, subtitlesMenu = true); return }
             "screen_subtoggle" -> {
                 val sm = screenManager
@@ -807,6 +861,16 @@ class ControlCommand(
             }
             "refresh" -> {}
             else -> {
+                if (arguments[2].startsWith("jf_audio_")) {
+                    val value = arguments[2].removePrefix("jf_audio_")
+                    val selected = if (value == "auto") null else session.audioTracks.firstOrNull { it.index == value.toIntOrNull() } ?: return
+                    val controls = session.controls ?: return
+                    if (!controls.selectJellyfinAudioTrack(selected)) {
+                        player.sendMessage(Component.text("Wait for the current transition to finish, then try again.", NamedTextColor.YELLOW))
+                    }
+                    show(player, session.block)
+                    return
+                }
                 if (arguments[2].startsWith("screen_subtrack_")) {
                     val sm = screenManager ?: return
                     val screen = sm.getScreenForJukebox(session.block) ?: return
@@ -835,4 +899,5 @@ class ControlCommand(
     @EventHandler
     fun onQuit(event: PlayerQuitEvent) { sessions.remove(event.player.uniqueId); noteRequests.remove(event.player.uniqueId) }
 }
+
 

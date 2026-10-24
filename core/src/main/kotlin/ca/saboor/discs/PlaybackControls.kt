@@ -14,7 +14,8 @@ class PlaybackControls(
     initialVolume: Int = 100,
     initialGain: Double = 1.0,
     initialPositionMs: Long = 0L,
-    initialFilterConfig: AudioFilterConfig = AudioFilterConfig()
+    initialFilterConfig: AudioFilterConfig = AudioFilterConfig(),
+    private val exactInitialPosition: Boolean = false
 ) {
     @Volatile var failure: String? = null
         private set
@@ -172,6 +173,27 @@ class PlaybackControls(
         it.isSeekable || (it as? JellyfinTranscodedTrack)?.canRestart == true
     } == true
 
+    private fun jellyfinTrack() = players.firstOrNull()?.playingTrack as? JellyfinTranscodedTrack
+    val hasJellyfinAudioTracks: Boolean get() = jellyfinTrack()?.audioTracks != null
+    val selectedJellyfinAudioTrack: Int? get() = jellyfinTrack()?.selectedAudioTrack?.index
+    fun loadJellyfinAudioTracks() = jellyfinTrack()?.audioTracks?.invoke().orEmpty()
+
+    @Synchronized fun selectJellyfinAudioTrack(track: ca.saboor.discs.jellyfin.JellyfinClient.AudioTrack?): Boolean {
+        if (transitionPartner != null || !hasJellyfinAudioTracks) return false
+        val target = position
+        val replacements = players.map { player ->
+            val current = player.playingTrack as? JellyfinTranscodedTrack ?: return false
+            player to current.withAudioTrack(track, target).also { it.userData = current.userData }
+        }
+        transmittedPositionMs = null
+        initialPositionMs = target
+        timescaleClock.reset(target)
+        replacements.forEach { (player, replacement) -> player.stopTrack(); player.playTrack(replacement) }
+        spectrum.reset(); mixAnalysis.reset(); lastDetectedBpm = null
+        onSeek?.invoke(target)
+        return true
+    }
+
     private fun seekPlayer(player: AudioPlayer, position: Long) {
         val track = player.playingTrack ?: return
         if (track is JellyfinTranscodedTrack && track.canRestart) {
@@ -188,7 +210,9 @@ class PlaybackControls(
             seekPlayer(player, current.position)
         } else if (initialPositionMs > 0L) {
             val track = player.playingTrack
-            val target = if (track != null && track.duration > 0 && initialPositionMs >= track.duration - 1000) 0L else initialPositionMs
+            val target = if (track != null && track.duration > 0 && initialPositionMs >= track.duration - 1000) {
+                if (exactInitialPosition) initialPositionMs.coerceAtMost((track.duration - 1).coerceAtLeast(0L)) else 0L
+            } else initialPositionMs
             if (target > 0L) seekPlayer(player, target)
         }
         player.isPaused = paused
@@ -213,6 +237,19 @@ class PlaybackControls(
         transitionPartner?.applyVolume(volume)
     }
 
+    /** Fresh decoder state at the last transmitted position; saved user settings survive. */
+    @Synchronized fun copyForRestart(): PlaybackControls {
+        val resumePosition = if (players.isEmpty() || seekable) position else 0L
+        return PlaybackControls(initialVolume = volume, initialPositionMs = resumePosition,
+            initialFilterConfig = filterConfig, exactInitialPosition = true).also { restarted ->
+            restarted.title = title
+            restarted.autoMixAnalysis = autoMixAnalysis
+            restarted.tempoAnalysis = tempoAnalysis
+            analysisConsumers.forEach { restarted.setVisualizing(true, it) }
+            if (paused) restarted.togglePause()
+        }
+    }
+
     @Synchronized fun seekTo(positionMs: Long) {
         if (!seekable) return
         val target = positionMs.coerceIn(trimmedStartMs.coerceAtMost((duration - 1).coerceAtLeast(0)), (duration - 1).coerceAtLeast(0))
@@ -226,4 +263,5 @@ class PlaybackControls(
         onSeek?.invoke(target)
     }
 }
+
 

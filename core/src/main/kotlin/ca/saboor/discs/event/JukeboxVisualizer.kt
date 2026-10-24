@@ -1,5 +1,6 @@
 package ca.saboor.discs.event
 
+import ca.saboor.discs.utils.playlistContainer
 import ca.saboor.discs.PlaybackControls
 import ca.saboor.discs.utils.extend.suspendSyncAt
 import ca.saboor.discs.visualizer.SpeakerDriver
@@ -16,7 +17,6 @@ import kotlinx.coroutines.*
 import org.bukkit.Bukkit
 import org.bukkit.Material
 import org.bukkit.block.Block
-import org.bukkit.block.Chest
 import org.bukkit.block.data.Lightable
 import org.bukkit.entity.Entity
 import org.bukkit.entity.EntityType
@@ -156,7 +156,7 @@ class JukeboxVisualizer(private val jukeboxes: JukeboxEventListener) : Listener,
     private fun create(block: Block, spec: VisualizerInstance): Display {
         val entities = mutableListOf<Entity>()
         try {
-            val y = if (block.getRelative(0, 1, 0).state is Chest) 2.1 else 1.1
+            val y = if (block.getRelative(0, 1, 0).state.playlistContainer() != null) 2.1 else 1.1
             repeat(if (spec.kind == VisualizerKind.BARS) 16 else SpeakerDriver.parts.size) { index ->
                 val entity = block.world.spawnEntity(block.location.add(0.5, y, 0.5), type!!)
                 entities += entity

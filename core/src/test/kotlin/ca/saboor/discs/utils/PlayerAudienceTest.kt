@@ -59,7 +59,7 @@ class PlayerAudienceTest {
         PlayerAudience.onTeleport(PlayerTeleportEvent(viewer, location, destination, PlayerTeleportEvent.TeleportCause.PLUGIN))
         assertFalse(PlayerAudience.hasNearby("first", 0.0, 0.0, 0.0, 100.0))
         assertTrue(PlayerAudience.hasNearby("second", 0.0, 0.0, 0.0, 5.0))
-        PlayerAudience.onQuit(PlayerQuitEvent(viewer, Component.empty()))
+        PlayerAudience.onQuit(PlayerQuitEvent(viewer, Component.empty(), PlayerQuitEvent.QuitReason.DISCONNECTED))
         assertFalse(PlayerAudience.hasNearby("second", 0.0, 0.0, 0.0, 5.0))
         assertEquals(1, reads.get())
     }
@@ -74,7 +74,7 @@ class PlayerAudienceTest {
         val before = PlayerAudience.positions("world", 0.0, 0.0, 0.0, 10.0).single()
         PlayerAudience.onMove(PlayerMoveEvent(original, location, location.clone().apply { yaw = 90f }))
         assertSame(before, PlayerAudience.positions("world", 0.0, 0.0, 0.0, 10.0).single())
-        PlayerAudience.onQuit(PlayerQuitEvent(original, Component.empty()))
+        PlayerAudience.onQuit(PlayerQuitEvent(original, Component.empty(), PlayerQuitEvent.QuitReason.DISCONNECTED))
         val replacement = player(location, reads, id)
         PlayerAudience.onJoin(PlayerJoinEvent(replacement, Component.empty()))
         assertSame(replacement, PlayerAudience.nearby("world", 0.0, 0.0, 0.0, 10.0).single())
