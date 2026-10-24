@@ -448,3 +448,7 @@ Theatre lights fade to level 0 over three seconds of playback and brighten back 
 During movie, episode, or music-video playback, open jukebox controls → **Audio track** to choose a language or commentary track. **Automatic / default** restores Jellyfin's default. Switching resumes at the current position and preserves pause, volume, effects, and speaker settings; linked video/subtitles follow the resumed position. Seek and decoder clones retain the selection for the current playback. Wait for an active crossfade to finish before switching. Each new queue song uses its own default audio.
 
 For explicit track selections, Jellyfin sends Matroska containing the copied video stream and the selected audio transcoded to stereo AAC; the audio decoder ignores video. This works around Jellyfin servers that ignore audio-track indices on their audio-only route, but uses more bandwidth and requires video playback/audio-transcoding permission. Authentication remains in headers.
+
+Individual Spotify track links (including `spotify:track:` URIs) and Apple Music song share links can be burned with `/disc burn <song-link> [label]`. For Apple Music album links, keep the `?i=...` song selection. Like playlist imports, these read public metadata and burn a playable YouTube search match; public page availability and match accuracy can vary. No Spotify or Apple Music subscription audio is streamed.
+
+Wind charges, including breeze wind charges, no longer stop custom jukebox playback or container queues when triggering blocks.

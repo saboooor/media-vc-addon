@@ -279,8 +279,10 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
             ?.cancel(DiscEjectCause())
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onJukeboxExplode(event: EntityExplodeEvent) {
+        // Wind explosions trigger blocks without destroying them.
+        if (event.entityType.name in setOf("WIND_CHARGE", "BREEZE_WIND_CHARGE")) return
         val sm = screenManager
         event.blockList()
             .filter { it.isJukebox() }

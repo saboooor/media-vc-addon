@@ -833,7 +833,10 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     fun onBreak(event: BlockBreakEvent) = stop(event.block)
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    fun onExplode(event: EntityExplodeEvent) = event.blockList().forEach(::stop)
+    fun onExplode(event: EntityExplodeEvent) {
+        if (event.entityType.name in setOf("WIND_CHARGE", "BREEZE_WIND_CHARGE")) return
+        event.blockList().forEach(::stop)
+    }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onBlockExplode(event: BlockExplodeEvent) = event.blockList().forEach(::stop)
