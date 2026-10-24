@@ -71,6 +71,7 @@ tasks {
                 file.relativeTo(root).invariantSeparatorsPath
             }.toSet()
             val essentialClasses = setOf(
+                "ca/saboor/discs/audio/sonic/Sonic.class",
                 "su/plo/voice/discs/utils/DiscEjectCause.class",
                 "ca/saboor/discs/command/subcommand/PlaylistCommand\$Pending.class",
                 "ca/saboor/discs/playlist/CatalogPlaylistClient.class",
