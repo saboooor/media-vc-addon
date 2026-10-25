@@ -38,6 +38,7 @@ class PlaybackMenusTest {
         buttons.clear()
         ca.saboor.discs.command.subcommand.ControlCommand.bodyLampButtons(buttons, "/disc control token ", 3, isShowing = false)
         assertTrue(buttons.any { it.first == "Show lights" })
+        assertTrue(buttons.any { it.first == "Show light effects for me" && it.second == "/disc lights show" })
         assertTrue(buttons.any { it.second.endsWith("lamp_show") })
         assertTrue(buttons.any { it.first == "Unset all lights" })
         assertTrue(buttons.any { it.second.endsWith("lamp_unset_all") })
@@ -45,8 +46,9 @@ class PlaybackMenusTest {
         assertFalse(buttons.any { it.second.endsWith("lamp_unlink") })
 
         buttons.clear()
-        ca.saboor.discs.command.subcommand.ControlCommand.bodyLampButtons(buttons, "/disc control token ", 3, isShowing = true)
+        ca.saboor.discs.command.subcommand.ControlCommand.bodyLampButtons(buttons, "/disc control token ", 3, isShowing = true, effectsEnabled = true)
         assertTrue(buttons.any { it.first == "Hide lights" })
+        assertTrue(buttons.any { it.first == "Hide light effects for me" && it.second == "/disc lights hide" })
         assertTrue(buttons.any { it.second.endsWith("lamp_show") })
     }
 

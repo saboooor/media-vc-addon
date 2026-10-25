@@ -2,6 +2,7 @@ package ca.saboor.discs.event
 
 import ca.saboor.discs.PlaybackControls
 import ca.saboor.discs.utils.PlayerAudience
+import ca.saboor.discs.utils.extend.suspendSyncFor
 import ca.saboor.discs.utils.extend.suspendSyncAt
 import ca.saboor.discs.visualizer.BassLampEnvelope
 import ca.saboor.discs.visualizer.BeaconShutter
@@ -90,6 +91,27 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     private val scope: CoroutineScope by inject()
     private val voiceServer: PlasmoVoiceServer? by getterOrNull()
     private val links = ConcurrentHashMap<Position, Link>()
+    private val playerEffects by lazy { PlayerLightEffects(plugin, ::refreshPlayerLights) }
+    fun lightEffectsEnabled(player: Player) = playerEffects.enabled(player)
+    private fun refreshPlayerLights(player: Player) {
+        val worldId = player.world.uid.toString()
+        val location = player.location
+        val range = (plugin.server.viewDistance + 1) * 16.0
+        scope.launch {
+            for (link in links.values.filter { it.lamp.world == worldId && kotlin.math.abs(it.lamp.x - location.x) <= range && kotlin.math.abs(it.lamp.z - location.z) <= range }) {
+                val world = Bukkit.getWorld(UUID.fromString(worldId)) ?: break
+                val positions = listOfNotNull(link.lamp, link.shutterData?.let { link.lamp.copy(y = link.lamp.y + 1) })
+                for (pos in positions) {
+                    val location = Location(world, pos.x.toDouble(), pos.y.toDouble(), pos.z.toDouble())
+                    val data = suspendSyncAt(location, voiceServer, plugin) { pos.loadedBlock()?.blockData } ?: continue
+                    suspendSyncFor(player, voiceServer, plugin) {
+                        if (player.isOnline && player.world.uid.toString() == worldId) player.sendBlockChange(location, data)
+                    }
+                }
+            }
+        }
+    }
+
     private val pending = ConcurrentHashMap<UUID, Pending>()
     private val falloffs = ConcurrentHashMap<Position, Double>()
     private val waveModes = ConcurrentHashMap.newKeySet<Position>()
@@ -609,6 +631,8 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
             gson.fromJson(file.readText(), Array<Link>::class.java)?.forEach { links[it.lamp] = it }
         }.onFailure { plugin.slF4JLogger.error("Could not load light links", it) }
         linksVersion.incrementAndGet()
+        playerEffects.setLinks(links.values.toList())
+        playerEffects.start()
         updater = scope.launch {
             var nextMaintenance = 0L
             var validSources: Map<Position, Boolean> = emptyMap()
@@ -617,6 +641,13 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                 val snapshot = linkedIndex()
                 val maintenance = System.nanoTime() >= nextMaintenance
                 if (maintenance) {
+                    val nearby = snapshot.sources.values.flatten().flatMap { link ->
+                        PlayerAudience.nearby(link.lamp.world, link.lamp.x.toDouble(), link.lamp.y.toDouble(), link.lamp.z.toDouble(), 64.0)
+                    }.distinctBy { it.uniqueId }
+                    for (player in nearby) {
+                        if (!PlayerAudience.canReceiveScreen(player) || !playerEffects.needsWarning(player)) continue
+                        launch { suspendSyncFor(player, voiceServer, plugin) { playerEffects.showWarning(player) } }
+                    }
                     val valid = ConcurrentHashMap<Position, Boolean>()
                     // Validate each source once on its owning region, never from a lamp region.
                     coroutineScope {
@@ -816,6 +847,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     private fun save() {
         linksVersion.incrementAndGet()
         val snapshot = links.values.toList()
+        playerEffects.setLinks(snapshot)
         ca.saboor.discs.utils.SettingsFileWriter.shared.submit(file, { gson.toJson(snapshot) }) {
             plugin.slF4JLogger.error("Could not save light links", it)
         }
@@ -891,6 +923,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     @EventHandler fun onQuit(event: PlayerQuitEvent) { cancelLink(event.player) }
     fun shutdown() {
         updater?.cancel()
+        playerEffects.shutdown()
         save()
         consumers.forEach { it.setVisualizing(false, "bass_lamps"); it.tempoAnalysis = false }; consumers.clear()
         links.values.forEach { link -> link.lamp.loadedBlock()?.let { block -> restore(block, link) } }

@@ -296,7 +296,7 @@ class ControlCommand(
             body += Component.text("Light falloff: $falloffSummary", NamedTextColor.GOLD)
             val waveMode = lamps.isWaveMode(block)
             val chaseMode = lamps.isChaseMode(block)
-            bodyLampButtons(buttons, prefix, count, lamps.isHighlighting(block), waveMode, chaseMode)
+            bodyLampButtons(buttons, prefix, count, lamps.isHighlighting(block), waveMode, chaseMode, lamps.lightEffectsEnabled(player))
             buttons += "Back to playback" to (prefix + "refresh")
         }
         if (lampFalloffMenu) {
@@ -482,6 +482,7 @@ class ControlCommand(
             isShowing: Boolean = false,
             waveMode: Boolean = false,
             chaseMode: Boolean = false,
+            effectsEnabled: Boolean = false,
         ) {
             buttons += "Configure lights" to (prefix + "lamp_link")
             buttons += "Configure theatre lights" to (prefix + "lamp_theatre")
@@ -489,6 +490,7 @@ class ControlCommand(
             buttons += (if (waveMode) "✓ Wave ripple mode" else "Wave ripple mode") to (prefix + "lamp_wave")
             buttons += (if (chaseMode) "✓ Beat chase mode" else "Beat chase mode") to (prefix + "lamp_chase")
             if (count > 0) {
+                buttons += (if (effectsEnabled) "Hide light effects for me" else "Show light effects for me") to (if (effectsEnabled) "/disc lights hide" else "/disc lights show")
                 buttons += (if (isShowing) "Hide lights" else "Show lights") to (prefix + "lamp_show")
                 buttons += "Unset all lights" to (prefix + "lamp_unset_all")
             }
