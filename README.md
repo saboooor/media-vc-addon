@@ -238,7 +238,7 @@ The Visualizer settings dialog supports up to eight independent visualizers per 
 
 #### Linked lights
 
-Players receive a flashing-light/epilepsy warning when they first approach linked lights each session. Effects start hidden until the player opts in. The dialog and the Lights menu offer personal show/hide controls; `/disc lights hide` and `/disc lights show` also work without playback permissions. The preference survives reconnects and affects only that player. Servers without native dialogs show clickable chat buttons instead.
+Players receive a flashing-light/epilepsy warning when they first approach linked lights without a saved choice. Effects start hidden until the player opts in. The dialog and the Lights menu offer personal show/hide controls; `/disc lights hide` and `/disc lights show` also work without playback permissions. The preference is saved by player UUID in `light_effect_preferences.json` in the plugin data folder, survives reconnects and server restarts, and affects only that player. Choosing either option dismisses future warnings. Existing player-data preferences migrate automatically. Servers without native dialogs show clickable chat buttons instead.
 
 Hidden effects display the original blocks and beacon shutter rather than their animated states, including on chunk load. To suppress brightness flashes, lighting updates in the light’s chunk and neighboring chunks are frozen for that player; unrelated lighting there can remain stale until the chunks reload.
 
