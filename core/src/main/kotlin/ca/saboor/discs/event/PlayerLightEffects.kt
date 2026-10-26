@@ -108,7 +108,8 @@ class PlayerLightEffects(private val plugin: JavaPlugin, private val refresh: (P
     }
     override fun onPacketSend(event: PacketSendEvent) {
         if (event.isCancelled) return
-        val viewer = viewers[event.user.uuid] ?: return
+        val viewerId = event.user?.uuid ?: return
+        val viewer = viewers[viewerId] ?: return
         val snapshot = masks
         val visibleBlocks = if (viewer.enabled) frame.blocks else snapshot.blocks
         fun state(x: Int, y: Int, z: Int): WrappedBlockState? = visibleBlocks[JukeboxBassLamps.Position(viewer.world, x, y, z)]?.let { WrappedBlockState.getByString(it) }

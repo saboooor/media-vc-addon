@@ -11,8 +11,9 @@ class ScreenMapPacketListener(private val screens: ScreenManager) : PacketListen
 
     override fun onPacketSend(event: PacketSendEvent) {
         if (event.isCancelled || event.packetType != PacketType.Play.Server.MAP_DATA) return
+        val viewerId = event.user?.uuid ?: return
         val mapId = WrapperPlayServerMapData(event).mapId
-        if (screens.isVideoMapFor(event.user.uuid, mapId)) {
+        if (screens.isVideoMapFor(viewerId, mapId)) {
             event.isCancelled = true
             if (reportedConflict.compareAndSet(false, true)) {
                 logger.info("Blocked a competing map update for active video map $mapId")

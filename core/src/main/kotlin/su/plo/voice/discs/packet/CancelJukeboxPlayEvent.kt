@@ -21,7 +21,8 @@ class CancelJukeboxPlayEvent(
         // 1010: Play record
         if (packet.type != 1010) return
 
-        val player = Bukkit.getPlayer(event.user.uuid) ?: return
+        val viewerId = event.user?.uuid ?: return
+        val player = Bukkit.getPlayer(viewerId) ?: return
 
         val isCustomDisc = jukeboxes.isPlaying(packet.position.toBlock(player.world))
 
