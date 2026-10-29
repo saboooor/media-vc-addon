@@ -636,6 +636,7 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         playerEffects.setLinks(links.values.toList())
         playerEffects.start()
         updater = scope.launch {
+            var previousLightAudience: Map<UUID, Player> = emptyMap()
             var nextMaintenance = 0L
             var validSources: Map<Position, Boolean> = emptyMap()
             while (isActive) {
@@ -645,11 +646,22 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                 if (maintenance) {
                     val nearby = snapshot.sources.values.flatten().flatMap { link ->
                         PlayerAudience.nearby(link.lamp.world, link.lamp.x.toDouble(), link.lamp.y.toDouble(), link.lamp.z.toDouble(), 64.0)
-                    }.distinctBy { it.uniqueId }
+                    }.distinctBy { it.uniqueId }.filter { PlayerAudience.canReceiveScreen(it) }
                     for (player in nearby) {
-                        if (!PlayerAudience.canReceiveScreen(player) || !playerEffects.needsWarning(player)) continue
-                        launch { suspendSyncFor(player, voiceServer, plugin) { playerEffects.showWarning(player) } }
+                        val entering = previousLightAudience[player.uniqueId] !== player
+                        val warn = playerEffects.needsWarning(player)
+                        if (!entering && !warn) continue
+                        launch {
+                            suspendSyncFor(player, voiceServer, plugin) {
+                                if (!player.isOnline) return@suspendSyncFor
+                                if (warn) playerEffects.showWarning(player)
+                                if (entering && !playerEffects.enabled(player)) {
+                                    player.sendActionBar(Component.text("Light effects are disabled. Use /disc lights show to enable them.", NamedTextColor.YELLOW))
+                                }
+                            }
+                        }
                     }
+                    previousLightAudience = nearby.associateBy { it.uniqueId }
                     val valid = ConcurrentHashMap<Position, Boolean>()
                     // Validate each source once on its owning region, never from a lamp region.
                     coroutineScope {

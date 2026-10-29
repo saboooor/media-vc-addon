@@ -6,7 +6,7 @@ import com.google.gson.JsonParser
 import java.io.File
 import java.util.UUID
 
-/** A saved choice also records that the player has answered the flashing-light warning. */
+/** A saved choice also records that the player has seen the flashing-light warning. */
 internal class LightEffectPreferences(
     private val file: File,
     private val writer: SettingsFileWriter = SettingsFileWriter.shared,
@@ -31,6 +31,11 @@ internal class LightEffectPreferences(
         choices[player] = enabled
         val snapshot = choices.mapKeys { it.key.toString() }
         writer.submit(file, { gson.toJson(snapshot) }, onError)
+    }
+
+    /** Dismissing the warning keeps effects hidden and does not prompt again. */
+    @Synchronized fun markWarningShown(player: UUID) {
+        if (player !in choices) choose(player, false)
     }
 
     @Synchronized fun migrate(player: UUID, legacyChoice: Boolean?) {

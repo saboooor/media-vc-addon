@@ -84,6 +84,7 @@ class PlayerLightEffects(private val plugin: JavaPlugin, private val refresh: (P
     fun needsWarning(player: Player) = preferences.choice(player.uniqueId) == null && warned.add(player.uniqueId)
     fun showWarning(player: Player) {
         if (!player.isOnline) return
+        preferences.markWarningShown(player.uniqueId)
         val status = if (enabled(player)) "Your saved choice is to show effects." else "Effects are hidden for you until you choose to show them."
         val body = Component.text("Epilepsy warning: nearby music lights can flash rapidly and change colors. These effects may trigger seizures in people with photosensitive epilepsy. $status Your choice affects only you.")
         val buttons = listOf("Hide light effects for me" to "/disc lights hide", "Show light effects for me" to "/disc lights show")

@@ -27,6 +27,22 @@ class LightEffectPreferencesTest {
         }
     }
 
+    @Test fun `warning is remembered across restarts and preserves explicit choices`() {
+        val file = directory.resolve("preferences.json").toFile()
+        val player = UUID.randomUUID()
+        SettingsFileWriter(60_000).use { writer ->
+            val preferences = LightEffectPreferences(file, writer) { throw AssertionError(it) }
+            preferences.markWarningShown(player)
+            preferences.markWarningShown(player)
+            writer.flush()
+            val restarted = LightEffectPreferences(file, writer) { throw AssertionError(it) }
+            assertEquals(false, restarted.choice(player))
+            restarted.choose(player, true)
+            restarted.markWarningShown(player)
+            assertEquals(true, restarted.choice(player))
+        }
+    }
+
     @Test fun `legacy preferences migrate once without overwriting file choices`() {
         val file = directory.resolve("preferences.json").toFile()
         val player = UUID.randomUUID()
