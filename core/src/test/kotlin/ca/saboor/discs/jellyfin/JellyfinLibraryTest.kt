@@ -58,4 +58,34 @@ class JellyfinLibraryTest {
         library.revoke(disc)
         assertThrows(JellyfinException::class.java) { library.resolve(disc) }
     }
+    @Test fun `readers keep the committed state while persistence is blocked and failed writes never publish`() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        var blockWrites = false
+        val library = JellyfinLibrary(folder.resolve("blocked.json")) { _, _ ->
+            if (blockWrites) {
+                entered.countDown()
+                check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                throw java.io.IOException("Disk unavailable")
+            }
+        }
+        val owner = UUID.randomUUID()
+        val original = library.connect(owner, session())
+        val disc = library.grant(original, song)
+        blockWrites = true
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val writer = executor.submit { assertThrows(java.io.IOException::class.java) { library.disconnect(owner) } }
+            assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            val reader = executor.submit<Boolean> {
+                library.connection(owner) === original && library.resolve(disc).first === original
+            }
+            assertTrue(reader.get(2, java.util.concurrent.TimeUnit.SECONDS))
+            release.countDown()
+            writer.get(2, java.util.concurrent.TimeUnit.SECONDS)
+            assertSame(original, library.connection(owner))
+            assertSame(original, library.resolve(disc).first)
+        } finally { release.countDown(); executor.shutdownNow() }
+    }
+
 }

@@ -7,6 +7,27 @@ import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.player.Audi
 import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack
 
 class PlaybackControlsTest {
+    @Test fun `decoder failures do not wait for the frame transmission monitor`() {
+        val controls = PlaybackControls()
+        val decoder = java.util.concurrent.Executors.newSingleThreadExecutor { task ->
+            Thread(task, "decoder-failure-test").apply { isDaemon = true }
+        }
+        try {
+            synchronized(controls) {
+                // Model transmission holding controls while waiting for a decoder whose
+                // error callback must finish before releasing its own player lock.
+                val callback = decoder.submit {
+                    controls.fail("Sign-in required")
+                    controls.fail("Later cleanup failure")
+                }
+                callback.get(2, java.util.concurrent.TimeUnit.SECONDS)
+                assertEquals("Sign-in required", controls.failure)
+            }
+        } finally {
+            decoder.shutdownNow()
+        }
+    }
+
     private class Decoder(val seekable: Boolean = true) {
         var filterFactory: su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory? = null
         var paused = false
@@ -44,6 +65,20 @@ class PlaybackControlsTest {
         }
     }
 
+    @Test fun `background silence scan updates the ending without resetting transmitted playback`() {
+        val decoder = Decoder()
+        val controls = PlaybackControls()
+        controls.attach(decoder.player)
+        controls.frameSent(decoder.player, 42_000)
+        controls.setSongEnd(80_000)
+        assertEquals(80_000L, controls.duration)
+        assertEquals(42_000L, controls.transmittedPositionMs)
+        assertEquals(42_000L, controls.position)
+        assertEquals(0L, controls.initialPositionMs)
+        controls.frameSent(decoder.player, 42_020)
+        assertEquals(42_020L, controls.transmittedPositionMs)
+    }
+
     @Test fun `restart during the final second resumes there instead of wrapping to the beginning`() {
         val old = Decoder()
         val controls = PlaybackControls()
@@ -75,7 +110,7 @@ class PlaybackControlsTest {
         assertEquals(effects, restarted.filterConfig)
         assertTrue(restarted.paused)
         assertTrue(restarted.autoMixAnalysis)
-        assertTrue(restarted.tempoAnalysis)
+        assertFalse(restarted.tempoAnalysis, "Linked lights renew tempo requests; stale requests must not survive restart")
         assertTrue(restarted.visualizing)
         assertNull(restarted.failure)
         assertNull(restarted.transmittedPositionMs)

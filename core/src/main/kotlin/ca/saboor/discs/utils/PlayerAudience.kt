@@ -31,12 +31,16 @@ object PlayerAudience : Listener {
         }
     }
     private val entries = ConcurrentHashMap<UUID, Viewer>()
+    private val positions = SpatialIndex<UUID, Viewer>()
+    private val worldNames = ConcurrentHashMap<String, String>()
     // Joining precedes the client world being created. Client movement after join
     // confirms login has been processed; use player identity to reject old sessions.
     private val screenReady = ConcurrentHashMap<UUID, Player>()
     fun canReceiveScreen(player: Player): Boolean = screenReady[player.uniqueId] === player
     fun start(plugin: JavaPlugin, scope: CoroutineScope, voiceServer: PlasmoVoiceServer?) {
         entries.clear()
+        positions.clear()
+        worldNames.clear()
         screenReady.clear()
         val players = Bukkit.getOnlinePlayers().toList()
         scope.launch {
@@ -50,8 +54,11 @@ object PlayerAudience : Listener {
         plugin.server.pluginManager.registerEvents(this, plugin)
     }
     private fun update(player: Player, location: Location) {
-        entries[player.uniqueId] = Viewer(player, location.world?.name ?: return, location.world!!.uid.toString(),
-            location.x, location.y, location.z, System.nanoTime())
+        val world = location.world ?: return
+        val viewer = Viewer(player, world.name, world.uid.toString(), location.x, location.y, location.z, System.nanoTime())
+        entries[player.uniqueId] = viewer
+        worldNames[viewer.worldId] = viewer.world
+        positions.put(player.uniqueId, viewer.world, viewer.x, viewer.y, viewer.z, viewer)
     }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onMove(event: PlayerMoveEvent) {
@@ -79,17 +86,12 @@ object PlayerAudience : Listener {
     }
     @EventHandler fun onJoin(event: PlayerJoinEvent) { screenReady.remove(event.player.uniqueId); update(event.player, event.player.location) }
     @EventHandler fun onWorld(event: PlayerChangedWorldEvent) { screenReady.remove(event.player.uniqueId); update(event.player, event.player.location) }
-    @EventHandler fun onQuit(event: PlayerQuitEvent) { screenReady.remove(event.player.uniqueId); entries.remove(event.player.uniqueId) }
+    @EventHandler fun onQuit(event: PlayerQuitEvent) { screenReady.remove(event.player.uniqueId); entries.remove(event.player.uniqueId); positions.remove(event.player.uniqueId) }
     fun positions(world: String, x: Double, y: Double, z: Double, range: Double): List<Viewer> =
-        entries.values.filter { (it.world == world || it.worldId == world) && it.within(x, y, z, range) }
+        positions.nearby(worldNames[world] ?: world, x, y, z, range)
     fun nearby(world: String, x: Double, y: Double, z: Double, range: Double): List<Player> =
         positions(world, x, y, z, range).map { it.player }
     fun hasNearby(world: String, x: Double, y: Double, z: Double, range: Double): Boolean =
-        entries.values.any { inRange(it, world, x, y, z, range * range) }
-    private fun inRange(entry: Viewer, world: String, x: Double, y: Double, z: Double, squared: Double): Boolean {
-        if (entry.world != world && entry.worldId != world) return false
-        val dx = entry.x - x; val dy = entry.y - y; val dz = entry.z - z
-        return dx * dx + dy * dy + dz * dz <= squared
-    }
-    fun shutdown() { entries.clear(); screenReady.clear() }
+        positions(world, x, y, z, range).isNotEmpty()
+    fun shutdown() { entries.clear(); positions.clear(); worldNames.clear(); screenReady.clear() }
 }

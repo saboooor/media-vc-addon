@@ -147,11 +147,16 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
 
     suspend fun prepareSongEdges(track: AudioTrack) { songEdges(track) }
 
-    private val edgeCache = java.util.concurrent.ConcurrentHashMap<Pair<String, Long>, ca.saboor.discs.audio.SongEdges>()
+    private val edgeCache by lazy {
+        ca.saboor.discs.utils.AsyncLruCache<Pair<String, Long>, ca.saboor.discs.audio.SongEdges>(scope, 256)
+    }
     private suspend fun songEdges(track: AudioTrack): ca.saboor.discs.audio.SongEdges? {
         if (!track.isSeekable || track.info.isStream || track.duration <= 0) return null
         val key = track.identifier to track.duration
-        edgeCache[key]?.let { return it }
+        return edgeCache.load(key) { scanSongEdges(track) }.await()
+    }
+
+    private suspend fun scanSongEdges(track: AudioTrack): ca.saboor.discs.audio.SongEdges? {
         val probe = stereoPlayerManager.createPlayer()
         val scan = ca.saboor.discs.audio.EdgeSilenceScan(track.duration)
         var tap: PlaybackSpectrumTap? = null
@@ -174,8 +179,6 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 }
             }
             val result = scan.result()
-            if (edgeCache.size >= 256) edgeCache.clear()
-            edgeCache[key] = result
             return result
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { return null }
@@ -277,6 +280,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         var leftEncoder: AudioChunkEncoder? = null
         var rightEncoder: AudioChunkEncoder? = null
         var spectrumTap: PlaybackSpectrumTap? = null
+        var edgeUpdates: Job? = null
         val pvSources = listOfNotNull(primaryPv, secondaryPv)
         val svcChannels = listOfNotNull(primarySvc, secondarySvc)
         val enc = encryption
@@ -297,7 +301,15 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 val right = format.createEncoder(manager.configuration).also { rightEncoder = it }
                 StereoPcmFrameEncoder(left, right)
             } else null
-            songEdges(track)?.let { controls.setSongEdges(it.startMs, it.endMs) }
+            if (track.isSeekable && !track.info.isStream && track.duration > 0) {
+                val key = track.identifier to track.duration
+                val cachedEdges = edgeCache.peek(key)
+                if (cachedEdges != null) controls.setSongEdges(cachedEdges.startMs, cachedEdges.endMs)
+                else {
+                    val edges = edgeCache.load(key) { scanSongEdges(track) }
+                    edgeUpdates = launch { edges.await()?.let { controls.setSongEnd(it.endMs) } }
+                }
+            }
             val playbackPlayer = createPlaybackPlayer(manager, track, controls, pcmChannel).also { player = it }
             var nextFrameTime = System.nanoTime()
             while (isActive && controls.failure == null) {
@@ -351,6 +363,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
             controls.fail(e.message ?: "Audio playback failed")
             plugin.slF4JLogger.error("Disc playback failed: ${track.info.title}", e)
         } finally {
+            edgeUpdates?.cancel()
             fun cleanup(action: () -> Unit) {
                 runCatching(action).onFailure { plugin.slF4JLogger.warn("Playback cleanup failed", it) }
             }

@@ -387,6 +387,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         val initialFilters = savedFilters[block]
         if (initialFilters != null) controls.applyFilterConfig(initialFilters)
         var completedTrack: su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack? = null
+        var recommendation: Deferred<su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack?>? = null
         val playback = scope.launch(start = CoroutineStart.LAZY) {
 
             suspend fun failed(message: String) {
@@ -424,6 +425,18 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 failed(errorMsg)
                 return@launch
             }
+
+            suspend fun prefetchAutoplay() {
+                if (chestQueue || recommendation != null) return
+                val enabled = suspendSyncAt(block.location, voiceServer, plugin) { isAutoplayEnabled(block) }
+                if (enabled) {
+                    val history = (autoplayHistory + track.info.identifier).toList().takeLast(50).toSet()
+                    recommendation = scope.async(Dispatchers.IO) {
+                        loadAutoplayRecommendation(track, history, block)
+                    }
+                }
+            }
+            prefetchAutoplay()
 
             if (voicePlayer != null) {
                 if (!suspendSyncAt(block.location, voiceServer, plugin) {
@@ -572,6 +585,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                             return@launch
                         }
 
+                        prefetchAutoplay()
                         lastExistenceCheck = System.currentTimeMillis()
                     }
 
@@ -643,26 +657,9 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     if (autoplay) {
                         val previous = completedTrack ?: return@launch
                         val history = (autoplayHistory + previous.info.identifier).toList().takeLast(50).toSet()
-                        val next = try {
-                            withTimeout(30_000L) {
-                                val videoId = previous.info.identifier
-                                val mix = if (videoId.matches(Regex("[A-Za-z0-9_-]{11}"))) {
-                                    try {
-                                        audioPlayerManager.getPlaylist("https://www.youtube.com/watch?v=$videoId&list=RD$videoId").await().tracks
-                                    } catch (e: Exception) {
-                                        if (e is CancellationException) throw e
-                                        emptyList()
-                                    }
-                                } else emptyList()
-                                mix.firstOrNull { !it.info.isStream && it.info.identifier !in history }
-                                    ?: audioPlayerManager.getPlaylist("ytsearch:${previous.info.author.cleanArtistName()} songs").await()
-                                        .tracks.firstOrNull { !it.info.isStream && it.info.identifier !in history }
-                            }
-                        } catch (e: Exception) {
-                            if (e is CancellationException && e !is TimeoutCancellationException) throw e
-                            plugin.slF4JLogger.warn("Autoplay lookup failed at ${block.location}", e)
-                            null
-                        } ?: return@launch
+                        val prefetched = recommendation
+                        val next = (if (prefetched != null) prefetched.await()
+                            else loadAutoplayRecommendation(previous, history, block)) ?: return@launch
                         suspendSyncAt(block.location, voiceServer, plugin) {
                             if (isActive && jobByBlock[block] === continuation && intact() && isAutoplayEnabled(block)) {
                                 val nextJob = playTrack(next.info.uri ?: next.info.identifier, block, null,
@@ -679,13 +676,42 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     }
                 }
                 if (jobByBlock.putIfAbsent(block, continuation) == null) {
-                    continuation.invokeOnCompletion { jobByBlock.remove(block, continuation) }
+                    continuation.invokeOnCompletion {
+                        recommendation?.cancel()
+                        jobByBlock.remove(block, continuation)
+                    }
                     continuation.start()
-                } else continuation.cancel()
-            }
+                } else { recommendation?.cancel(); continuation.cancel() }
+            } else recommendation?.cancel()
         }
         playback.start()
         return playback
+    }
+
+    private suspend fun loadAutoplayRecommendation(
+        previous: su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack,
+        history: Set<String>, block: Block
+    ): su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack? {
+        return try {
+            withTimeout(30_000L) {
+                val videoId = previous.info.identifier
+                val mix = if (videoId.matches(Regex("[A-Za-z0-9_-]{11}"))) {
+                    try {
+                        audioPlayerManager.getPlaylist("https://www.youtube.com/watch?v=$videoId&list=RD$videoId").await().tracks
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        emptyList()
+                    }
+                } else emptyList()
+                mix.firstOrNull { !it.info.isStream && it.info.identifier !in history }
+                    ?: audioPlayerManager.getPlaylist("ytsearch:${previous.info.author.cleanArtistName()} songs").await()
+                        .tracks.firstOrNull { !it.info.isStream && it.info.identifier !in history }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException && e !is TimeoutCancellationException) throw e
+            plugin.slF4JLogger.warn("Autoplay lookup failed at ${block.location}", e)
+            null
+        }?.also { audioPlayerManager.prepareSongEdges(it) }
     }
 
     fun isAutoplayEnabled(block: Block): Boolean =

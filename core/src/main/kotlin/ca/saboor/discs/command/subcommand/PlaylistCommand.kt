@@ -68,6 +68,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
     }
     private val pending = ConcurrentHashMap<UUID, Pending>()
     private val queues = ConcurrentHashMap<Block, Job>()
+    private val dirtyInventories = ConcurrentHashMap.newKeySet<Block>()
     private val jumpTargets = ConcurrentHashMap<Block, Int>()
     private val skipping = ConcurrentHashMap.newKeySet<Block>()
     data class QueueItem(val title: String, val sprite: String)
@@ -576,13 +577,15 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                             inventory.setItem(slot, blank)
                         }
                         preparing = null; preparingDisc = null; preparationFailed = false
-                        refreshTicks = 5 // Refresh/remap the queue before selecting the following song.
+                        refreshTicks = 40 // Refresh/remap the queue before selecting the following song.
                     }
-                    if (++refreshTicks >= 5 || current?.isActive != true) {
+                    if (++refreshTicks >= 40 || dirtyInventories.remove(block) || current?.isActive != true) {
                         refreshTicks = 0
                         val updated = suspendSyncAt(block.location, voiceServer, plugin) {
                             chest.block.state.playlistContainer()?.inventory?.contents?.filterNotNull()
-                                ?.filter { it.isCustomDisc(discHelper) }?.map { it.clone() } ?: emptyList()
+                                ?.filter { it.isCustomDisc(discHelper) }?.let { items ->
+                                    if (items == liveDiscs) liveDiscs else items.map { it.clone() }
+                                } ?: emptyList()
                         }
                         if (updated != liveDiscs) {
                             val oldIndex = index
@@ -750,13 +753,14 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         queues[block] = queue
         queue.invokeOnCompletion {
             queueStates.remove(block, state)
-            if (queues.remove(block, queue)) { skipping.remove(block); jumpTargets.remove(block); restarting.remove(block) }
+            if (queues.remove(block, queue)) { skipping.remove(block); jumpTargets.remove(block); restarting.remove(block); dirtyInventories.remove(block) }
         }
         queue.start()
 
     }
 
     private fun scheduleChest(chest: Container, player: Player? = null) {
+        markInventoryChanged(chest.inventory)
         scope.launch {
             delay(100)
             suspendSyncAt(chest.location, voiceServer, plugin) {
@@ -771,8 +775,33 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
         }
     }
 
+    private fun markInventoryChanged(inventory: org.bukkit.inventory.Inventory) {
+        val holder = inventory.holder
+        val containers = if (holder is DoubleChest) listOfNotNull(holder.leftSide as? Chest, holder.rightSide as? Chest)
+            else listOfNotNull((holder as? org.bukkit.block.BlockState)?.playlistContainer())
+        for (container in containers) {
+            val block = container.block.getRelative(BlockFace.DOWN)
+            if (queues.containsKey(block)) dirtyInventories.add(block)
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onQueueClick(event: org.bukkit.event.inventory.InventoryClickEvent) {
+        markInventoryChanged(event.view.topInventory)
+    }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onQueueDrag(event: org.bukkit.event.inventory.InventoryDragEvent) {
+        markInventoryChanged(event.view.topInventory)
+    }
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onQueuePickup(event: org.bukkit.event.inventory.InventoryPickupItemEvent) {
+        markInventoryChanged(event.inventory)
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onChestTransfer(event: InventoryMoveItemEvent) {
+        markInventoryChanged(event.source)
+        markInventoryChanged(event.destination)
         val holder = event.destination.holder
         val chest = (holder as? org.bukkit.block.BlockState)?.playlistContainer()
             ?: (holder as? DoubleChest)?.leftSide as? Chest ?: return

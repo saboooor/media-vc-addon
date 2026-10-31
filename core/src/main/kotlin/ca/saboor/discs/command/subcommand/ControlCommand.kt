@@ -141,78 +141,83 @@ class ControlCommand(
         sessions[player.uniqueId] = session
         val prefix = "/disc control ${session.token} "
         val buttons = mutableListOf<Pair<String, String>>()
-        if (controls != null) {
-            buttons += (if (controls.paused) "Resume" else "Pause") to (prefix + "pause")
-            buttons += "Skip" to (prefix + "skip")
-        }
         val queueLabels = mutableMapOf<String, Component>()
-        val chest = block.getRelative(org.bukkit.block.BlockFace.UP).state.playlistContainer()
-        if (controls == null && !playlists.isQueued(block) && chest != null)
-            buttons += "Play container" to (prefix + "playchest")
-        if (controls == null && record.hasIdentifier())
-            buttons += "Play disc" to (prefix + "play")
         val modes = playlists.playbackModes(block)
         val autoplay = jukeboxes.isAutoplayEnabled(block)
-        buttons += "Queue" to (prefix + "queue_menu")
-        buttons += "Volume" to (prefix + "volume_menu")
-        buttons += "Mixing" to (prefix + "audio_menu")
-        buttons += "Audio effects" to (prefix + "effects_menu")
-        if (controls?.hasJellyfinAudioTracks == true) buttons += "Audio track" to (prefix + "jellyfin_audio")
         val stereoLabel = when (jukeboxes.stereoMode(block)) {
             3 -> "Note block L / Note block R"
             else -> "Off"
         }
-        buttons += "Speaker setup" to (prefix + "speakers")
-        if (controls != null) {
-            buttons += "Refresh" to (prefix + "refresh")
-            buttons += "Restart playback" to (prefix + "restart")
-            buttons += "Stop playback" to (prefix + "stop")
-
-            if (controls.seekable) {
-                buttons += "Seek" to (prefix + "seek")
-            }
-        }
-        if (controls == null) {
-            buttons += "Refresh" to (prefix + "refresh")
-            if (playlists.isQueued(block) || jukeboxes.isPlaying(block)) {
-                buttons += "Stop playback" to (prefix + "stop")
-            }
-        }
-        if (record.type != Material.AIR) buttons += "Eject disc" to (prefix + "eject")
-
-        visualizer?.takeIf { it.supported }?.let {
-            buttons += "Visualizer settings" to (prefix + "viz_menu")
-        }
-
-        bassLamps?.let {
-            buttons += "Lights" to (prefix + "lamp_menu")
-        }
         val canManageScreens = player.hasPermission("pv.addon.discs.screen") ||
             player.hasPermission("vc.addon.discs.screen") || player.isOp
-        if (screenManager != null && canManageScreens) {
-            buttons += "Screen" to (prefix + "screen_menu")
-        }
-
-        if (progressDisplay != null) {
-            buttons += "Manage holograms" to (prefix + "holo_menu")
-        }
-
         val body = mutableListOf<Component>()
-        if (controls != null) {
-            body += Component.text(controls.displayTitle, NamedTextColor.GOLD)
-            if (controls.autoMixAnalysis) controls.autoMixStatus?.let { body += Component.text(it, NamedTextColor.AQUA) }
-            body += PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream)
-            body += Component.text("${if (controls.paused) "Paused" else "Playing"} · Volume ${controls.volume}%", NamedTextColor.GRAY)
-        } else if (record.type != Material.AIR) {
-            body += Component.text("Playback stopped. You can play or eject the disc.")
-        } else {
-            body += Component.text("Jukebox is idle.")
+        val mainMenu = !(crossfade || hologram || seek || visualization || speakers || visualizerSelection ||
+            queueMenu || volumeMenu || lampMenu || lampFalloffMenu || screenMenu || effectsMenu || eqMenu ||
+            subtitlesMenu || jellyfinAudioTracks != null)
+        if (mainMenu) {
+            if (controls != null) {
+                buttons += (if (controls.paused) "Resume" else "Pause") to (prefix + "pause")
+                buttons += "Skip" to (prefix + "skip")
+            }
+            val chest = block.getRelative(org.bukkit.block.BlockFace.UP).state.playlistContainer()
+            if (controls == null && !playlists.isQueued(block) && chest != null)
+                buttons += "Play container" to (prefix + "playchest")
+            if (controls == null && record.hasIdentifier())
+                buttons += "Play disc" to (prefix + "play")
+            buttons += "Queue" to (prefix + "queue_menu")
+            buttons += "Volume" to (prefix + "volume_menu")
+            buttons += "Mixing" to (prefix + "audio_menu")
+            buttons += "Audio effects" to (prefix + "effects_menu")
+            if (controls?.hasJellyfinAudioTracks == true) buttons += "Audio track" to (prefix + "jellyfin_audio")
+            buttons += "Speaker setup" to (prefix + "speakers")
+            if (controls != null) {
+                buttons += "Refresh" to (prefix + "refresh")
+                buttons += "Restart playback" to (prefix + "restart")
+                buttons += "Stop playback" to (prefix + "stop")
+
+                if (controls.seekable) {
+                    buttons += "Seek" to (prefix + "seek")
+                }
+            }
+            if (controls == null) {
+                buttons += "Refresh" to (prefix + "refresh")
+                if (playlists.isQueued(block) || jukeboxes.isPlaying(block)) {
+                    buttons += "Stop playback" to (prefix + "stop")
+                }
+            }
+            if (record.type != Material.AIR) buttons += "Eject disc" to (prefix + "eject")
+
+            visualizer?.takeIf { it.supported }?.let {
+                buttons += "Visualizer settings" to (prefix + "viz_menu")
+            }
+
+            bassLamps?.let {
+                buttons += "Lights" to (prefix + "lamp_menu")
+            }
+            if (screenManager != null && canManageScreens) {
+                buttons += "Screen" to (prefix + "screen_menu")
+            }
+
+            if (progressDisplay != null) {
+                buttons += "Manage holograms" to (prefix + "holo_menu")
+            }
+
+            if (controls != null) {
+                body += Component.text(controls.displayTitle, NamedTextColor.GOLD)
+                if (controls.autoMixAnalysis) controls.autoMixStatus?.let { body += Component.text(it, NamedTextColor.AQUA) }
+                body += PlaybackDialogView.progress(controls.position, controls.duration, controls.isStream)
+                body += Component.text("${if (controls.paused) "Paused" else "Playing"} · Volume ${controls.volume}%", NamedTextColor.GRAY)
+            } else if (record.type != Material.AIR) {
+                body += Component.text("Playback stopped. You can play or eject the disc.")
+            } else {
+                body += Component.text("Jukebox is idle.")
+            }
+            body += Component.text(
+                if (autoplay) "Autoplay: On · Copper golem statue"
+                else "Autoplay: Off · Place a copper golem statue above the jukebox to enable.",
+                if (autoplay) NamedTextColor.GREEN else NamedTextColor.GRAY
+            )
         }
-        body += Component.text(
-            if (autoplay) "Autoplay: On · Copper golem statue"
-            else "Autoplay: Off · Place a copper golem statue above the jukebox to enable.",
-            if (autoplay) NamedTextColor.GREEN else NamedTextColor.GRAY
-        )
         if (queueMenu) {
             buttons.clear()
             queueLabels.clear()
@@ -228,7 +233,7 @@ class ControlCommand(
             )
             val queue = playlists.queueView(block)
             if (queue == null) body += Component.text(
-                if (autoplay) "Autoplay chooses the next recommendation when the current song finishes."
+                if (autoplay) "Autoplay prepares the next recommendation during playback."
                 else "No tracks queued.", NamedTextColor.GRAY)
             else {
                 body += PaperPlaybackDialog.icon("item/book", Component.text("Queue · ${queue.currentIndex + 1} of ${queue.items.size}", NamedTextColor.GOLD))
@@ -292,7 +297,6 @@ class ControlCommand(
         if (lampMenu) {
             val lamps = bassLamps ?: return show(player, block)
             lamps.cancelLink(player)
-            controls?.let { if (lamps.isAutoFalloff(block)) it.tempoAnalysis = true }
             buttons.clear()
             queueLabels.clear()
             body.clear()
@@ -318,7 +322,6 @@ class ControlCommand(
         if (lampFalloffMenu) {
             val lamps = bassLamps ?: return show(player, block)
             lamps.cancelLink(player)
-            controls?.let { if (lamps.isAutoFalloff(block)) it.tempoAnalysis = true }
             buttons.clear()
             queueLabels.clear()
             body.clear()
@@ -537,7 +540,6 @@ class ControlCommand(
             val lamps = bassLamps ?: return
             val next = !lamps.isAutoFalloff(session.block)
             lamps.setAutoFalloff(session.block, next)
-            session.controls?.let { if (next) it.tempoAnalysis = true }
             player.sendMessage(Component.text(if (next) "Automatic tempo-based light falloff enabled." else "Automatic light falloff disabled."))
             show(player, session.block, lampFalloffMenu = true)
             return

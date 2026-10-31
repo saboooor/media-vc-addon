@@ -17,10 +17,13 @@ class PlaybackControls(
     initialFilterConfig: AudioFilterConfig = AudioFilterConfig(),
     private val exactInitialPosition: Boolean = false
 ) {
-    @Volatile var failure: String? = null
-        private set
-    @Synchronized fun fail(message: String) {
-        if (failure == null) failure = message
+    private val playbackFailure = java.util.concurrent.atomic.AtomicReference<String?>()
+    val failure: String? get() = playbackFailure.get()
+
+    // LavaPlayer can report errors while holding its player lock. Never acquire the
+    // controls monitor here: frame fetching holds it while calling into that player.
+    fun fail(message: String) {
+        playbackFailure.compareAndSet(null, message)
     }
     val spectrum = SpectrumAnalyzer()
     private val timescaleClock = ca.saboor.discs.audio.TimescaleClock()
@@ -163,6 +166,8 @@ class PlaybackControls(
         initialPositionMs = maxOf(initialPositionMs, startMs).coerceAtMost((endMs - 1).coerceAtLeast(0))
         timescaleClock.reset(initialPositionMs)
     }
+    /** Late background scans can trim the end without resetting a running seek clock. */
+    internal fun setSongEnd(endMs: Long) { trimmedEndMs = endMs }
     val duration: Long get() = (players.firstOrNull()?.playingTrack?.duration ?: 0).let { raw ->
         trimmedEndMs?.let { minOf(raw, it) } ?: raw
     }
@@ -244,7 +249,6 @@ class PlaybackControls(
             initialFilterConfig = filterConfig, exactInitialPosition = true).also { restarted ->
             restarted.title = title
             restarted.autoMixAnalysis = autoMixAnalysis
-            restarted.tempoAnalysis = tempoAnalysis
             analysisConsumers.forEach { restarted.setVisualizing(true, it) }
             if (paused) restarted.togglePause()
         }

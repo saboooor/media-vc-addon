@@ -323,21 +323,31 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     private val theatreFades = ConcurrentHashMap<Position, TheatreLightFade>()
     private val litLamps = ConcurrentHashMap.newKeySet<Position>()
     private val consumers = ConcurrentHashMap.newKeySet<PlaybackControls>()
+    private val tempoConsumers = ConcurrentHashMap.newKeySet<PlaybackControls>()
     private val gson = GsonBuilder().setPrettyPrinting().create()
     private val file get() = File(plugin.dataFolder, "bass_lamp_links.json")
     private var updater: Job? = null
     private val reportedUpdateFailures = ConcurrentHashMap.newKeySet<Position>()
     private data class ChunkKey(val world: String, val x: Int, val z: Int)
-    private data class Index(val version: Long, val sources: Map<Position, List<Link>>, val chunks: Map<ChunkKey, List<Link>>)
+    private data class Index(val version: Long, val sources: Map<Position, List<Link>>, val chunks: Map<ChunkKey, List<Link>>,
+        val parities: Map<Position, Int> = emptyMap(), val bandSizes: Map<SourceBandKey, Int> = emptyMap())
     private val linksVersion = AtomicLong()
     @Volatile private var index = Index(-1, emptyMap(), emptyMap())
     private fun linkedIndex(): Index {
         val version = linksVersion.get()
         if (index.version == version) return index
         val snapshot = links.values.toList()
-        return Index(version, snapshot.groupBy { it.jukebox }, snapshot.groupBy {
+        val sources = snapshot.groupBy { it.jukebox }
+        val parities = HashMap<Position, Int>()
+        val sizes = HashMap<SourceBandKey, Int>()
+        for ((source, links) in sources) for ((band, group) in links.groupBy { it.band ?: LightBand.BASS }) {
+            val sorted = group.sortedWith(compareBy({ it.lamp.x }, { it.lamp.y }, { it.lamp.z }))
+            sizes[SourceBandKey(source, band)] = sorted.size
+            sorted.forEachIndexed { i, link -> parities[link.lamp] = i and 1 }
+        }
+        return Index(version, sources, snapshot.groupBy {
             ChunkKey(it.lamp.world, it.lamp.x shr 4, it.lamp.z shr 4)
-        }).also { index = it }
+        }, parities, sizes).also { index = it }
     }
 
     private fun createToolItem(action: String, material: Material, name: Component, loreLines: List<Component>): ItemStack {
@@ -681,7 +691,10 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                     validSources = valid
                     nextMaintenance = System.nanoTime() + 3_000_000_000L
                 }
-                val sourceControls = jukeboxes.controlsByBlock.entries.associate { Position.of(it.key) to it.value }
+                val sourceControls = jukeboxes.controlsByBlock.entries.mapNotNull { (block, controls) ->
+                    val position = Position.of(block)
+                    if (position in snapshot.sources) position to controls else null
+                }.toMap()
                 // One coarse audience query per playing jukebox; lamps test immutable positions.
                 val audiences = snapshot.sources.keys.filter { sourceControls.containsKey(it) }.associateWith {
                     PlayerAudience.positions(it.world, it.x.toDouble(), it.y.toDouble(), it.z.toDouble(), 64.0)
@@ -719,16 +732,8 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                     }
                 }
 
-                // Assign deterministic parity indices (0 or 1) per (jukebox, band) for Beat Chase mode.
-                val lampParities = HashMap<Position, Int>()
-                val bandGroupSizes = HashMap<SourceBandKey, Int>()
-                for ((sourcePos, jukeLinks) in snapshot.sources) {
-                    for ((band, group) in jukeLinks.groupBy { it.band ?: LightBand.BASS }) {
-                        val sorted = group.sortedWith(compareBy({ it.lamp.x }, { it.lamp.y }, { it.lamp.z }))
-                        bandGroupSizes[SourceBandKey(sourcePos, band)] = sorted.size
-                        sorted.forEachIndexed { idx, l -> lampParities[l.lamp] = idx and 1 }
-                    }
-                }
+                val lampParities = snapshot.parities
+                val bandGroupSizes = snapshot.bandSizes
 
                 // Audience and mode decisions belong to the source frame, never individual lamps.
                 // Otherwise moving toward one side can switch off the other side of the same rig.
@@ -821,9 +826,13 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                 }
                 playerEffects.publishFrame(renderedBlocks)
                 if (dirty.get()) save()
-                val autoFalloffControls = sourceControls.filter { !falloffs.containsKey(it.key) }.values.toSet()
-                autoFalloffControls.forEach { it.tempoAnalysis = true }
-                active.forEach { it.tempoAnalysis = true }
+                val autoFalloffControls = sourceControls.filter { (position, controls) ->
+                    !controls.paused && !falloffs.containsKey(position) && snapshot.sources[position].orEmpty().any { !it.theatre }
+                }.values.toSet()
+                val nextTempoConsumers = autoFalloffControls
+                (tempoConsumers - nextTempoConsumers).forEach { it.tempoAnalysis = false }
+                tempoConsumers.clear(); tempoConsumers.addAll(nextTempoConsumers)
+                nextTempoConsumers.forEach { it.tempoAnalysis = true }
                 active.filterNot { it in consumers }.forEach { it.setVisualizing(true, "bass_lamps") }
                 consumers.filterNot { it in active }.forEach {
                     it.setVisualizing(false, "bass_lamps")
@@ -952,7 +961,8 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
         updater?.cancel()
         playerEffects.shutdown()
         save()
-        consumers.forEach { it.setVisualizing(false, "bass_lamps"); it.tempoAnalysis = false }; consumers.clear()
+        consumers.forEach { it.setVisualizing(false, "bass_lamps") }; consumers.clear()
+        tempoConsumers.forEach { it.tempoAnalysis = false }; tempoConsumers.clear()
         links.values.forEach { link -> link.lamp.loadedBlock()?.let { block -> restore(block, link) } }
         highlightJobs.values.forEach { it.cancel() }; highlightJobs.clear()
         highlights.values.flatten().forEach { safeRemove(it.blockDisplay); safeRemove(it.textDisplay) }
