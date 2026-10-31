@@ -368,11 +368,15 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         controls: PlaybackControls = PlaybackControls(),
         onFailure: (() -> Unit)? = null,
         preparedTrack: su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack? = null,
+        seedIdentifier: String = identifier,
+        seedMeta: ItemMeta? = itemMeta,
+        autoplayHistory: Set<String> = emptySet(),
     ): Job {
         savedVolumes[block]?.let { controls.changeVolume(it - controls.volume) }
         controls.onVolumeChanged = { savedVolumes[block] = it }
         val initialFilters = savedFilters[block]
         if (initialFilters != null) controls.applyFilterConfig(initialFilters)
+        var completedTrack: su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack? = null
         val playback = scope.launch(start = CoroutineStart.LAZY) {
 
             suspend fun failed(message: String) {
@@ -579,6 +583,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                     delay(100L)
                 }
                 controls.failure?.let { failed(it) }
+                if (controls.failure == null) completedTrack = track
             } catch (e: CancellationException) {
                 debugLogger.log("Track \"$trackName\" at ${block.location} cancelled: ${e.message}")
                 throw e
@@ -611,20 +616,71 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         controlsByBlock[block] = controls
         playback.invokeOnCompletion { failure ->
             controlsByBlock.remove(block, controls)
-            if (failure == null && controls.failure == null && !chestQueue && scope.isActive) scope.launch {
-                delay(100)
-                suspendSyncAt(block.location, voiceServer, plugin) {
-                    val record = block.asJukebox()?.record ?: return@suspendSyncAt
-                    if (shouldLoop(block) && !isPlaying(block) &&
-                        record.customDiscIdentifier(discHelper) == identifier && record.itemMeta == itemMeta) {
-                        playChestTrack(identifier, block, itemMeta, player, chestQueue = false)
+            if (failure == null && controls.failure == null && completedTrack != null && !chestQueue && scope.isActive) {
+                // Reserve the slot during recommendation lookup so Stop and eject cancel it too.
+                lateinit var continuation: Job
+                continuation = scope.launch(start = CoroutineStart.LAZY) {
+                    delay(100)
+                    fun intact(): Boolean {
+                        if (!block.world.isChunkLoaded(block.x shr 4, block.z shr 4)) return false
+                        val record = block.asJukebox()?.record ?: return false
+                        return record.customDiscIdentifier(discHelper) == seedIdentifier && record.itemMeta == seedMeta
+                    }
+                    val autoplay = suspendSyncAt(block.location, voiceServer, plugin) {
+                        intact() && hasAutoplayStatue(block)
+                    }
+                    if (autoplay) {
+                        val previous = completedTrack ?: return@launch
+                        val history = (autoplayHistory + previous.info.identifier).toList().takeLast(50).toSet()
+                        val next = try {
+                            withTimeout(30_000L) {
+                                val videoId = previous.info.identifier
+                                val mix = if (videoId.matches(Regex("[A-Za-z0-9_-]{11}"))) {
+                                    try {
+                                        audioPlayerManager.getPlaylist("https://www.youtube.com/watch?v=$videoId&list=RD$videoId").await().tracks
+                                    } catch (e: Exception) {
+                                        if (e is CancellationException) throw e
+                                        emptyList()
+                                    }
+                                } else emptyList()
+                                mix.firstOrNull { !it.info.isStream && it.info.identifier !in history }
+                                    ?: audioPlayerManager.getPlaylist("ytsearch:${previous.info.author.cleanArtistName()} songs").await()
+                                        .tracks.firstOrNull { !it.info.isStream && it.info.identifier !in history }
+                            }
+                        } catch (e: Exception) {
+                            if (e is CancellationException && e !is TimeoutCancellationException) throw e
+                            plugin.slF4JLogger.warn("Autoplay lookup failed at ${block.location}", e)
+                            null
+                        } ?: return@launch
+                        suspendSyncAt(block.location, voiceServer, plugin) {
+                            if (isActive && jobByBlock[block] === continuation && intact() && hasAutoplayStatue(block)) {
+                                val nextJob = playTrack(next.info.uri ?: next.info.identifier, block, null,
+                                    player = player, preparedTrack = next, seedIdentifier = seedIdentifier,
+                                    seedMeta = seedMeta, autoplayHistory = history)
+                                jobByBlock[block] = nextJob
+                                nextJob.invokeOnCompletion { jobByBlock.remove(block, nextJob) }
+                            }
+                        }
+                    } else suspendSyncAt(block.location, voiceServer, plugin) {
+                        if (isActive && jobByBlock[block] === continuation && intact() && shouldLoop(block)) {
+                            playChestTrack(seedIdentifier, block, seedMeta, player, chestQueue = false, overlap = true)
+                        }
                     }
                 }
+                if (jobByBlock.putIfAbsent(block, continuation) == null) {
+                    continuation.invokeOnCompletion { jobByBlock.remove(block, continuation) }
+                    continuation.start()
+                } else continuation.cancel()
             }
         }
         playback.start()
         return playback
     }
+
+    private fun hasAutoplayStatue(block: Block): Boolean =
+        block.getRelative(BlockFace.UP).type.name.let {
+            it == "COPPER_GOLEM_STATUE" || it.endsWith("_COPPER_GOLEM_STATUE")
+        }
 
     private fun getBeaconLevel(block: Block) =
         (1 until config.distance.beaconLikeDistanceList.size).takeWhile { level ->
