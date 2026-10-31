@@ -149,7 +149,10 @@ class ControlCommand(
         val chest = block.getRelative(org.bukkit.block.BlockFace.UP).state.playlistContainer()
         if (controls == null && !playlists.isQueued(block) && chest != null)
             buttons += "Play container" to (prefix + "playchest")
+        if (controls == null && record.hasIdentifier())
+            buttons += "Play disc" to (prefix + "play")
         val modes = playlists.playbackModes(block)
+        val autoplay = jukeboxes.isAutoplayEnabled(block)
         buttons += "Queue" to (prefix + "queue_menu")
         buttons += "Volume" to (prefix + "volume_menu")
         buttons += "Mixing" to (prefix + "audio_menu")
@@ -170,9 +173,8 @@ class ControlCommand(
             }
         }
         if (controls == null) {
-            if (record.hasIdentifier()) buttons += "Play disc" to (prefix + "play")
             buttons += "Refresh" to (prefix + "refresh")
-            if (playlists.isQueued(block)) {
+            if (playlists.isQueued(block) || jukeboxes.isPlaying(block)) {
                 buttons += "Stop playback" to (prefix + "stop")
             }
         }
@@ -206,14 +208,28 @@ class ControlCommand(
         } else {
             body += Component.text("Jukebox is idle.")
         }
+        body += Component.text(
+            if (autoplay) "Autoplay: On · Copper golem statue"
+            else "Autoplay: Off · Place a copper golem statue above the jukebox to enable.",
+            if (autoplay) NamedTextColor.GREEN else NamedTextColor.GRAY
+        )
         if (queueMenu) {
             buttons.clear()
             queueLabels.clear()
             body.clear()
             buttons += "Loop: ${if (modes.first) "On" else "Off"}" to (prefix + "loop")
             buttons += "Shuffle: ${if (modes.second) "On" else "Off"}" to (prefix + "shuffle")
+            body += Component.text("Autoplay: ${if (autoplay) "On" else "Off"}",
+                if (autoplay) NamedTextColor.GREEN else NamedTextColor.GRAY)
+            body += Component.text(
+                if (autoplay) "The copper golem statue enables recommended songs after the inserted disc. Remove it to disable autoplay. Autoplay takes priority over Loop."
+                else "Place a copper golem statue directly above the jukebox instead of a container to continue with recommended songs after the inserted disc.",
+                NamedTextColor.GRAY
+            )
             val queue = playlists.queueView(block)
-            if (queue == null) body += Component.text("No tracks queued.", NamedTextColor.GRAY)
+            if (queue == null) body += Component.text(
+                if (autoplay) "Autoplay chooses the next recommendation when the current song finishes."
+                else "No tracks queued.", NamedTextColor.GRAY)
             else {
                 body += PaperPlaybackDialog.icon("item/book", Component.text("Queue · ${queue.currentIndex + 1} of ${queue.items.size}", NamedTextColor.GOLD))
                 queue.items.forEachIndexed { index, item ->
@@ -607,7 +623,7 @@ class ControlCommand(
             "skip" -> {
                 if (controls != null) {
                     if (playlists.isQueued(session.block)) playlists.skipTrack(session.block)
-                    else jukeboxes.stopPlayback(session.block)
+                    else if (!jukeboxes.skipAutoplayTrack(session.block)) jukeboxes.stopPlayback(session.block)
                 }
                 return
             }

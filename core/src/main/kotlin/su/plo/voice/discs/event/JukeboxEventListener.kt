@@ -120,6 +120,16 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         jobByBlock.remove(block)?.cancel(DiscEjectCause())
     }
 
+    private val autoplaySkips = ConcurrentHashMap.newKeySet<PlaybackControls>()
+
+    /** End this song normally so the autoplay continuation selects the next recommendation. */
+    fun skipAutoplayTrack(block: Block): Boolean {
+        if (!isAutoplayEnabled(block)) return false
+        val controls = controlsByBlock[block] ?: return false
+        autoplaySkips.add(controls)
+        return true
+    }
+
     private val jobByBlock: MutableMap<Block, Job> = ConcurrentHashMap()
 
     @EventHandler
@@ -536,7 +546,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 var lastAudioCheck = System.currentTimeMillis()
                 var loadingMillis = 0L
 
-                while (job.isActive) {
+                while (job.isActive && !(!chestQueue && autoplaySkips.contains(controls))) {
                     val currentTime = System.currentTimeMillis()
                     if (!controls.paused && controls.position == 0L) loadingMillis += currentTime - lastAudioCheck
                     else loadingMillis = 0L
@@ -615,6 +625,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         }
         controlsByBlock[block] = controls
         playback.invokeOnCompletion { failure ->
+            autoplaySkips.remove(controls)
             controlsByBlock.remove(block, controls)
             if (failure == null && controls.failure == null && completedTrack != null && !chestQueue && scope.isActive) {
                 // Reserve the slot during recommendation lookup so Stop and eject cancel it too.
@@ -627,7 +638,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                         return record.customDiscIdentifier(discHelper) == seedIdentifier && record.itemMeta == seedMeta
                     }
                     val autoplay = suspendSyncAt(block.location, voiceServer, plugin) {
-                        intact() && hasAutoplayStatue(block)
+                        intact() && isAutoplayEnabled(block)
                     }
                     if (autoplay) {
                         val previous = completedTrack ?: return@launch
@@ -653,7 +664,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                             null
                         } ?: return@launch
                         suspendSyncAt(block.location, voiceServer, plugin) {
-                            if (isActive && jobByBlock[block] === continuation && intact() && hasAutoplayStatue(block)) {
+                            if (isActive && jobByBlock[block] === continuation && intact() && isAutoplayEnabled(block)) {
                                 val nextJob = playTrack(next.info.uri ?: next.info.identifier, block, null,
                                     player = player, preparedTrack = next, seedIdentifier = seedIdentifier,
                                     seedMeta = seedMeta, autoplayHistory = history)
@@ -677,7 +688,7 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         return playback
     }
 
-    private fun hasAutoplayStatue(block: Block): Boolean =
+    fun isAutoplayEnabled(block: Block): Boolean =
         block.getRelative(BlockFace.UP).type.name.let {
             it == "COPPER_GOLEM_STATUE" || it.endsWith("_COPPER_GOLEM_STATUE")
         }
