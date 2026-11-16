@@ -11,6 +11,7 @@ import net.minecraft.client.renderer.entity.state.ItemFrameRenderState;
 import net.minecraft.client.renderer.state.MapRenderState;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.core.Direction;
+import net.minecraft.world.entity.decoration.ItemFrame;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -23,6 +24,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class ItemFrameVideoMixin {
     @Shadow @Final private MapRenderer mapRenderer;
     private final Matrix4f vcb$rotation = new Matrix4f();
+
+    @Inject(method = "extractRenderState(Lnet/minecraft/world/entity/decoration/ItemFrame;Lnet/minecraft/client/renderer/entity/state/ItemFrameRenderState;F)V",
+            at = @At("TAIL"))
+    private void vcb$extractVideoMapId(ItemFrame entity, ItemFrameRenderState state, float tickDelta, CallbackInfo ci) {
+        // Companion clients do not receive vanilla map packets, so level.getMapData(id) is null
+        // and vanilla extractRenderState leaves state.mapId null. Populate it when a surface exists.
+        if (state.mapId == null) {
+            var id = entity.getFramedMapId(entity.getItem());
+            if (id != null && ScreensClient.surface(id.id()) != null) state.mapId = id;
+        }
+    }
 
     @Inject(method = "submit(Lnet/minecraft/client/renderer/entity/state/ItemFrameRenderState;Lcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/SubmitNodeCollector;Lnet/minecraft/client/renderer/state/level/CameraRenderState;)V",
             at = @At("HEAD"), cancellable = true)
