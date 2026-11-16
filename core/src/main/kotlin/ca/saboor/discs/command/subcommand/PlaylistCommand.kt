@@ -390,15 +390,9 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             var oldControls: PlaybackControls? = null
             var liveDiscs = discs
             val order = ChestQueueOrder()
-            // Failures are session-local and follow media IDs across inventory edits/duplicates.
-            val failedMedia = mutableSetOf<String>()
-            fun excludedSlots(): Set<Int> = liveDiscs.indices.filterTo(mutableSetOf()) {
-                liveDiscs[it].customDiscIdentifier(discHelper) in failedMedia
-            }
             var index = (initialIndex ?: jumpTargets.remove(block))?.takeIf { it in discs.indices }
                 ?: order.next(discs.size, -1, false, playbackModes(block).second) ?: return@launch
             var activeDisc = discs.first()
-            fun markFailed() { activeDisc.customDiscIdentifier(discHelper)?.let(failedMedia::add) }
             var removedNextIndex = 0
             var refreshTicks = 0
             var envelope: MixEnvelope? = null
@@ -407,6 +401,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             var recoveryStart = 0L
             var recoveryGain = 1.0
             var recoveryTempo = 1.0
+            var haltAtEnd = false
             var fadeOutStart: Long? = null
             var fadeOutGain = 1.0
             var fadeOutMs = 0L
@@ -525,7 +520,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     controls = nextControls; current = next
                 }
                 preparing?.cancel(); preparing = null; preparingDisc = null
-                index = target; fadeOutStart = null; recoveryGain = 1.0; recoveryTempo = 1.0
+                index = target; fadeOutStart = null; haltAtEnd = false; recoveryGain = 1.0; recoveryTempo = 1.0
                 return true
             }
             try {
@@ -535,7 +530,6 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     delay(50)
                     if (!intact()) break
                     if (restarting.remove(block)) {
-                        failedMedia.clear()
                         // During an incoming load, retain the song that is still audible.
                         if (controls.sentAudioMs == 0L && outgoing != null) recoverOutgoing()
                         val resumed = controls.copyForRestart()
@@ -545,7 +539,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         current?.cancelAndJoin()
                         outgoing?.cancelAndJoin(); outgoing = null; oldControls = null; outgoingDisc = null; envelope = null
                         mixCommitment.clear()
-                        fadeOutStart = null
+                        fadeOutStart = null; haltAtEnd = false
                         recoveryGain = 1.0; recoveryTempo = 1.0; recoveryStart = 0L
                         skipping.remove(block); jumpTargets.remove(block)
                         controls = resumed
@@ -582,7 +576,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     var playing = current ?: break
                     if (skipping.remove(block)) {
                         val target = jumpTargets.remove(block) ?: order.next(liveDiscs.size, index,
-                            playbackModes(block).first, playbackModes(block).second, removedNextIndex, excludedSlots())
+                            playbackModes(block).first, playbackModes(block).second, removedNextIndex)
                         if (target == null) {
                             if (controls.sentAudioMs == 0L && outgoing != null) recoverOutgoing()
                             playing = current ?: break
@@ -593,8 +587,6 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                                 fadeOutStart = controls.sentAudioMs; fadeOutGain = controls.currentGain; fadeOutMs = fadeDuration()
                             }
                         } else {
-                            // An explicit jump may retry a previously failed item.
-                            liveDiscs.getOrNull(target)?.customDiscIdentifier(discHelper)?.let(failedMedia::remove)
                             if (!transition(target, null, true)) break
                             continue
                         }
@@ -610,8 +602,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     }
                     if (outgoing != null) {
                         if (controls.failure != null || !playing.isActive && controls.sentAudioMs == 0L) {
-                            markFailed()
-                            if (recoverOutgoing()) continue
+                            if (recoverOutgoing()) { haltAtEnd = true; continue }
                         }
                         val fade = envelope!!
                         if (controls.sentAudioMs > 0L) {
@@ -650,20 +641,21 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     playing = current ?: break
                     if (!playing.isActive) {
                         playing.join()
-                        if (playing.isCancelled) break
-                        if (controls.failure != null) markFailed()
+                        if (playing.isCancelled || haltAtEnd) break
+                        // Keep failed discs intact and stop rather than retrying the same queue indefinitely.
+                        if (controls.failure != null) break
                         val target = order.next(liveDiscs.size, index, playbackModes(block).first,
-                            playbackModes(block).second, removedNextIndex, excludedSlots()) ?: break
+                            playbackModes(block).second, removedNextIndex) ?: break
                         if (!transition(target, null, true)) break
                         continue
                     }
-                    if (outgoing != null) {
+                    if (outgoing != null || haltAtEnd) {
                         controls.goodAutoMixUpcoming = false
-                        controls.autoMixStatus = "AutoMix: transition in progress"
+                        controls.autoMixStatus = if (outgoing != null) "AutoMix: transition in progress" else "AutoMix: no next transition"
                         continue
                     }
                     val nextIndex = order.peek(liveDiscs.size, index, playbackModes(block).first,
-                        playbackModes(block).second, removedNextIndex, excludedSlots())
+                        playbackModes(block).second, removedNextIndex)
                     if (nextIndex == null) {
                         mixCommitment.clear()
                         controls.autoMixStatus = "AutoMix: no next song"
@@ -712,7 +704,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     if (plan.durationMs > 0 && controls.seekable && !controls.isStream && controls.duration > 0 &&
                         controls.position >= plan.startMs && remaining > 0) {
                         val target = order.next(liveDiscs.size, index, playbackModes(block).first,
-                            playbackModes(block).second, removedNextIndex, excludedSlots()) ?: continue
+                            playbackModes(block).second, removedNextIndex) ?: continue
                         if (!transition(target, plan, false)) break
                     }
                 }

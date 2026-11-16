@@ -13,10 +13,7 @@ import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.playb
 import su.plo.voice.lavaplayer.libs.org.apache.http.message.BasicHeader
 
 /** Opt-in replacement: metadata and playback both use yt-dlp, including flat playlist entries. */
-internal class YtDlpAudioSourceManager(
-    private val extractor: YtDlpClient,
-    private val configureHttp: java.util.function.Consumer<su.plo.voice.lavaplayer.libs.org.apache.http.impl.client.HttpClientBuilder>? = null,
-) : AudioSourceManager {
+internal class YtDlpAudioSourceManager(private val extractor: YtDlpClient) : AudioSourceManager {
     override fun getSourceName() = "youtube-ytdlp"
     override fun loadItem(manager: AudioPlayerManager, reference: AudioReference): AudioItem? {
         val identifier = reference.identifier
@@ -45,7 +42,6 @@ internal class YtDlpAudioSourceManager(
             val http = HttpAudioSourceManager()
             try {
                 http.configureBuilder { builder ->
-                    configureHttp?.accept(builder)
                     builder.setDefaultHeaders(resolved.headers.map { BasicHeader(it.key, it.value) })
                 }
                 val delegate = http.loadItem(manager, AudioReference(resolved.url!!, media.title)) as? InternalAudioTrack

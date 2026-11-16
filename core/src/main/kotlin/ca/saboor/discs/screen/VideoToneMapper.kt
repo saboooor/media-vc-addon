@@ -35,24 +35,22 @@ internal class VideoToneMapper(private val info: VideoColorInfo) {
             for (i in output.indices) output[i] = ((sample(input, i * 2) + 128) shr 8).coerceAtMost(255).toByte()
             return
         }
-        val isHlg = info.transfer == VideoTransfer.HLG
-        val bt2020 = info.bt2020
-        val inverse = if (isHlg) hlg else pq
+        val inverse = if (info.transfer == VideoTransfer.PQ) pq else hlg
         val displayLut = srgb
-        val gainLut = if (isHlg) hlgGain else null
+        val gainLut = if (info.transfer == VideoTransfer.HLG) hlgGain else null
         var src = 0
         var dst = 0
         while (dst < output.size) {
             var r = inverse[sample(input, src)]
             var g = inverse[sample(input, src + 2)]
             var b = inverse[sample(input, src + 4)]
-            if (isHlg) {
+            if (info.transfer == VideoTransfer.HLG) {
                 val sceneY = (0.2627 * r + 0.6780 * g + 0.0593 * b).coerceIn(0.0, 1.0)
                 // BT.2100 reference 1000-nit HLG display, system gamma 1.2.
                 val gain = 10.0 * gainLut!![(sceneY * 65535).roundToInt()]
                 r *= gain; g *= gain; b *= gain
             }
-            if (bt2020) {
+            if (info.bt2020) {
                 // D65 BT.2020 -> BT.709 in linear light, before the display transfer function.
                 val red = 1.660491 * r - 0.587641 * g - 0.072850 * b
                 val green = -0.124550 * r + 1.132900 * g - 0.008349 * b
@@ -62,7 +60,7 @@ internal class VideoToneMapper(private val info: VideoColorInfo) {
             val luminance = max(0.0, 0.2126 * r + 0.7152 * g + 0.0722 * b)
             // Extended Reinhard shoulder: 100-nit exposure, 1000-nit reference peak.
             // Scale by luminance rather than mapping channels independently to retain hue.
-            val scale = (1.0 + luminance * 0.01) / (1.0 + luminance)
+            val scale = (1.0 + luminance / 100.0) / (1.0 + luminance)
             output[dst] = display(r * scale, displayLut)
             output[dst + 1] = display(g * scale, displayLut)
             output[dst + 2] = display(b * scale, displayLut)

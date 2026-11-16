@@ -133,19 +133,6 @@ class JellyfinClientTest {
             val videoUrl = client.streamUrl(session, page.items.single().id, "Movie")
             assertEquals("${session.baseUrl}Videos/${page.items.single().id}/stream?static=true",
                 client.videoStreamUrl(session, page.items.single().id))
-            assertEquals("${session.baseUrl}Videos/${page.items.single().id}/stream?static=true",
-                client.streamUrl(session, page.items.single().id, "Movie", 50_000, transcode = false))
-            assertEquals("${session.baseUrl}Videos/${page.items.single().id}/stream?static=true",
-                client.videoStreamUrl(session, page.items.single().id, width = 640, height = 358,
-                    maxFramerate = 30, startPositionMs = 50_000, static = true))
-            val transcodedVideo = client.videoStreamUrl(session, page.items.single().id, width = 640, height = 355, maxFramerate = 24, startPositionMs = 14_452)
-            assertTrue(transcodedVideo.contains("Videos/${page.items.single().id}/stream.mkv?static=false"))
-            assertTrue(transcodedVideo.contains("videoCodec=h264"))
-            assertTrue(transcodedVideo.contains("maxWidth=640"))
-            assertTrue(transcodedVideo.contains("maxHeight=356"))
-            assertTrue(transcodedVideo.contains("maxFramerate=24"))
-            assertTrue(transcodedVideo.contains("startTimeTicks=144520000"))
-            assertFalse(transcodedVideo.contains("test-token"))
             assertTrue(videoUrl.contains("container=mp3"))
             assertTrue(videoUrl.contains("static=false"))
             assertTrue(client.streamUrl(session, page.items.single().id, "Movie", 50_000).contains("startTimeTicks=500000000"))

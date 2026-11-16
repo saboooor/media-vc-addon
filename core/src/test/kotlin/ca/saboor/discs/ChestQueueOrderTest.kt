@@ -55,36 +55,4 @@ class ChestQueueOrderTest {
         assertEquals(0, order.next(1, -1, false, true))
         assertEquals(1, order.next(3, -1, false, false, removedNext = 1))
     }
-    @Test fun `failed items are skipped without looping forever in either order`() {
-        for (shuffle in listOf(false, true)) {
-            val order = ChestQueueOrder()
-            val failed = mutableSetOf<Int>()
-            var current = -1
-            repeat(4) {
-                current = order.next(4, current, true, shuffle, excluded = failed)!!
-                assertTrue(failed.add(current), "A failed item must not be retried")
-            }
-            assertNull(order.next(4, current, true, shuffle, excluded = failed))
-        }
-    }
-
-    @Test fun `failure during a reserved crossfade advances to the next healthy item`() {
-        for (shuffle in listOf(false, true)) {
-            val order = ChestQueueOrder()
-            val failedNext = order.peek(3, 0, true, shuffle)!!
-            val remaining = (1..2).single { it != failedNext }
-            assertEquals(remaining, order.peek(3, 0, true, shuffle, excluded = setOf(failedNext)))
-            assertEquals(remaining, order.next(3, 0, true, shuffle, excluded = setOf(failedNext)))
-        }
-    }
-
-    @Test fun `only healthy slot can loop and explicit retry can restore failed slots`() {
-        for (shuffle in listOf(false, true)) {
-            val order = ChestQueueOrder()
-            assertEquals(1, order.next(3, 1, true, shuffle, excluded = setOf(0, 2)))
-            order.reset()
-            assertNotNull(order.next(3, -1, false, shuffle, excluded = emptySet()))
-        }
-        assertNull(ChestQueueOrder().next(3, 1, false, false, excluded = setOf(2)))
-    }
 }

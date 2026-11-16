@@ -3,8 +3,6 @@ package ca.saboor.discs.screen
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.nio.file.Path
-import java.io.ByteArrayOutputStream
-import kotlinx.coroutines.*
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import org.junit.jupiter.api.Assertions.*
@@ -52,15 +50,15 @@ class JellyfinVideoPlaybackTest {
         }
         server.start()
         try {
-            for ((cap, startMs) in listOf(20 to 0, 24 to 0, 24 to 1000, 24 to 0)) {
+            for (cap in listOf(20, 24)) {
                 VideoSeekProxy("http://127.0.0.1:${server.address.port}/Videos/movie/stream?static=true",
                     "test-agent", credentials).use { proxy ->
                     val filter = VideoPlayer.videoFilter(cap, 64, 64)
-                    val expected = decode(video.toString(), emptyList(), filter.removeSuffix(",realtime"), startMs)
-                    val actual = decode(proxy.url, VideoPlayer.proxiedInputOptions(), filter.removeSuffix(",realtime"), startMs, buffered = true)
+                    val expected = decode(video.toString(), emptyList(), filter.removeSuffix(",realtime"))
+                    val actual = decode(proxy.url, VideoPlayer.proxiedInputOptions(), filter)
                     assertArrayEquals(expected, actual, "HTTP playback must match local MKV decoding at $cap FPS")
-                    val frames = actual.asList().chunked(64 * 64 * 6)
-                    assertEquals((3 - startMs / 1000) * cap, frames.size)
+                    val frames = actual.asList().chunked(64 * 64 * 3)
+                    assertEquals(3 * cap, frames.size)
                     assertEquals(frames.size, frames.toSet().size, "Playback must not repeat frames")
                 }
             }
@@ -72,45 +70,13 @@ class JellyfinVideoPlaybackTest {
         }
     }
 
-    private fun decode(source: String, inputOptions: List<String>, filter: String, startMs: Int, buffered: Boolean = false): ByteArray {
-        val seek = if (startMs > 0) listOf("-ss", (startMs / 1000.0).toString()) else emptyList()
-        val command = listOf("ffmpeg", "-v", "error") + inputOptions + VideoPlayer.decoderInputOptions() + seek + listOf(
+    private fun decode(source: String, inputOptions: List<String>, filter: String): ByteArray {
+        val command = listOf("ffmpeg", "-v", "error") + inputOptions + listOf(
             "-i", source, "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", filter,
-            "-threads:v", "1", "-flush_packets", "1", "-f", "rawvideo", "-pix_fmt", "rgb48le", "pipe:1")
+            "-threads:v", "1", "-flush_packets", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1")
         val process = ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.INHERIT).start()
         return try {
-            val bytes = process.inputStream.use { input ->
-                if (!buffered) input.readBytes() else runBlocking {
-                    // Exercise backpressure and pooled RGB48 frames with a slow/paused viewer.
-                    val buffer = VideoDecodeBuffer(64 * 64 * 6, 64 * 64 * 6 * 3)
-                    val producer = launch(Dispatchers.IO) {
-                        buffer.decode { pixels ->
-                            var offset = 0
-                            while (offset < pixels.size) {
-                                val count = input.read(pixels, offset, pixels.size - offset)
-                                if (count < 0) {
-                                    check(offset == 0) { "Truncated frame" }
-                                    return@decode null
-                                }
-                                offset += count
-                            }
-                            0L
-                        }
-                    }
-                    val output = ByteArrayOutputStream()
-                    try {
-                        delay(100) // Fill the pool before presentation resumes.
-                        for (frame in buffer.frames) {
-                            try {
-                                output.write(frame.pixels)
-                                delay(2)
-                            } finally { buffer.release(frame) }
-                        }
-                        producer.join()
-                        output.toByteArray()
-                    } finally { producer.cancelAndJoin() }
-                }
-            }
+            val bytes = process.inputStream.use { it.readBytes() }
             assertEquals(0, process.waitFor())
             bytes
         } finally { process.destroyForcibly() }

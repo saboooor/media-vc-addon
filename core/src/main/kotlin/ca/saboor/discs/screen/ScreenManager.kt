@@ -415,18 +415,9 @@ class ScreenManager : PluginKoinComponent {
                 }
                 val jfClient = if (jellyfin != null) JellyfinClient() else null
                 val initialScreenFps = screen.effectiveVideoFps(maxVideoFps)
-                val initialSize = CompanionResolution.mapSize(screen.totalWidthPixels, screen.totalHeightPixels)
                 val resolvedUrl = if (externalYoutube != null) externalVideo?.url ?: fallbackImg.orEmpty()
                 else if (jellyfin != null && jfClient != null) {
-                    jfClient.videoStreamUrl(
-                        session = jellyfin.first.session,
-                        itemId = jellyfin.second.mediaId,
-                        width = initialSize.width,
-                        height = initialSize.height,
-                        maxFramerate = initialScreenFps,
-                        static = !jellyfin.first.transcodingEnabled,
-                        videoBitRate = config.screen.companionBitrateKbps.coerceIn(256, 20000) * 1000
-                    )
+                    jfClient.videoStreamUrl(jellyfin.first.session, jellyfin.second.mediaId)
                 } else VideoSourceResolver.resolveVideoUrl(
                     identifier = identifier,
                     audioPlayerManager = audioPlayerManager,
@@ -456,17 +447,6 @@ class ScreenManager : PluginKoinComponent {
                     sourceAuthorization = sourceAuthorization,
                     durationMs = jellyfin?.second?.durationMs ?: 0L,
                     sourceHeaders = externalVideo?.headers.orEmpty(),
-                    streamUrlProvider = if (jellyfin != null && jfClient != null && jellyfin.first.transcodingEnabled) { width, height, targetFps, posMs ->
-                        jfClient.videoStreamUrl(
-                            session = jellyfin.first.session,
-                            itemId = jellyfin.second.mediaId,
-                            width = width,
-                            height = height,
-                            maxFramerate = targetFps,
-                            videoBitRate = config.screen.companionBitrateKbps.coerceIn(256, 20000) * 1000,
-                            startPositionMs = posMs
-                        )
-                    } else null,
                     playbackPositionMs = playbackPositionMs,
                     companionRgb = config.screen.companionRgb,
                     companionQuality = config.screen.companionQuality,
