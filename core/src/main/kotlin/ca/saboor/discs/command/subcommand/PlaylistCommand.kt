@@ -295,7 +295,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                             ensureActive()
                             if (pending[player.uniqueId] !== request) throw CancellationException("Playlist selection replaced")
                             withTimeout(30_000L) {
-                                audioPlayerManager.getPlaylist("ytsearch:${song.query}").await().tracks.firstOrNull()
+                                runCatching { audioPlayerManager.getPlaylist("ytsearch:${song.query}").await().tracks.firstOrNull() }.getOrNull()
+                                    ?: runCatching { audioPlayerManager.getPlaylist("scsearch:${song.query}").await().tracks.firstOrNull() }.getOrNull()
                                     ?: error("No playable match for song ${index + 1}: ${song.artist} - ${song.title}")
                             }
                         }

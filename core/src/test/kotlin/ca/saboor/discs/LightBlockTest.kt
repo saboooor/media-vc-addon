@@ -94,4 +94,36 @@ class LightBlockTest {
         LightBlock.restore(fixture.block, original)
         assertSame(original, fixture.data)
     }
+
+    @Test fun `concrete powder stained glass terracotta carpets banners and candles are supported and cycle colors`() {
+        val cases = listOf(
+            Triple(Material.WHITE_CONCRETE, Material.RED_CONCRETE, Material.BLACK_CONCRETE),
+            Triple(Material.WHITE_CONCRETE_POWDER, Material.RED_CONCRETE_POWDER, Material.BLACK_CONCRETE_POWDER),
+            Triple(Material.WHITE_STAINED_GLASS, Material.RED_STAINED_GLASS, Material.BLACK_STAINED_GLASS),
+            Triple(Material.WHITE_STAINED_GLASS_PANE, Material.RED_STAINED_GLASS_PANE, Material.BLACK_STAINED_GLASS_PANE),
+            Triple(Material.WHITE_TERRACOTTA, Material.RED_TERRACOTTA, Material.BLACK_TERRACOTTA),
+            Triple(Material.WHITE_GLAZED_TERRACOTTA, Material.RED_GLAZED_TERRACOTTA, Material.BLACK_GLAZED_TERRACOTTA),
+            Triple(Material.WHITE_CARPET, Material.RED_CARPET, Material.BLACK_CARPET),
+            Triple(Material.WHITE_BANNER, Material.RED_BANNER, Material.BLACK_BANNER),
+            Triple(Material.WHITE_WALL_BANNER, Material.RED_WALL_BANNER, Material.BLACK_WALL_BANNER),
+        )
+        val resolver: (Material) -> BlockData = { mat -> data(mat) }
+        for ((origMat, redMat, blackMat) in cases) {
+            val original = data(origMat)
+            assertTrue(LightBlock.supports(original), "Expected $origMat to be supported")
+            val fixture = Fixture(original)
+            LightBlock.update(fixture.block, original, true, colorStep = 0, colorResolver = resolver)
+            assertEquals(redMat, fixture.data.material, "Expected $origMat step 0 -> $redMat")
+            assertTrue(LightBlock.matches(fixture.block, original))
+            LightBlock.update(fixture.block, original, false, colorStep = 0, colorResolver = resolver)
+            assertEquals(blackMat, fixture.data.material, "Expected $origMat off -> $blackMat")
+            assertTrue(LightBlock.matches(fixture.block, original))
+            LightBlock.restore(fixture.block, original)
+            assertSame(original, fixture.data, "Expected $origMat restore")
+        }
+        assertFalse(LightBlock.supports(data(Material.TERRACOTTA)))
+        Material.values().firstOrNull { it.name == "CANDLE" }?.let { assertTrue(LightBlock.supports(data(it))) }
+        Material.values().firstOrNull { it.name == "WHITE_CANDLE" }?.let { assertTrue(LightBlock.supports(data(it))) }
+        Material.values().firstOrNull { it.name == "MOSS_CARPET" }?.let { assertFalse(LightBlock.supports(data(it))) }
+    }
 }

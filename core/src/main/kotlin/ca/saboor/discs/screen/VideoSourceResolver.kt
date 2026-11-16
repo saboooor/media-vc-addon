@@ -29,6 +29,11 @@ object VideoSourceResolver {
         return extractYouTubeVideoId(url) != null || url.contains("youtube.com") || url.contains("youtu.be")
     }
 
+    fun isSoundCloudUrl(url: String): Boolean {
+        val host = runCatching { URI(url.trim()).host?.lowercase() }.getOrNull() ?: return false
+        return host == "soundcloud.com" || host.endsWith(".soundcloud.com") || host == "snd.sc"
+    }
+
     fun getYouTubeThumbnailUrl(videoId: String): String {
         return "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
     }
@@ -77,6 +82,10 @@ object VideoSourceResolver {
             logger.info("No direct video stream found for YouTube ID '$targetId'; using thumbnail/artwork.")
             if (!artworkUrl.isNullOrBlank()) return artworkUrl
             if (targetId != null) return getYouTubeThumbnailUrl(targetId)
+        }
+
+        if (isSoundCloudUrl(trimmed) && !artworkUrl.isNullOrBlank()) {
+            return artworkUrl
         }
 
         // Direct URL, file path, or stream

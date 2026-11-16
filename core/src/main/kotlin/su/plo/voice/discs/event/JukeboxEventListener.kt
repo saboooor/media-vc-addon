@@ -688,8 +688,16 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                         emptyList()
                     }
                 } else emptyList()
-                mix.firstOrNull { !it.info.isStream && it.info.identifier !in history }
-                    ?: audioPlayerManager.getPlaylist("ytsearch:${previous.info.author.cleanArtistName()} songs").await()
+                val isSoundCloud = ca.saboor.discs.screen.VideoSourceResolver.isSoundCloudUrl(previous.info.uri.orEmpty())
+                val artistQuery = previous.info.author.cleanArtistName()
+                val scMix = if (isSoundCloud && artistQuery.isNotBlank()) {
+                    runCatching {
+                        audioPlayerManager.getPlaylist("scsearch:$artistQuery").await().tracks
+                    }.getOrDefault(emptyList())
+                } else emptyList()
+                scMix.firstOrNull { !it.info.isStream && it.info.identifier !in history }
+                    ?: mix.firstOrNull { !it.info.isStream && it.info.identifier !in history }
+                    ?: audioPlayerManager.getPlaylist("ytsearch:$artistQuery songs").await()
                         .tracks.firstOrNull { !it.info.isStream && it.info.identifier !in history }
             }
         } catch (e: Exception) {

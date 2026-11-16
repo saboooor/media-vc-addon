@@ -37,4 +37,28 @@ class LightBandFrameTest {
         assertFalse(frame.sample(32.0, 1).lit)
         assertFalse(LightBandFrame(emptyList(), true, false, false).sample(0.0, 0).lit)
     }
+
+    @Test fun `ripple and chase speeds scale delay and alternation rate`() {
+        val t0 = LightPulse(true, 0, false, 1)
+        val t1 = LightPulse(false, 0, false, 1)
+        val t2 = LightPulse(true, 1, false, 2)
+        // Faster ripple reduces delay for the same distance
+        val slowRipple = LightBandFrame(listOf(t0, t1, t2), playing = true, ripple = true, chase = false, rippleSpeed = 0.5)
+        val fastRipple = LightBandFrame(listOf(t0, t1, t2), playing = true, ripple = true, chase = false, rippleSpeed = 2.0)
+        assertEquals(t2, slowRipple.sample(3.0, 0))
+        assertEquals(t0, fastRipple.sample(3.0, 0))
+
+        // Half-speed chase holds parity across two beats; 2x chase alternates within a beat via tickCount
+        val halfChaseBeat0 = LightBandFrame(listOf(LightPulse(true, 0)), true, false, true, chaseSpeed = 0.5)
+        val halfChaseBeat1 = LightBandFrame(listOf(LightPulse(true, 1)), true, false, true, chaseSpeed = 0.5)
+        val halfChaseBeat2 = LightBandFrame(listOf(LightPulse(true, 2)), true, false, true, chaseSpeed = 0.5)
+        assertTrue(halfChaseBeat0.sample(0.0, 0).lit)
+        assertTrue(halfChaseBeat1.sample(0.0, 0).lit)
+        assertFalse(halfChaseBeat2.sample(0.0, 0).lit)
+
+        val fastChaseA = LightBandFrame(listOf(LightPulse(true, 0)), true, false, true, chaseSpeed = 2.0, tickCount = 0)
+        val fastChaseB = LightBandFrame(listOf(LightPulse(true, 0)), true, false, true, chaseSpeed = 2.0, tickCount = 4)
+        assertTrue(fastChaseA.sample(0.0, 0).lit)
+        assertFalse(fastChaseB.sample(0.0, 0).lit)
+    }
 }

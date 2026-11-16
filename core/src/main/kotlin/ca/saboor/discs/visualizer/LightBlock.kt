@@ -14,18 +14,45 @@ object LightBlock {
     private val tileStates = ConcurrentHashMap<Block, BlockState>()
     private val emission = runCatching { BlockData::class.java.getMethod("getLightEmission") }.getOrNull()
 
-    val woolColors = listOf(
-        Material.RED_WOOL,
-        Material.ORANGE_WOOL,
-        Material.YELLOW_WOOL,
-        Material.LIME_WOOL,
-        Material.CYAN_WOOL,
-        Material.LIGHT_BLUE_WOOL,
-        Material.BLUE_WOOL,
-        Material.PURPLE_WOOL,
-        Material.MAGENTA_WOOL,
-        Material.PINK_WOOL,
+    val colorCycle = listOf(
+        "RED",
+        "ORANGE",
+        "YELLOW",
+        "LIME",
+        "CYAN",
+        "LIGHT_BLUE",
+        "BLUE",
+        "PURPLE",
+        "MAGENTA",
+        "PINK",
     )
+
+    private val dyePrefixes = setOf(
+        "WHITE", "ORANGE", "MAGENTA", "LIGHT_BLUE",
+        "YELLOW", "LIME", "PINK", "GRAY",
+        "LIGHT_GRAY", "CYAN", "PURPLE", "BLUE",
+        "BROWN", "GREEN", "RED", "BLACK",
+    )
+
+    // Ordered longest-suffix-first so _GLAZED_TERRACOTTA matches before _TERRACOTTA,
+    // _CONCRETE_POWDER before _CONCRETE, _STAINED_GLASS_PANE before _STAINED_GLASS, etc.
+    private val dyedSuffixes = listOf(
+        "GLAZED_TERRACOTTA",
+        "TERRACOTTA",
+        "CONCRETE_POWDER",
+        "CONCRETE",
+        "STAINED_GLASS_PANE",
+        "STAINED_GLASS",
+        "WOOL_STAIRS",
+        "WOOL_SLAB",
+        "WOOL",
+        "CARPET",
+        "WALL_BANNER",
+        "BANNER",
+        "CANDLE",
+    )
+
+    val woolColors = colorCycle.map { Material.valueOf("${it}_WOOL") }
 
     val supportedBlockNames = listOf(
         "Redstone Lamp",
@@ -37,6 +64,12 @@ object LightBlock {
         "Jack o'Lantern",
         "Beacon (color-changing beam)",
         "Wool (color-changing)",
+        "Concrete / Powder",
+        "Stained Glass / Panes",
+        "Terracotta / Glazed",
+        "Carpets",
+        "Banners",
+        "Candles",
         "Redstone Block",
         "Magma Block",
         "Crying Obsidian",
@@ -44,8 +77,19 @@ object LightBlock {
         "End Portal Frame",
     )
 
+    internal fun dyedFamily(material: Material): String? {
+        val name = material.name
+        val suffix = dyedSuffixes.firstOrNull { name.endsWith("_$it") } ?: return null
+        val prefix = name.removeSuffix("_$suffix")
+        return if (prefix in dyePrefixes) suffix else null
+    }
+
     fun isWool(material: Material): Boolean = material.name.endsWith("_WOOL")
+    fun isDyedColorBlock(material: Material): Boolean = dyedFamily(material) != null
     fun woolForStep(step: Int): Material = woolColors[step.mod(woolColors.size)]
+    fun dyedMaterialForStep(family: String, step: Int): Material? =
+        Material.getMaterial("${colorCycle[step.mod(colorCycle.size)]}_$family")
+    fun dyedOffMaterial(family: String): Material? = Material.getMaterial("BLACK_$family")
 
     fun bandColorOffset(band: LightBand): Int = when (band) {
         LightBand.DEEP_BASS -> 0
@@ -59,8 +103,9 @@ object LightBlock {
     }
 
     fun supports(data: BlockData): Boolean {
+        if (isDyedColorBlock(data.material) || data.material.name == "CANDLE") return true
         if (!data.material.isSolid) return false
-        if (data.material == Material.REDSTONE_BLOCK || data.material == Material.BEACON || isWool(data.material)) return true
+        if (data.material == Material.REDSTONE_BLOCK || data.material == Material.BEACON) return true
         val probe = data.clone()
         if (probe is Lightable) probe.isLit = true
         return if (emission != null) (emission.invoke(probe) as Int) > 0 else
@@ -68,9 +113,27 @@ object LightBlock {
     }
 
     fun original(saved: String?): BlockData? = saved?.let { runCatching { Bukkit.createBlockData(it) }.getOrNull() }
-    fun matches(block: Block, original: BlockData): Boolean = when {
-        isWool(original.material) -> isWool(block.type) || block.type == Material.BLACK_CONCRETE
-        else -> block.type == original.material || (original !is Lightable && block.type == Material.BLACK_CONCRETE)
+    fun matches(block: Block, original: BlockData): Boolean {
+        val family = dyedFamily(original.material)
+        return when {
+            family != null -> dyedFamily(block.type) == family || block.type == Material.BLACK_CONCRETE
+            else -> block.type == original.material || (original !is Lightable && block.type == Material.BLACK_CONCRETE)
+        }
+    }
+
+    private fun resolveVariant(
+        original: BlockData,
+        targetMat: Material,
+        colorResolver: (Material) -> BlockData?
+    ): BlockData {
+        if (targetMat == original.material) return original
+        val raw = runCatching { original.asString }.getOrNull()
+        val props = raw?.substringAfter('[', "")
+        if (!props.isNullOrEmpty()) {
+            val withProps = runCatching { Bukkit.createBlockData("minecraft:${targetMat.name.lowercase()}[$props") }.getOrNull()
+            if (withProps != null) return withProps
+        }
+        return colorResolver(targetMat) ?: original
     }
 
     fun update(
@@ -83,10 +146,19 @@ object LightBlock {
         if (!matches(block, original)) { tileStates.remove(block); return }
         // Beacon beams are handled by BeaconShutter; never replace a beacon during playback.
         if (original.material == Material.BEACON) return
-        if (isWool(original.material)) {
-            val targetMat = if (!on) Material.BLACK_WOOL else if (colorStep >= 0) woolForStep(colorStep) else original.material
-            val target = if (targetMat == original.material) original else (colorResolver(targetMat) ?: original)
+        val family = dyedFamily(original.material)
+        if (family != null) {
+            val targetMat = (if (!on) dyedOffMaterial(family)
+            else if (colorStep >= 0) dyedMaterialForStep(family, colorStep)
+            else original.material) ?: original.material
+            val target = resolveVariant(original, targetMat, colorResolver).let { resolved ->
+                if (resolved is Lightable) resolved.clone().also { (it as Lightable).isLit = on } else resolved
+            }
             if (block.blockData != target) {
+                if (block.type == original.material && (family == "BANNER" || family == "WALL_BANNER")) {
+                    val state = runCatching { block.state }.getOrNull()
+                    if (state is TileState) tileStates.putIfAbsent(block, state)
+                }
                 block.setBlockData(target, false)
             }
             return
@@ -110,7 +182,7 @@ object LightBlock {
 
     fun restore(block: Block, original: BlockData) {
         if (!matches(block, original)) { tileStates.remove(block); return }
-        if (original is Lightable) update(block, original, false)
+        if (original is Lightable && dyedFamily(original.material) == null) update(block, original, false)
         else if (block.blockData != original) {
             block.setBlockData(original.clone(), original.material == Material.REDSTONE_BLOCK)
             tileStates.remove(block)?.update(true, false)

@@ -68,5 +68,20 @@ class VideoSourceResolverTest {
         assertEquals("The Beatles", "The Beatles - TOPIC".replace(Regex("(?i)\\s*-\\s*topic$"), "").trim())
         assertEquals("Regular Artist", "Regular Artist".replace(Regex("(?i)\\s*-\\s*topic$"), "").trim())
     }
+
+    @Test
+    fun `resolves soundcloud tracks to artwork when available`() {
+        val scUrl = "https://soundcloud.com/artist/track-name"
+        val shortScUrl = "https://on.soundcloud.com/abc123"
+        assertTrue(VideoSourceResolver.isSoundCloudUrl(scUrl))
+        assertTrue(VideoSourceResolver.isSoundCloudUrl(shortScUrl))
+        assertFalse(VideoSourceResolver.isSoundCloudUrl("https://example.com/music.mp3"))
+
+        assertEquals(
+            "https://i1.sndcdn.com/artworks-000123-t500x500.jpg",
+            VideoSourceResolver.resolveVideoUrl(scUrl, artworkUrl = "https://i1.sndcdn.com/artworks-000123-t500x500.jpg")
+        )
+        assertEquals(scUrl, VideoSourceResolver.resolveVideoUrl(scUrl))
+    }
 }
 

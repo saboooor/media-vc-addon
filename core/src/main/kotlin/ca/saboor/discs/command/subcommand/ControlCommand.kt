@@ -316,7 +316,9 @@ class ControlCommand(
             body += Component.text("Light falloff: $falloffSummary", NamedTextColor.GOLD)
             val waveMode = lamps.isWaveMode(block)
             val chaseMode = lamps.isChaseMode(block)
-            bodyLampButtons(buttons, prefix, count, lamps.isHighlighting(block), waveMode, chaseMode, lamps.lightEffectsEnabled(player))
+            val waveSpeed = lamps.waveSpeed(block)
+            val chaseSpeed = lamps.chaseSpeed(block)
+            bodyLampButtons(buttons, prefix, count, lamps.isHighlighting(block), waveMode, chaseMode, lamps.lightEffectsEnabled(player), waveSpeed, chaseSpeed)
             buttons += "Back to playback" to (prefix + "refresh")
         }
         if (lampFalloffMenu) {
@@ -512,12 +514,17 @@ class ControlCommand(
             waveMode: Boolean = false,
             chaseMode: Boolean = false,
             effectsEnabled: Boolean = false,
+            waveSpeed: Double = 1.0,
+            chaseSpeed: Double = 1.0,
         ) {
+            fun formatSpeed(s: Double) = if (s % 1.0 == 0.0) "${s.toInt()}×" else "${s}×"
             buttons += "Configure lights" to (prefix + "lamp_link")
             buttons += "Configure theatre lights" to (prefix + "lamp_theatre")
             buttons += "Falloff settings" to (prefix + "lamp_falloff_menu")
             buttons += (if (waveMode) "✓ Wave ripple mode" else "Wave ripple mode") to (prefix + "lamp_wave")
+            buttons += "Ripple speed: ${formatSpeed(waveSpeed)}" to (prefix + "lamp_wave_speed")
             buttons += (if (chaseMode) "✓ Beat chase mode" else "Beat chase mode") to (prefix + "lamp_chase")
+            buttons += "Chase speed: ${formatSpeed(chaseSpeed)}" to (prefix + "lamp_chase_speed")
             if (count > 0) {
                 buttons += (if (effectsEnabled) "Hide light effects for me" else "Show light effects for me") to (if (effectsEnabled) "/disc lights hide" else "/disc lights show")
                 buttons += (if (isShowing) "Hide lights" else "Show lights") to (prefix + "lamp_show")
@@ -656,10 +663,26 @@ class ControlCommand(
                 show(player, session.block, lampMenu = true)
                 return
             }
+            "lamp_wave_speed" -> {
+                val lamps = bassLamps ?: return
+                val speed = lamps.cycleWaveSpeed(session.block)
+                val label = if (speed % 1.0 == 0.0) "${speed.toInt()}×" else "${speed}×"
+                player.sendMessage(Component.text("Wave ripple speed set to $label."))
+                show(player, session.block, lampMenu = true)
+                return
+            }
             "lamp_chase" -> {
                 val lamps = bassLamps ?: return
                 val enabled = lamps.toggleChaseMode(session.block)
                 player.sendMessage(Component.text(if (enabled) "Beat chase mode enabled (paired lights alternate on beats)." else "Beat chase mode disabled."))
+                show(player, session.block, lampMenu = true)
+                return
+            }
+            "lamp_chase_speed" -> {
+                val lamps = bassLamps ?: return
+                val speed = lamps.cycleChaseSpeed(session.block)
+                val label = if (speed % 1.0 == 0.0) "${speed.toInt()}×" else "${speed}×"
+                player.sendMessage(Component.text("Beat chase speed set to $label."))
                 show(player, session.block, lampMenu = true)
                 return
             }

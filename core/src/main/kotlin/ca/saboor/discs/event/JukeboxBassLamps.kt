@@ -118,6 +118,9 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     private val falloffs = ConcurrentHashMap<Position, Double>()
     private val waveModes = ConcurrentHashMap.newKeySet<Position>()
     private val chaseModes = ConcurrentHashMap.newKeySet<Position>()
+    private val waveSpeeds = ConcurrentHashMap<Position, Double>()
+    private val chaseSpeeds = ConcurrentHashMap<Position, Double>()
+    private val speedPresets = listOf(0.5, 1.0, 1.5, 2.0, 3.0)
     fun isAutoFalloff(jukebox: Block): Boolean = !falloffs.containsKey(Position.of(jukebox))
     fun setAutoFalloff(jukebox: Block, auto: Boolean = true) {
         val pos = Position.of(jukebox)
@@ -145,6 +148,28 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
     fun toggleChaseMode(jukebox: Block): Boolean {
         val next = !isChaseMode(jukebox)
         setChaseMode(jukebox, next)
+        return next
+    }
+    fun waveSpeed(jukebox: Block): Double = waveSpeeds[Position.of(jukebox)] ?: 1.0
+    fun setWaveSpeed(jukebox: Block, speed: Double) {
+        require(speed.isFinite() && speed in 0.25..4.0)
+        waveSpeeds[Position.of(jukebox)] = speed
+    }
+    fun cycleWaveSpeed(jukebox: Block): Double {
+        val cur = waveSpeed(jukebox)
+        val next = speedPresets[(speedPresets.indexOf(cur) + 1) % speedPresets.size]
+        setWaveSpeed(jukebox, next)
+        return next
+    }
+    fun chaseSpeed(jukebox: Block): Double = chaseSpeeds[Position.of(jukebox)] ?: 1.0
+    fun setChaseSpeed(jukebox: Block, speed: Double) {
+        require(speed.isFinite() && speed in 0.25..4.0)
+        chaseSpeeds[Position.of(jukebox)] = speed
+    }
+    fun cycleChaseSpeed(jukebox: Block): Double {
+        val cur = chaseSpeed(jukebox)
+        val next = speedPresets[(speedPresets.indexOf(cur) + 1) % speedPresets.size]
+        setChaseSpeed(jukebox, next)
         return next
     }
     private fun effectiveFalloff(jukebox: Position, controls: PlaybackControls?): Double {
@@ -649,7 +674,9 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
             var previousLightAudience: Map<UUID, Player> = emptyMap()
             var nextMaintenance = 0L
             var validSources: Map<Position, Boolean> = emptyMap()
+            var loopTicks = 0
             while (isActive) {
+                loopTicks++
                 val updateStarted = System.nanoTime()
                 val snapshot = linkedIndex()
                 val maintenance = System.nanoTime() >= nextMaintenance
@@ -750,6 +777,9 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
                         playing = key.jukebox in playingSources,
                         ripple = waveModes.contains(key.jukebox),
                         chase = chaseModes.contains(key.jukebox) && size >= 2,
+                        rippleSpeed = waveSpeeds[key.jukebox] ?: 1.0,
+                        chaseSpeed = chaseSpeeds[key.jukebox] ?: 1.0,
+                        tickCount = loopTicks,
                     )
                 }
                 val active = playingSources.mapNotNullTo(HashSet()) { sourceControls[it] }
@@ -894,6 +924,8 @@ class JukeboxBassLamps(private val jukeboxes: JukeboxEventListener) : Listener, 
             falloffs.remove(it)
             waveModes.remove(it)
             chaseModes.remove(it)
+            waveSpeeds.remove(it)
+            chaseSpeeds.remove(it)
             envelopes.keys.removeIf { key -> key.jukebox == it }
             bandHistories.keys.removeIf { key -> key.jukebox == it }
             highlightJobs.remove(it)?.cancel()

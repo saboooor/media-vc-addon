@@ -75,7 +75,9 @@ class PlaybackMenusTest {
         )
         assertTrue(buttons.any { it.first == "Configure lights" && it.second.endsWith("lamp_link") })
         assertTrue(buttons.any { it.first == "✓ Wave ripple mode" && it.second.endsWith("lamp_wave") })
+        assertTrue(buttons.any { it.first == "Ripple speed: 1×" && it.second.endsWith("lamp_wave_speed") })
         assertTrue(buttons.any { it.first == "✓ Beat chase mode" && it.second.endsWith("lamp_chase") })
+        assertTrue(buttons.any { it.first == "Chase speed: 1×" && it.second.endsWith("lamp_chase_speed") })
 
         val dyeMaterials = ca.saboor.discs.visualizer.LightBand.entries.map { band ->
             ca.saboor.discs.event.JukeboxBassLamps.bandDyeMaterial(band)

@@ -75,7 +75,7 @@ class SearchCommand : SubCommand() {
         }
 
         val tracks = try {
-            audioPlayerManager.getPlaylist("ytsearch:$query").await().tracks
+            audioPlayerManager.getPlaylist(searchIdentifier(query)).await().tracks
         } catch (e: Exception) {
             val errorMsg = e.message ?: "Unexpected error"
             if (voicePlayer != null) {
@@ -149,4 +149,19 @@ class SearchCommand : SubCommand() {
 
     override fun checkCanExecute(sender: CommandSender): Boolean =
         sender.hasPermission("pv.addon.discs.search") || sender.hasPermission("vc.addon.discs.search")
+
+    companion object {
+        internal fun searchIdentifier(query: String): String {
+            val trimmed = query.trim()
+            val lower = trimmed.lowercase()
+            return when {
+                lower.startsWith("ytsearch:") || lower.startsWith("ytmsearch:") || lower.startsWith("scsearch:") -> trimmed
+                lower.startsWith("soundcloud:") -> "scsearch:${trimmed.substringAfter(':').trimStart()}"
+                lower.startsWith("sc:") -> "scsearch:${trimmed.substringAfter(':').trimStart()}"
+                lower.startsWith("soundcloud ") -> "scsearch:${trimmed.substringAfter(' ').trimStart()}"
+                lower.startsWith("sc ") -> "scsearch:${trimmed.substringAfter(' ').trimStart()}"
+                else -> "ytsearch:$trimmed"
+            }
+        }
+    }
 }

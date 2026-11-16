@@ -606,7 +606,12 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 }
         }
 
-        lavaPlayerManager.registerSourceManagerCatching("soundcloud") { SoundCloudAudioSourceManager.createDefault() }
+        lavaPlayerManager.registerSourceManagerCatching("soundcloud") {
+            ca.saboor.discs.audio.SoundCloudFallbackAudioSourceManager(
+                ytdlpExecutable = { config.youtubeSource.ytdlpPath.ifBlank { config.screen.ytdlpPath } },
+                ytdlpConfig = { config.youtubeSource.ytdlpConfig },
+            )
+        }
         lavaPlayerManager.registerSourceManagerCatching("bandcamp") { BandcampAudioSourceManager() }
         lavaPlayerManager.registerSourceManagerCatching("vimeo") { VimeoAudioSourceManager() }
         lavaPlayerManager.registerSourceManagerCatching("twitch") { TwitchStreamAudioSourceManager() }

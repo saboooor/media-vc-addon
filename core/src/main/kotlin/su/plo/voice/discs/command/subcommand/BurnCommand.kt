@@ -154,9 +154,18 @@ class BurnCommand : SubCommand() {
             val track = try {
                 val song = withContext(Dispatchers.IO) { PublicPlaylistClient().loadSong(identifier) }
                 progressStage.set("Loading audio")
-                if (song == null) audioPlayerManager.getTrack(identifier).await()
-                else withTimeout(30_000L) {
-                    audioPlayerManager.getPlaylist("ytsearch:${song.query}").await().tracks.firstOrNull()
+                if (song == null) {
+                    val lowerId = identifier.trim().lowercase()
+                    if (lowerId.startsWith("scsearch:") || lowerId.startsWith("soundcloud:") || lowerId.startsWith("sc:")) {
+                        val searchQuery = SearchCommand.searchIdentifier(identifier)
+                        audioPlayerManager.getPlaylist(searchQuery).await().tracks.firstOrNull()
+                            ?: error("No playable SoundCloud match for $identifier")
+                    } else {
+                        audioPlayerManager.getTrack(identifier).await()
+                    }
+                } else withTimeout(30_000L) {
+                    runCatching { audioPlayerManager.getPlaylist("ytsearch:${song.query}").await().tracks.firstOrNull() }.getOrNull()
+                        ?: runCatching { audioPlayerManager.getPlaylist("scsearch:${song.query}").await().tracks.firstOrNull() }.getOrNull()
                         ?: error("No playable match for ${song.artist} - ${song.title}")
                 }
             } catch (e: Exception) {
