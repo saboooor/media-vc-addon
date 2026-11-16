@@ -35,6 +35,7 @@ public class ScreensClient implements ClientModInitializer {
     private static final AtomicBoolean decoding = new AtomicBoolean();
     private static long session, revision;
     private static int ticks;
+    private static boolean helloSent;
     private static net.minecraft.client.multiplayer.ClientLevel level;
 
     @Override public void onInitializeClient() {
@@ -49,7 +50,17 @@ public class ScreensClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.level != level) { reset(); level = client.level; }
             // Bukkit advertises its plugin channels after the play connection is established.
-            if (++ticks % 100 == 0 && ClientPlayNetworking.canSend(HelloPayload.TYPE)) ClientPlayNetworking.send(new HelloPayload());
+            // Send immediately as soon as the channel is ready, then refresh periodically.
+            if (ClientPlayNetworking.canSend(HelloPayload.TYPE)) {
+                if (!helloSent || ++ticks >= 100) {
+                    helloSent = true;
+                    ticks = 0;
+                    ClientPlayNetworking.send(new HelloPayload());
+                }
+            } else {
+                helloSent = false;
+                ticks = 0;
+            }
         });
     }
 
@@ -142,7 +153,12 @@ public class ScreensClient implements ClientModInitializer {
         }
         NativeImage image = texture.image.getPixels();
         if (image == null) return;
-        for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) image.setPixel(x, y, frame.pixels[y * width + x] | 0xff000000);
+        int[] pixels = frame.pixels;
+        int rowOffset = 0;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) image.setPixel(x, y, pixels[rowOffset + x] | 0xff000000);
+            rowOffset += width;
+        }
         texture.image.upload();
     }
 
@@ -161,6 +177,6 @@ public class ScreensClient implements ClientModInitializer {
     private static void reset() {
         session++; videos.clear(); videoSessions.clear(); pending.clear(); decoded.clear(); revisions.clear(); assembler.reset();
         for (int id : new ArrayList<>(textures.keySet())) release(id);
-        ticks = 0; level = null;
+        ticks = 0; helloSent = false; level = null;
     }
 }
