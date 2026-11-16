@@ -358,8 +358,8 @@ class AddonConfig {
         @ConfigField(comment = "Companion JPEG quality, 40-95. Higher uses more network bandwidth")
         var companionQuality: Int = 85
 
-        @ConfigField(comment = "Companion resolution: map, 720p, 1080p, or source (up to 4K). Source content is never upscaled; settings apply to new playback")
-        var companionResolution: String = "1080p"
+        @ConfigField(comment = "Companion resolution: map, 720p, 1080p, or source (up to 4K). Default 'map' sends accurate 24-bit RGB colors at map resolution")
+        var companionResolution: String = "map"
 
         @ConfigField(comment = "Companion video codec: h264 (native FFmpeg libx264) or jpeg. Artwork uses JPEG. Applies to new playback")
         var companionCodec: String = "h264"

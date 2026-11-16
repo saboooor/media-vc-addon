@@ -12,6 +12,8 @@ class CompanionResolutionTest {
         assertEquals(CompanionResolution.Size(960, 720), CompanionResolution.size(512, 384, "720p"))
         assertEquals(CompanionResolution.Size(2880, 2160), CompanionResolution.size(512, 384, "source"))
         assertEquals(CompanionResolution.Size(512, 384), CompanionResolution.size(512, 384, "invalid"))
+        assertEquals(CompanionResolution.Size(512, 384), CompanionResolution.mapSize(512, 384))
+        assertEquals(CompanionResolution.Size(640, 355), CompanionResolution.mapSize(1152, 640))
     }
 
     @Test fun `vanilla fallback is resized independently with blended RGB pixels`() {

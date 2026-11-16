@@ -33,6 +33,7 @@ class VideoAudioSyncTest {
     @Test fun `late frames are presented when decode buffer has no newer frame queued`() {
         val delivery = VideoFrameDelivery()
         assertFalse(delivery.shouldDrop(0, 5540, 0, hasQueuedFrames = false))
+        assertTrue(delivery.shouldDrop(20, 5560, 10_000_000, hasQueuedFrames = false))
         assertFalse(delivery.shouldDrop(42, 5582, 42_000_000, hasQueuedFrames = false))
         assertFalse(delivery.shouldDrop(83, 5623, 83_000_000, hasQueuedFrames = false))
         assertTrue(delivery.shouldDrop(125, 5665, 125_000_000, hasQueuedFrames = true))
@@ -44,3 +45,4 @@ class VideoAudioSyncTest {
         assertNull(VideoAudioSync.timestamp("out_time_us=500000"))
     }
 }
+

@@ -20,7 +20,11 @@ import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.Audio
 class YtDlpAudioPlaybackTest {
     @TempDir lateinit var directory: Path
 
-    @Test fun `extracted tracks and clones decode audio with required headers and YouTube identity`() {
+    @Test fun `extracted tracks and clones decode audio with required headers and YouTube identity`() = playback(false)
+
+    @Test fun `media requests use configured proxy even when origin is unreachable`() = playback(true)
+
+    private fun playback(useProxy: Boolean) {
         assumeTrue(java.io.File("/bin/sh").canExecute())
         val pcmSize = 48000 * 2 * 2 * 2
         val wave = ByteBuffer.allocate(44 + pcmSize).order(ByteOrder.LITTLE_ENDIAN).apply {
@@ -33,10 +37,12 @@ class YtDlpAudioPlaybackTest {
             }
         }.array()
         val agents = CopyOnWriteArrayList<String?>()
+        val requestedUris = CopyOnWriteArrayList<String>()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/audio.wav") { exchange ->
             try {
                 agents += exchange.requestHeaders.getFirst("User-Agent")
+                requestedUris += exchange.requestURI.toString()
                 val range = exchange.requestHeaders.getFirst("Range")
                 val start = range?.substringAfter("bytes=")?.substringBefore('-')?.toInt() ?: 0
                 exchange.responseHeaders.set("Content-Type", "audio/wav")
@@ -48,10 +54,11 @@ class YtDlpAudioPlaybackTest {
             } finally { exchange.close() }
         }
         server.start()
+        val mediaUrl = if (useProxy) "http://media.invalid/audio.wav" else "http://127.0.0.1:${server.address.port}/audio.wav"
         val script = directory.resolve("fake-ytdlp").toFile().apply {
             writeText("""#!/bin/sh
 cat <<'JSON'
-{"id":"abcdefghijk","title":"Song","uploader":"Artist","duration":2,"url":"http://127.0.0.1:${server.address.port}/audio.wav","http_headers":{"User-Agent":"required-test-agent"}}
+{"id":"abcdefghijk","title":"Song","uploader":"Artist","duration":2,"url":"$mediaUrl","http_headers":{"User-Agent":"required-test-agent"}}
 JSON
 """)
             assertTrue(setExecutable(true))
@@ -60,7 +67,9 @@ JSON
             configuration.outputFormat = StandardAudioDataFormats.DISCORD_PCM_S16_LE
             setUseSeekGhosting(false)
         }
-        val source = YtDlpAudioSourceManager(YtDlpClient(script.path))
+        val source = YtDlpAudioSourceManager(YtDlpClient(script.path), if (useProxy) java.util.function.Consumer { builder ->
+            builder.setProxy(su.plo.voice.lavaplayer.libs.org.apache.http.HttpHost("127.0.0.1", server.address.port))
+        } else null)
         manager.registerSourceManager(source)
         try {
             val track = source.loadItem(manager, AudioReference("https://youtu.be/abcdefghijk", null)) as AudioTrack
@@ -83,6 +92,7 @@ JSON
             }
             assertTrue(agents.isNotEmpty())
             assertTrue(agents.all { it == "required-test-agent" })
+            if (useProxy) assertTrue(requestedUris.all { it == mediaUrl })
         } finally { manager.shutdown(); server.stop(0) }
     }
 }

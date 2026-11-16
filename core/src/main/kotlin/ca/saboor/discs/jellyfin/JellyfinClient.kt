@@ -80,8 +80,31 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
                 // Jellyfin keys progressive transcode files by session, not startTimeTicks.
                 "&playSessionId=${java.util.UUID.randomUUID()}"
 
-    fun videoStreamUrl(session: Session, itemId: String): String =
-        session.baseUrl + "Videos/${mediaId(itemId)}/stream?static=true"
+    fun videoStreamUrl(
+        session: Session,
+        itemId: String,
+        width: Int? = null,
+        height: Int? = null,
+        maxFramerate: Int? = null,
+        videoBitRate: Int = 4_000_000,
+        startPositionMs: Long = 0,
+        static: Boolean = width == null && height == null && maxFramerate == null && startPositionMs <= 0
+    ): String {
+        val id = mediaId(itemId)
+        if (static) return session.baseUrl + "Videos/$id/stream?static=true"
+        return buildString {
+            append(session.baseUrl)
+            append("Videos/").append(id).append("/stream.mkv?static=false")
+            append("&videoCodec=h264&allowVideoStreamCopy=false&allowAudioStreamCopy=false")
+            if (width != null && width > 0) append("&maxWidth=").append((width + 1) and -2)
+            if (height != null && height > 0) append("&maxHeight=").append((height + 1) and -2)
+            if (maxFramerate != null && maxFramerate > 0) append("&maxFramerate=").append(maxFramerate)
+            append("&videoBitRate=").append(videoBitRate.coerceIn(256_000, 20_000_000))
+            append("&audioStreamIndex=-1&subtitleStreamIndex=-1")
+            append("&startTimeTicks=").append(startPositionMs.coerceIn(0, Long.MAX_VALUE / 10_000) * 10_000)
+            append("&playSessionId=").append(UUID.randomUUID())
+        }
+    }
 
     data class AudioTrack(val index: Int, val displayTitle: String, val language: String,
                           val isDefault: Boolean, val mediaSourceId: String)

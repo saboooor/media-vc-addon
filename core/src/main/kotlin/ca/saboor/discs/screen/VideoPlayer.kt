@@ -42,7 +42,8 @@ class VideoPlayer(
     private val companionBitrateKbps: Int = 4000,
     private val companionResolution: String = "map",
     val playbackPositionMs: (() -> Long?)? = null,
-    private val sourceHeaders: Map<String, String> = emptyMap()
+    private val sourceHeaders: Map<String, String> = emptyMap(),
+    private val streamUrlProvider: ((width: Int, height: Int, fps: Int, startPositionMs: Long) -> String)? = null
 ) {
     @Volatile var fps: Int = fps.coerceIn(1, 30)
         private set
@@ -82,7 +83,15 @@ class VideoPlayer(
 
     private val totalWidth = screen.totalWidthPixels
     private val totalHeight = screen.totalHeightPixels
-    private val videoSize = CompanionResolution.size(totalWidth, totalHeight, if (companionRgb) companionResolution else "map")
+    private val mapVideoSize = CompanionResolution.mapSize(totalWidth, totalHeight)
+    // Companion defaults to accurate 24-bit RGB colors at map resolution rather than 1080p decode/re-encode;
+    // treat legacy "1080p" config default as map resolution, and downgrade any explicit HD mode if lagging.
+    private val videoSize = if (!companionRgb || companionResolution.equals("map", true) || companionResolution.equals("1080p", true)) {
+        mapVideoSize
+    } else {
+        CompanionResolution.size(totalWidth, totalHeight, companionResolution)
+    }
+    @Volatile private var downgradedToMap = false
     private val mapScaler = RgbFrameScaler()
     private val fallbackRgbEncoder = CompanionFrameEncoder()
     private val rows = screen.rows
@@ -137,6 +146,8 @@ class VideoPlayer(
                             try {
                                 runPlayback(resumePositionMs)
                                 break
+                            } catch (e: ResyncPlayback) {
+                                resumePositionMs = e.positionMs.coerceAtLeast(0)
                             } catch (e: StalledPlayback) {
                                 if (++recoveries > 3) {
                                     logger.error("Video for screen '${screen.name}' stalled repeatedly; stopping playback")
@@ -193,20 +204,26 @@ class VideoPlayer(
             }
         }
 
-        val isNetworkStream = sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://")
+        val usingHighResolution = !downgradedToMap && companionRgb &&
+            videoSize != mapVideoSize &&
+            getNearbyPlayers().any(CompanionScreens::capable)
+        val activeVideoSize = if (usingHighResolution) videoSize else mapVideoSize
 
-        // Decode at high companion resolution only when a negotiated companion client is viewing;
-        // otherwise decode directly at map resolution to avoid unnecessary 1080p/4K scaling & tone-mapping work.
-        val usingHighResolution = companionRgb && getNearbyPlayers().any(CompanionScreens::capable)
-        val activeVideoSize = if (usingHighResolution) videoSize
-            else CompanionResolution.Size(totalWidth, totalHeight)
+        val effectiveStartMs = maxOf(startPositionMs, playbackPositionMs?.invoke() ?: 0L)
+        val effectiveSourceUrl = streamUrlProvider?.invoke(
+            activeVideoSize.width,
+            activeVideoSize.height,
+            fps,
+            effectiveStartMs
+        ) ?: sourceUrl
+        val isNetworkStream = effectiveSourceUrl.startsWith("http://") || effectiveSourceUrl.startsWith("https://")
 
         // MP4 metadata can live after the media data, including on initial playback.
         // Keep every network input seekable so FFmpeg can probe the end and return
         // to the first packet without buffering the entire original-quality file.
         val seekProxy = if (isNetworkStream) VideoSeekProxy(
-            sourceUrl,
-            chooseUserAgent(sourceUrl),
+            effectiveSourceUrl,
+            chooseUserAgent(effectiveSourceUrl),
             sourceAuthorization,
             sourceHeaders
         ) else null
@@ -215,29 +232,25 @@ class VideoPlayer(
         val colorInfoReady = CompletableDeferred<VideoColorInfo>()
         var toneMapper: VideoToneMapper? = null
 
-        val effectiveStartMs = maxOf(startPositionMs, playbackPositionMs?.invoke() ?: 0L)
         val command = mutableListOf<String>()
         command.add(ffmpegPath)
         command.add("-hide_banner")
         command.add("-nostats")
         command.addAll(listOf("-progress", "pipe:2"))
-        if (effectiveStartMs > 0) {
+        if (effectiveStartMs > 0 && streamUrlProvider == null) {
             val sec = effectiveStartMs / 1000.0
+            command.add("-noaccurate_seek")
             command.add("-ss")
             command.add(String.format(Locale.US, "%.3f", sec))
         }
         if (seekProxy != null) command.addAll(proxiedInputOptions())
-        // Limit initial container probing so sparse PGS subtitle tracks do not force
-        // a 5-second read before the first video frame is decoded.
-        command.addAll(listOf("-probesize", "1048576", "-analyzeduration", "500000"))
-        // Use multi-threaded input decoding and skip in-loop deblocking/SAO filtering
-        // on the source stream, while keeping the rawvideo output encoder single-threaded.
-        val decodeThreads = Runtime.getRuntime().availableProcessors().coerceIn(2, 16)
-        command.addAll(listOf("-threads", decodeThreads.toString(), "-skip_loop_filter", "all"))
+        // Keep normal probing and decoder filtering for original Jellyfin files. Bounded
+        // decode-ahead handles delivery jitter without trading away codec correctness/quality.
+        command.addAll(decoderInputOptions())
         command.add("-i")
-        command.add(seekProxy?.url ?: sourceUrl)
+        command.add(seekProxy?.url ?: effectiveSourceUrl)
         command.addAll(listOf("-map", "0:v:0", "-an", "-sn", "-dn"))
-        command.addAll(listOf("-sws_flags", "fast_bilinear"))
+        command.addAll(listOf("-sws_flags", "fast_bilinear", "-filter_threads", "2"))
         command.add("-vf")
         // Drop surplus source frames before scaling and padding.
         val audioClock = playbackPositionMs
@@ -259,24 +272,27 @@ class VideoPlayer(
         val stderrLines = ConcurrentLinkedQueue<String>()
         var framesRendered = 0L
         var framesDelivered = 0L
-        val delivery = VideoFrameDelivery()
+        val delivery = VideoFrameDelivery(refreshNanos = 200_000_000L)
         var lastLagWarning: Long? = null
+        var lagCheckStartNanos: Long? = null
+        var lagCheckStartMs = 0L
         var watchdogJob: Job? = null
         var decoderJob: Job? = null
+        var stderrJob: Job? = null
         // Allow initial container probing / keyframe seek up to 30s before the first frame arrives;
         // once decoding starts, enforce a 15s per-frame read timeout.
         val readMonitor = VideoReadMonitor(TimeUnit.SECONDS.toNanos(30))
         val renderMonitor = VideoReadMonitor(TimeUnit.SECONDS.toNanos(15))
         val renderWarning = AtomicBoolean(false)
         val stalled = AtomicBoolean(false)
-        val waitingForPresentation = AtomicBoolean(false)
+        val resyncing = AtomicBoolean(false)
         val outputPositionUs = AtomicLong(0L)
 
         try {
             proc = ProcessBuilder(command).start()
             process = proc
 
-            val stderrJob = coroutineScope.launch(Dispatchers.IO) {
+            stderrJob = coroutineScope.launch(Dispatchers.IO) {
                 var inputColor: VideoColorInfo? = null
                 var outputStarted = false
                 try {
@@ -293,6 +309,7 @@ class VideoPlayer(
                                     colorInfoReady.complete(if (streamColor.transfer != VideoTransfer.SDR)
                                         streamColor else inputColor ?: streamColor)
                                 } else if (!outputStarted && inputColor == null) inputColor = streamColor
+                                else if (line.contains("showinfo")) colorInfoReady.complete(inputColor ?: VideoColorInfo())
                             }
                             if (line.startsWith("out_time_us=")) {
                                 line.substringAfter('=').toLongOrNull()?.let { outputPositionUs.set(it) }
@@ -318,7 +335,6 @@ class VideoPlayer(
             // Probing/decoder initialization may block before showinfo reports the first size.
             // Include that wait in recovery instead of leaving a silent black screen forever.
             readMonitor.beginRead(System.nanoTime())
-            var decodeBuffer: VideoDecodeBuffer? = null
             watchdogJob = coroutineScope.launch(Dispatchers.IO) {
                 while (isActive && proc.isAlive && !stopped.get()) {
                     delay(1000L)
@@ -327,12 +343,12 @@ class VideoPlayer(
                         logger.warn("Video frame rendering or packet delivery has blocked for 15 seconds " +
                             "on screen '${screen.name}'; frame delivery has not completed")
                     }
-                    // When the decode-ahead buffer is full or presentation is waiting for audio sync,
-                    // FFmpeg's stdout pipe is intentionally backpressured; do not count that as a decoder stall.
-                    val intentionallyWaiting = isPaused || waitingForPresentation.get() || decodeBuffer?.waitingForBuffer == true
-                    if (readMonitor.isStalled(System.nanoTime(), intentionallyWaiting) &&
+                    // The timer only runs inside an actual read, never while acquiring a
+                    // free buffer. Presentation waits must not hide a stalled network read.
+                    if (readMonitor.isStalled(System.nanoTime(), isPaused) &&
                         stalled.compareAndSet(false, true)) {
                         val details = stderrLines.joinToString("\n")
+                            .replace(effectiveSourceUrl, describeSource(effectiveSourceUrl))
                             .replace(sourceUrl, describeSource(sourceUrl))
                         logger.warn("No video frame received for ${readMonitor.timeoutSeconds} seconds on screen '${screen.name}' " +
                             "(FFmpeg alive=${proc.isAlive}, position=${effectiveStartMs + outputPositionUs.get() / 1000}ms). " +
@@ -348,7 +364,7 @@ class VideoPlayer(
             readMonitor.timeoutNanos = TimeUnit.SECONDS.toNanos(15)
             val frameSizeBytes = outputSize.width * outputSize.height * 3
             val rawFrameBuffer = ByteArray(frameSizeBytes)
-            val buffer = VideoDecodeBuffer(frameSizeBytes * 2, fps).also { decodeBuffer = it }
+            val buffer = VideoDecodeBuffer(frameSizeBytes * 2, fps)
             logger.info("Screen '${screen.name}': decoding ahead with ${buffer.capacity} reusable frame buffers " +
                 "(${buffer.capacity.toLong() * frameSizeBytes * 2 / 1024 / 1024} MiB)")
             decoderJob = coroutineScope.launch(Dispatchers.IO) {
@@ -381,32 +397,45 @@ class VideoPlayer(
                     if (audioClock != null) {
                         val syncStarted = System.nanoTime()
                         var syncWarned = false
-                        waitingForPresentation.set(true)
-                        try {
-                            while (!stopped.get() && currentCoroutineContext().isActive) {
-                                if (isPaused) { delay(20L); continue }
-                                val audioMs = audioClock()
-                                if (!syncWarned && System.nanoTime() - syncStarted >= TimeUnit.SECONDS.toNanos(5)) {
-                                    logger.warn("Screen '${screen.name}' is waiting for audio synchronization: video=${videoMs}ms, audio=${audioMs?.let { "${it}ms" } ?: "not available"}")
-                                    syncWarned = true
-                                }
-                                if (audioMs == null) { delay(20L); continue }
-                                val waitMs = VideoAudioSync.waitMillis(videoMs, audioMs)
-                                if (waitMs == 0L) break
-                                delay(waitMs)
+                        while (!stopped.get() && currentCoroutineContext().isActive) {
+                            if (isPaused) { delay(20L); continue }
+                            val audioMs = audioClock()
+                            if (!syncWarned && System.nanoTime() - syncStarted >= TimeUnit.SECONDS.toNanos(5)) {
+                                logger.warn("Screen '${screen.name}' is waiting for audio synchronization: video=${videoMs}ms, audio=${audioMs?.let { "${it}ms" } ?: "not available"}")
+                                syncWarned = true
                             }
-                        } finally {
-                            waitingForPresentation.set(false)
+                            if (audioMs == null) { delay(20L); continue }
+                            val waitMs = VideoAudioSync.waitMillis(videoMs, audioMs)
+                            if (waitMs == 0L) break
+                            delay(waitMs)
                         }
                         currentCoroutineContext().ensureActive()
                         if (stopped.get()) break
                         val audioMs = audioClock() ?: 0L
                         val now = System.nanoTime()
-                        if (delivery.shouldDrop(videoMs, audioMs, now, buffer.hasQueuedFrames)) continue
+                        val lagMs = audioMs - videoMs
+                        if (usingHighResolution && framesDelivered >= 1L) {
+                            if (lagMs >= 1_500L) {
+                                val checkStart = lagCheckStartNanos
+                                if (checkStart == null) {
+                                    lagCheckStartNanos = now
+                                    lagCheckStartMs = lagMs
+                                } else if (now - checkStart >= TimeUnit.MILLISECONDS.toNanos(2_000L) &&
+                                    lagCheckStartMs - lagMs < 500L) {
+                                    downgradedToMap = true
+                                    logger.info("Screen '${screen.name}' video is ${lagMs}ms behind audio at ${outputSize.width}x${outputSize.height}; lowering resolution to ${mapVideoSize.width}x${mapVideoSize.height}")
+                                    resyncing.set(true)
+                                    throw ResyncPlayback(audioMs)
+                                }
+                            } else if (lagMs < 500L) {
+                                lagCheckStartNanos = null
+                            }
+                        }
+                        if (delivery.shouldDrop(videoMs, audioMs, now, buffer.hasQueuedFrames || lagMs > 250L)) continue
                         if (VideoAudioSync.stale(videoMs, audioMs) &&
                             (lastLagWarning == null || now - lastLagWarning!! >= TimeUnit.SECONDS.toNanos(30))) {
                             lastLagWarning = now
-                            logger.warn("Video on screen '${screen.name}' is ${audioMs - videoMs}ms behind audio; " +
+                            logger.warn("Video on screen '${screen.name}' is ${lagMs}ms behind audio; " +
                                 "presenting late frames while catching up. Source decoding or rendering may be too slow")
                         }
                     }
@@ -421,11 +450,11 @@ class VideoPlayer(
                             sliceAndSend(rawFrameBuffer, nearbyPlayers, outputSize.width, outputSize.height)
                             continue
                         }
-                        if (!usingHighResolution && companionRgb &&
-                            (videoSize.width != totalWidth || videoSize.height != totalHeight) &&
+                        if (!usingHighResolution && !downgradedToMap && companionRgb &&
+                            videoSize != mapVideoSize &&
                             nearbyPlayers.any(CompanionScreens::capable)) {
-                            restartPlayback(videoMs)
-                            return
+                            resyncing.set(true)
+                            throw ResyncPlayback(videoMs)
                         }
                         val mapper = toneMapper ?: VideoToneMapper(colorInfoReady.await().also { color ->
                             if (color.transfer != VideoTransfer.SDR) {
@@ -449,7 +478,7 @@ class VideoPlayer(
             }
             if (framesRendered == 0L && !stopped.get()) {
                 withTimeoutOrNull(2000L) {
-                    stderrJob.join()
+                    stderrJob?.join()
                 }
                 val exitCode = try {
                     if (proc.isAlive) {
@@ -473,6 +502,7 @@ class VideoPlayer(
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
+            if (e is ResyncPlayback) throw e
             if (!currentCoroutineContext().isActive || stopped.get()) return
             if (stalled.get()) throw StalledPlayback(effectiveStartMs + outputPositionUs.get() / 1000)
             if (e is java.io.IOException && (e.message?.contains("Cannot run program") == true || e.message?.contains("error: 2") == true || e.message?.contains("error: 13") == true)) {
@@ -502,18 +532,28 @@ class VideoPlayer(
                 // this job before terminating FFmpeg and must not look like an external failure.
                 val exit = if (!p.isAlive) runCatching { p.exitValue() }.getOrNull() else null
                 if (p.isAlive) p.destroyForcibly()
-                if (!stalled.get() && shouldReportExit(exit, !currentCoroutineContext().isActive, stopped.get()) &&
+                if (!stalled.get() && !resyncing.get() && shouldReportExit(exit, !currentCoroutineContext().isActive, stopped.get()) &&
                     framesRendered > 0L && stderrLines.isNotEmpty()) {
-                    val details = stderrLines.joinToString("\n").replace(sourceUrl, describeSource(sourceUrl))
+                    val details = stderrLines.joinToString("\n")
+                        .replace(effectiveSourceUrl, describeSource(effectiveSourceUrl))
+                        .replace(sourceUrl, describeSource(sourceUrl))
                     logger.warn("FFmpeg exited with code $exit for screen '${screen.name}'. Log:\n$details")
                 }
             }
             seekProxy?.close()
+            // Cancellation cannot interrupt a blocking pipe read; destroy FFmpeg first,
+            // then wait for its readers before allocating another screen buffer on seek.
+            withContext(NonCancellable) {
+                decoderJob?.cancelAndJoin()
+                stderrJob?.cancelAndJoin()
+                watchdogJob?.cancelAndJoin()
+            }
             if (process === proc) process = null
         }
     }
 
     private class StalledPlayback(val positionMs: Long) : IOException("Video frame read stalled")
+    private class ResyncPlayback(val positionMs: Long) : IOException("Video resynchronizing with audio")
 
     private suspend fun renderImagePlayback(imgUrl: String) {
         closeH264()
@@ -765,6 +805,13 @@ class VideoPlayer(
             "-reconnect_on_network_error", "1",
             "-reconnect_delay_max", "5"
         )
+
+        internal fun decoderInputOptions(processors: Int = Runtime.getRuntime().availableProcessors()): List<String> =
+            listOf(
+                "-threads", processors.coerceIn(2, 12).toString(),
+                "-flags2", "+fast",
+                "-skip_loop_filter", "noref"
+            )
 
         internal fun videoFilter(fps: Int, width: Int, height: Int, preventUpscale: Boolean = false): String {
             val scale = if (preventUpscale) "scale='min(iw,$width)':'min(ih,$height)':force_original_aspect_ratio=decrease,"

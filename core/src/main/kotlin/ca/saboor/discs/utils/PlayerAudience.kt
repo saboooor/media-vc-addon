@@ -77,8 +77,11 @@ object PlayerAudience : Listener {
     fun onVehicleMove(event: VehicleMoveEvent) {
         fun samplePassengers(entity: org.bukkit.entity.Entity) {
             for (passenger in entity.passengers) {
-                if (passenger is Player && System.nanoTime() - (entries[passenger.uniqueId]?.updated ?: 0L) >= 100_000_000L)
-                    update(passenger, passenger.location)
+                if (passenger is Player) {
+                    screenReady[passenger.uniqueId] = passenger
+                    if (System.nanoTime() - (entries[passenger.uniqueId]?.updated ?: 0L) >= 100_000_000L)
+                        update(passenger, passenger.location)
+                }
                 samplePassengers(passenger)
             }
         }

@@ -20,6 +20,15 @@ internal object CompanionResolution {
             floor(mapHeight * factor).toInt().coerceAtLeast(1))
     }
 
+    fun mapSize(mapWidth: Int, mapHeight: Int, maxWidth: Int = 640, maxHeight: Int = 384): Size {
+        if (mapWidth <= maxWidth && mapHeight <= maxHeight) return Size(mapWidth, mapHeight)
+        val factor = min(maxWidth.toDouble() / mapWidth, maxHeight.toDouble() / mapHeight)
+        return Size(
+            floor(mapWidth * factor).toInt().coerceAtLeast(1),
+            floor(mapHeight * factor).toInt().coerceAtLeast(1)
+        )
+    }
+
     fun parseOutputSize(line: String): Size? {
         if (!line.contains("showinfo")) return null
         val match = SHOWINFO_SIZE_REGEX.find(line) ?: return null

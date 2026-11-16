@@ -548,7 +548,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                     config.youtubeSource.ytdlpConfig)
                 ytDlp = extractor
                 plugin.slF4JLogger.info("YouTube uses yt-dlp for audio and screen video; Java OAuth is not used by this backend")
-                return@registerSourceManagerCatching ca.saboor.discs.youtube.YtDlpAudioSourceManager(extractor)
+                return@registerSourceManagerCatching ca.saboor.discs.youtube.YtDlpAudioSourceManager(extractor, proxyHttpBuilder)
             }
             val youtubeClients = config.youtubeSource.clients
                 ?.mapNotNull {

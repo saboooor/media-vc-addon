@@ -71,4 +71,33 @@ class VideoDecodeBufferTest {
         assertEquals(2, buffer.capacity)
         assertTrue(buffer.capacity.toLong() * bytes <= 96L * 1024 * 1024)
     }
+    @Test fun `presentation wait does not hide stalled decode and full pool does not start a read`() = runBlocking {
+        val buffer = VideoDecodeBuffer(6, 1, 12)
+        val monitor = VideoReadMonitor(15)
+        val allowRead = CompletableDeferred<Unit>()
+        val reading = CompletableDeferred<Unit>()
+        var reads = 0
+        val producer = launch {
+            buffer.decode {
+                monitor.beginRead(0)
+                try {
+                    if (++reads == 2) {
+                        reading.complete(Unit)
+                        allowRead.await()
+                    }
+                    0L
+                } finally { monitor.endRead() }
+            }
+        }
+        try {
+            val presenting = buffer.frames.receive()
+            reading.await()
+            assertTrue(monitor.isStalled(15, false), "Waiting to present a frame must not mask a blocked read")
+            allowRead.complete(Unit)
+            yield()
+            assertTrue(buffer.waitingForBuffer)
+            assertFalse(monitor.isStalled(100, false), "A full frame pool has no read in progress")
+            buffer.release(presenting)
+        } finally { producer.cancelAndJoin() }
+    }
 }

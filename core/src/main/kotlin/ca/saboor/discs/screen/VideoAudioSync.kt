@@ -11,12 +11,18 @@ internal object VideoAudioSync {
 }
 
 /** Drop frames to catch up without starving the screen when source decoding stays slow. */
-internal class VideoFrameDelivery(private val refreshNanos: Long = 500_000_000L) {
+internal class VideoFrameDelivery(
+    private val refreshNanos: Long = 500_000_000L,
+    private val minStaleIntervalNanos: Long = 40_000_000L
+) {
     private var lastPresented: Long? = null
 
     fun shouldDrop(videoMs: Long, audioMs: Long, nowNanos: Long, hasQueuedFrames: Boolean = true): Boolean {
         val previous = lastPresented
-        if (hasQueuedFrames && VideoAudioSync.stale(videoMs, audioMs) && previous != null && nowNanos - previous < refreshNanos) return true
+        if (VideoAudioSync.stale(videoMs, audioMs) && previous != null) {
+            val interval = if (hasQueuedFrames) refreshNanos else minStaleIntervalNanos
+            if (nowNanos - previous < interval) return true
+        }
         lastPresented = nowNanos
         return false
     }

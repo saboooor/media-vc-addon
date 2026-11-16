@@ -386,10 +386,19 @@ class ScreenManager : PluginKoinComponent {
                     null
                 }
             }
+            val jfClient = if (jellyfin != null) JellyfinClient() else null
+            val initialScreenFps = screen.effectiveVideoFps(maxVideoFps)
+            val initialSize = CompanionResolution.mapSize(screen.totalWidthPixels, screen.totalHeightPixels)
             val resolvedUrl = if (externalYoutube != null) externalVideo?.url ?: fallbackImg.orEmpty()
-            else if (jellyfin != null) {
-                val jfClient = JellyfinClient()
-                jfClient.videoStreamUrl(jellyfin.first.session, jellyfin.second.mediaId)
+            else if (jellyfin != null && jfClient != null) {
+                jfClient.videoStreamUrl(
+                    session = jellyfin.first.session,
+                    itemId = jellyfin.second.mediaId,
+                    width = initialSize.width,
+                    height = initialSize.height,
+                    maxFramerate = initialScreenFps,
+                    videoBitRate = config.screen.companionBitrateKbps.coerceIn(256, 20000) * 1000
+                )
             } else VideoSourceResolver.resolveVideoUrl(
                 identifier = identifier,
                 audioPlayerManager = audioPlayerManager,
@@ -416,6 +425,17 @@ class ScreenManager : PluginKoinComponent {
                 sourceUrl = resolvedUrl,
                 sourceAuthorization = sourceAuthorization,
                 sourceHeaders = externalVideo?.headers.orEmpty(),
+                streamUrlProvider = if (jellyfin != null && jfClient != null) { width, height, targetFps, posMs ->
+                    jfClient.videoStreamUrl(
+                        session = jellyfin.first.session,
+                        itemId = jellyfin.second.mediaId,
+                        width = width,
+                        height = height,
+                        maxFramerate = targetFps,
+                        videoBitRate = config.screen.companionBitrateKbps.coerceIn(256, 20000) * 1000,
+                        startPositionMs = posMs
+                    )
+                } else null,
                 playbackPositionMs = playbackPositionMs,
                 companionRgb = config.screen.companionRgb,
                 companionQuality = config.screen.companionQuality,
@@ -423,7 +443,7 @@ class ScreenManager : PluginKoinComponent {
                 companionCodec = config.screen.companionCodec,
                 companionBitrateKbps = config.screen.companionBitrateKbps,
                 ditherStrength = if (config.screen.dithering) config.screen.ditherStrength.coerceIn(0, 32) else 0,
-                fps = screen.effectiveVideoFps(maxVideoFps),
+                fps = initialScreenFps,
                 maxDistance = config.screen.maxDistance.coerceIn(8, 128),
                 ffmpegPath = resolvedFfmpegPath,
                 fallbackImageUrl = fallbackImg,
