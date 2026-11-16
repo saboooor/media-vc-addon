@@ -43,8 +43,11 @@ public abstract class ItemFrameVideoMixin {
         if (state.mapId == null) return;
         ScreensClient.Texture surface = ScreensClient.surface(state.mapId.id());
         if (surface == null) return;
-        // Every other frame is only a placement anchor: the complete image is submitted once.
-        if (!ScreensClient.isAnchor(state.mapId.id())) { ci.cancel(); return; }
+        // Any visible frame on the screen can anchor the single quad for this render pass.
+        int tileIndex = ScreensClient.claimRender(state.mapId.id());
+        if (tileIndex < 0) { ci.cancel(); return; }
+        int col = tileIndex % surface.columns();
+        int row = tileIndex / surface.columns();
 
         Direction facing = state.direction;
         pose.pushPose();
@@ -62,7 +65,7 @@ public abstract class ItemFrameVideoMixin {
         pose.translate(0.0F, 0.0F, 0.5F);
         pose.mulPose(vcb$rotation.rotation(Axis.ZP.rotationDegrees(180.0F)));
         if (facing == Direction.DOWN) pose.scale(1.0F, -1.0F, 1.0F);
-        pose.translate((surface.columns() - 1) * 0.5F, (surface.rows() - 1) * 0.5F, 0.0F);
+        pose.translate((surface.columns() - 1) * 0.5F - col, (surface.rows() - 1) * 0.5F - row, 0.0F);
         // MapRenderer's quad is 128 units wide: stretch that single quad over the screen.
         pose.scale(surface.columns() / 128.0F, surface.rows() / 128.0F, 1.0F / 128.0F);
         pose.translate(-64.0F, -64.0F, -1.0F);

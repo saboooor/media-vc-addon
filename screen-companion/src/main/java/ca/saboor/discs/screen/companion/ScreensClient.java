@@ -22,6 +22,8 @@ public class ScreensClient implements ClientModInitializer {
     public record Texture(Identifier id, DynamicTexture image, int columns, int rows, int[] maps) {}
     private static final FrameAssembler assembler = new FrameAssembler();
     private static final Map<Integer, Integer> anchors = new HashMap<>();
+    private static final Map<Integer, Integer> tileIndices = new HashMap<>();
+    private static final Set<Integer> renderedScreens = new HashSet<>();
     private static final int LIMIT = 8;
     private static final Map<Integer, Texture> textures = new LinkedHashMap<>(16, .75f, true);
     private static final Map<Integer, Long> revisions = new HashMap<>();
@@ -66,6 +68,7 @@ public class ScreensClient implements ClientModInitializer {
 
     /** Called on the render thread before drawing, independently of the 20 Hz game tick. */
     public static void uploadReadyFrames() {
+        renderedScreens.clear();
         var client = Minecraft.getInstance();
         if (client.level != level) { reset(); level = client.level; }
         int uploaded = 0;
@@ -149,7 +152,10 @@ public class ScreensClient implements ClientModInitializer {
             Minecraft.getInstance().getTextureManager().register(name, dynamic);
             texture = new Texture(name, dynamic, frame.columns, frame.rows, frame.maps);
             textures.put(id, texture);
-            for (int map : frame.maps) anchors.put(map, id);
+            for (int i = 0; i < frame.maps.length; i++) {
+                anchors.put(frame.maps[i], id);
+                tileIndices.put(frame.maps[i], i);
+            }
         }
         NativeImage image = texture.image.getPixels();
         if (image == null) return;
@@ -167,15 +173,25 @@ public class ScreensClient implements ClientModInitializer {
         return anchor == null ? null : textures.get(anchor);
     }
     public static boolean isAnchor(int mapId) { return Objects.equals(anchors.get(mapId), mapId); }
+    /** Claims rendering of a screen for the current render pass and returns the tile index, or -1 if already drawn. */
+    public static int claimRender(int mapId) {
+        Integer anchor = anchors.get(mapId);
+        if (anchor == null || !renderedScreens.add(anchor)) return -1;
+        return tileIndices.getOrDefault(mapId, 0);
+    }
     private static void release(int id) {
         Texture old = textures.remove(id);
         if (old != null) {
-            for (int map : old.maps) anchors.remove(map, id);
+            for (int map : old.maps) {
+                anchors.remove(map, id);
+                tileIndices.remove(map);
+            }
+            renderedScreens.remove(id);
             Minecraft.getInstance().getTextureManager().release(old.id);
         }
     }
     private static void reset() {
-        session++; videos.clear(); videoSessions.clear(); pending.clear(); decoded.clear(); revisions.clear(); assembler.reset();
+        session++; videos.clear(); videoSessions.clear(); pending.clear(); decoded.clear(); revisions.clear(); assembler.reset(); renderedScreens.clear();
         for (int id : new ArrayList<>(textures.keySet())) release(id);
         ticks = 0; helloSent = false; level = null;
     }

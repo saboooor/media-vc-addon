@@ -99,8 +99,8 @@ class VideoPlayer(
     private val rows = screen.rows
     private val cols = screen.columns
 
-    // Pre-allocated tile buffers for each item frame map (128x128 = 16,384 bytes)
-    private val tileBuffers = Array(rows) { Array(cols) { ByteArray(16384) } }
+    // Lazily allocated tile buffers for vanilla map viewers (128x128 = 16,384 bytes per frame)
+    private val tileBuffers by lazy { Array(rows) { Array(cols) { ByteArray(16384) } } }
 
     @Volatile private var configuredDitherStrength = ditherStrength.coerceIn(0, 32)
     @Volatile private var configuredDitherMode = ditherMode
@@ -587,9 +587,11 @@ class VideoPlayer(
 
     private suspend fun renderImagePlayback(imgUrl: String) {
         closeH264()
-        val rawFrameBuffer = ByteArray(totalWidth * totalHeight * 3)
+        val imgWidth = videoSize.width
+        val imgHeight = videoSize.height
+        val rawFrameBuffer = ByteArray(imgWidth * imgHeight * 3)
         val loaded = withContext(Dispatchers.IO) {
-            loadAndScaleImage(imgUrl, totalWidth, totalHeight, rawFrameBuffer)
+            loadAndScaleImage(imgUrl, imgWidth, imgHeight, rawFrameBuffer)
         }
 
         if (!loaded) {
@@ -598,13 +600,13 @@ class VideoPlayer(
         }
 
         val initialPlayers = getNearbyPlayers()
-        sliceAndSend(rawFrameBuffer, initialPlayers)
+        sliceAndSend(rawFrameBuffer, initialPlayers, imgWidth, imgHeight)
 
         while (!stopped.get() && currentCoroutineContext().isActive) {
             delay(1000L)
             if (isPaused) continue
             val nearbyPlayers = getNearbyPlayers()
-            sliceAndSend(rawFrameBuffer, nearbyPlayers)
+            sliceAndSend(rawFrameBuffer, nearbyPlayers, imgWidth, imgHeight)
         }
     }
 
@@ -673,8 +675,9 @@ class VideoPlayer(
     private fun getNearbyPlayers(): List<Player> {
         val now = System.nanoTime()
         if (audienceChecked == Long.MIN_VALUE || now - audienceChecked >= 250_000_000L) {
+            val screenRadius = kotlin.math.hypot(cols.toDouble(), rows.toDouble()) * 0.5
             cachedAudience = ca.saboor.discs.utils.PlayerAudience.nearby(
-                screen.worldName, screen.centerX, screen.centerY, screen.centerZ, maxDistance.toDouble())
+                screen.worldName, screen.centerX, screen.centerY, screen.centerZ, maxDistance.toDouble() + screenRadius)
             audienceChecked = now
         }
         return cachedAudience.filter(ca.saboor.discs.utils.PlayerAudience::canReceiveScreen)
@@ -707,7 +710,14 @@ class VideoPlayer(
                 }
                 if (!rgbDelivered) {
                     val jpeg = try { rgbEncoder.encode(sourceFrame, width, height, companionQuality) }
-                    catch (_: IllegalArgumentException) { fallbackRgbEncoder.encode(mapScaler.scale(sourceFrame, width, height, totalWidth, totalHeight), totalWidth, totalHeight, companionQuality) }
+                    catch (_: IllegalArgumentException) {
+                        fallbackRgbEncoder.encode(
+                            mapScaler.scale(sourceFrame, width, height, mapVideoSize.width, mapVideoSize.height),
+                            mapVideoSize.width,
+                            mapVideoSize.height,
+                            companionQuality
+                        )
+                    }
                     val recipients = companionRecipients.select(jpeg, capable, System.nanoTime())
                     if (recipients.isNotEmpty()) CompanionScreens.frame(screen, jpeg, recipients)
                     rgbDelivered = true

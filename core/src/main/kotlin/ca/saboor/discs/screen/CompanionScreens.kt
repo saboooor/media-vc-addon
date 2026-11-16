@@ -38,7 +38,7 @@ object CompanionScreens : Listener, PluginMessageListener {
     fun frame(screen: Screen, jpeg: ByteArray, players: List<Player>, codec: Int = 0, width: Int = 0, height: Int = 0, stream: Int = 0, frame: Int = 0, keyframe: Boolean = true) {
         require(jpeg.size <= 4 * 1024 * 1024)
         val ids = screen.flatMapIds
-        require(ids.size == screen.columns * screen.rows && ids.size in 1..256)
+        require(ids.size == screen.columns * screen.rows && ids.size in 1..4096)
         val viewers = players.filter(::capable)
         if (viewers.isEmpty()) return
         val anchor = ids.first()

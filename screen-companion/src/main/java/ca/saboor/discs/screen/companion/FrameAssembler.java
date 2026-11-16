@@ -8,7 +8,7 @@ final class FrameAssembler {
     record Frame(int anchor, int columns, int rows, int[] maps, byte[] jpeg, int codec, int width, int height, int stream, int number, boolean keyframe) {}
     private record Assembly(int sequence, byte[] bytes, int received) {}
     private final Map<Integer, Assembly> assemblies = new HashMap<>();
-    private static final int MAX_BYTES = 4 * 1024 * 1024 + 1060;
+    private static final int MAX_BYTES = 4 * 1024 * 1024 + 36 + 4096 * 4;
 
     void clear(int anchor) { assemblies.remove(anchor); }
     void reset() { assemblies.clear(); }
@@ -34,7 +34,7 @@ final class FrameAssembler {
         assemblies.remove(id);
         ByteBuffer body = ByteBuffer.wrap(current.bytes);
         int columns = body.getInt(), rows = body.getInt();
-        if (columns < 1 || rows < 1 || columns > 64 || rows > 64 || columns * rows > 256) return null;
+        if (columns < 1 || rows < 1 || columns > 64 || rows > 64 || columns * rows > 4096) return null;
         if (body.remaining() < 28) return null;
         int codec = body.getInt(), width = body.getInt(), height = body.getInt(), stream = body.getInt(), frameNumber = body.getInt(), key = body.getInt(), reserved = body.getInt();
         if (codec < 0 || codec > 1 || frameNumber < 0 || key < 0 || key > 1 || reserved != 0) return null;

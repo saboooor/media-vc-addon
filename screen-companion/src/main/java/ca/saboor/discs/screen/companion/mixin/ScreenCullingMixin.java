@@ -16,7 +16,7 @@ public class ScreenCullingMixin {
     private void vcb$wholeScreen(Entity entity, CallbackInfoReturnable<Boolean> cir) {
         if (entity instanceof ItemFrame frame) {
             var id = frame.getFramedMapId(frame.getItem());
-            if (id != null && ScreensClient.isAnchor(id.id())) cir.setReturnValue(false);
+            if (id != null && ScreensClient.surface(id.id()) != null) cir.setReturnValue(false);
         }
     }
 }
