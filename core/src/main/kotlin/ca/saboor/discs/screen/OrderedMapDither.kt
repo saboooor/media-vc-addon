@@ -39,8 +39,9 @@ internal class OrderedMapDither(
     }
 
     companion object {
-        const val FULL_DITHER_DISTANCE = 6.0
-        const val ZERO_DITHER_DISTANCE = 24.0
+        const val FULL_DITHER_DISTANCE = 8.0
+        const val ZERO_DITHER_DISTANCE = 18.0
+        private const val HYSTERESIS_BLOCKS = 1.5
 
         private val BAYER_4X4 = intArrayOf(
             0, 8, 2, 10,
@@ -62,22 +63,31 @@ internal class OrderedMapDither(
         }
 
         /**
-         * Scales dithering strength down as viewers move past the distance where a 128x128
-         * map tile subtends less than 128 screen pixels, preventing GL_NEAREST minification moire.
+         * Scales dithering strength in three coarse distance tiers (full -> half -> off) with
+         * hysteresis so player movement does not churn map tile deltas or network bandwidth.
          */
         fun adaptiveStrength(
             baseStrength: Int,
             distanceBlocks: Double,
             fullDistanceBlocks: Double = FULL_DITHER_DISTANCE,
-            zeroDistanceBlocks: Double = ZERO_DITHER_DISTANCE
+            zeroDistanceBlocks: Double = ZERO_DITHER_DISTANCE,
+            previousStrength: Int? = null
         ): Int {
             val clamped = baseStrength.coerceIn(0, 32)
-            if (clamped == 0 || !distanceBlocks.isFinite() || distanceBlocks <= fullDistanceBlocks) return clamped
-            if (distanceBlocks >= zeroDistanceBlocks || zeroDistanceBlocks <= fullDistanceBlocks) return 0
-            val factor = (zeroDistanceBlocks - distanceBlocks) / (zeroDistanceBlocks - fullDistanceBlocks)
-            val scaled = (clamped * factor).roundToInt().coerceIn(0, clamped)
-            // Quantize intermediate strengths to even steps so minor player movement does not churn tile caches.
-            return if (scaled <= 1) 0 else ((scaled + 1) and -2).coerceAtMost(clamped)
+            if (clamped == 0 || !distanceBlocks.isFinite() || zeroDistanceBlocks <= fullDistanceBlocks) return clamped
+            val half = (clamped / 2).coerceAtLeast(if (clamped > 1) 1 else 0)
+            if (previousStrength != null) {
+                when (previousStrength) {
+                    clamped -> if (distanceBlocks < fullDistanceBlocks + HYSTERESIS_BLOCKS) return clamped
+                    half -> if (distanceBlocks in (fullDistanceBlocks - HYSTERESIS_BLOCKS)..(zeroDistanceBlocks + HYSTERESIS_BLOCKS)) return half
+                    0 -> if (distanceBlocks > zeroDistanceBlocks - HYSTERESIS_BLOCKS) return 0
+                }
+            }
+            return when {
+                distanceBlocks <= fullDistanceBlocks -> clamped
+                distanceBlocks >= zeroDistanceBlocks -> 0
+                else -> half
+            }
         }
     }
 }

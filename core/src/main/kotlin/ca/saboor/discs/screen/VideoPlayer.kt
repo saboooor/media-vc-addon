@@ -108,6 +108,7 @@ class VideoPlayer(
     @Volatile private var activeDither = if (configuredDitherStrength > 0) {
         OrderedMapDither(configuredDitherStrength, configuredDitherMode)
     } else null
+    private var lastAdaptiveSwitchNanos = Long.MIN_VALUE
 
     @Synchronized
     fun updateDithering(
@@ -600,7 +601,7 @@ class VideoPlayer(
         sliceAndSend(rawFrameBuffer, initialPlayers)
 
         while (!stopped.get() && currentCoroutineContext().isActive) {
-            delay(250L)
+            delay(1000L)
             if (isPaused) continue
             val nearbyPlayers = getNearbyPlayers()
             sliceAndSend(rawFrameBuffer, nearbyPlayers)
@@ -722,31 +723,37 @@ class VideoPlayer(
             previousViewers = emptyMap()
             return
         }
+        val currentDither = activeDither
+        val previousStrength = currentDither?.strength ?: 0
         val effectiveStrength = if (configuredDitherStrength <= 0) {
             0
         } else if (adaptiveDithering) {
-            val minDistance = mapPlayers.minOfOrNull { player ->
-                runCatching {
-                    val loc = runCatching { player.eyeLocation }.getOrNull() ?: player.location
-                    screen.distanceTo(loc.x, loc.y, loc.z)
-                }.getOrDefault(0.0)
-            } ?: 0.0
-            OrderedMapDither.adaptiveStrength(configuredDitherStrength, minDistance)
+            val now = System.nanoTime()
+            if (lastAdaptiveSwitchNanos != Long.MIN_VALUE && now - lastAdaptiveSwitchNanos < 1_000_000_000L) {
+                previousStrength
+            } else {
+                val minDistance = mapPlayers.minOfOrNull { player ->
+                    val v = ca.saboor.discs.utils.PlayerAudience.viewer(player.uniqueId)
+                    if (v != null) screen.distanceTo(v.x, v.y, v.z) else 0.0
+                } ?: 0.0
+                val target = OrderedMapDither.adaptiveStrength(
+                    baseStrength = configuredDitherStrength,
+                    distanceBlocks = minDistance,
+                    previousStrength = previousStrength
+                )
+                if (target != previousStrength) lastAdaptiveSwitchNanos = now
+                target
+            }
         } else {
             configuredDitherStrength
         }
-        val currentDither = activeDither
+        // Do not invalidate rgbTiles on automatic distance changes: invalidating all tiles
+        // forces a full-screen 16 KiB/tile packet burst that saturates the client's connection.
         val dither = if (effectiveStrength <= 0) {
-            if (currentDither != null) {
-                activeDither = null
-                for (row in rgbTiles) for (tile in row) tile.invalidate()
-            }
+            activeDither = null
             null
         } else if (currentDither == null || currentDither.strength != effectiveStrength || currentDither.mode != configuredDitherMode) {
-            OrderedMapDither(effectiveStrength, configuredDitherMode).also {
-                activeDither = it
-                for (row in rgbTiles) for (tile in row) tile.invalidate()
-            }
+            OrderedMapDither(effectiveStrength, configuredDitherMode).also { activeDither = it }
         } else {
             currentDither
         }

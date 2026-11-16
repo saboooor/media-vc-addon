@@ -65,15 +65,16 @@ class OrderedMapDitherTest {
         assertTrue(nonRepeating4x4 > 0, "IGN dithering must not repeat with a 4-pixel period")
     }
 
-    @Test fun `distance adaptive strength scales down smoothly and disables at far distance`() {
+    @Test fun `distance adaptive strength uses coarse tiers and hysteresis`() {
         assertEquals(12, OrderedMapDither.adaptiveStrength(12, 0.0))
-        assertEquals(12, OrderedMapDither.adaptiveStrength(12, 6.0))
-        val midClose = OrderedMapDither.adaptiveStrength(12, 10.0)
-        val midFar = OrderedMapDither.adaptiveStrength(12, 18.0)
-        assertTrue(midClose in 2..10 && midClose % 2 == 0)
-        assertTrue(midFar in 2..midClose && midFar % 2 == 0)
-        assertEquals(0, OrderedMapDither.adaptiveStrength(12, 24.0))
+        assertEquals(12, OrderedMapDither.adaptiveStrength(12, 8.0))
+        assertEquals(6, OrderedMapDither.adaptiveStrength(12, 12.0))
+        assertEquals(0, OrderedMapDither.adaptiveStrength(12, 18.0))
         assertEquals(0, OrderedMapDither.adaptiveStrength(12, 40.0))
         assertEquals(0, OrderedMapDither.adaptiveStrength(0, 2.0))
+        // Hysteresis keeps the previous tier across minor movement near thresholds
+        assertEquals(12, OrderedMapDither.adaptiveStrength(12, 9.0, previousStrength = 12))
+        assertEquals(6, OrderedMapDither.adaptiveStrength(12, 7.0, previousStrength = 6))
+        assertEquals(0, OrderedMapDither.adaptiveStrength(12, 17.0, previousStrength = 0))
     }
 }

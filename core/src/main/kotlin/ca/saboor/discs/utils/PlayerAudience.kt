@@ -90,6 +90,7 @@ object PlayerAudience : Listener {
     @EventHandler fun onJoin(event: PlayerJoinEvent) { screenReady.remove(event.player.uniqueId); update(event.player, event.player.location) }
     @EventHandler fun onWorld(event: PlayerChangedWorldEvent) { screenReady.remove(event.player.uniqueId); update(event.player, event.player.location) }
     @EventHandler fun onQuit(event: PlayerQuitEvent) { screenReady.remove(event.player.uniqueId); entries.remove(event.player.uniqueId); positions.remove(event.player.uniqueId) }
+    fun viewer(playerId: UUID): Viewer? = entries[playerId]
     fun positions(world: String, x: Double, y: Double, z: Double, range: Double): List<Viewer> =
         positions.nearby(worldNames[world] ?: world, x, y, z, range)
     fun nearby(world: String, x: Double, y: Double, z: Double, range: Double): List<Player> =
