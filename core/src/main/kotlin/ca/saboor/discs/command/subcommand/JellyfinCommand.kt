@@ -68,14 +68,36 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
         (sender.hasPermission("pv.addon.discs.burn") || sender.hasPermission("vc.addon.discs.burn"))
     private fun message(player: Player, text: String, error: Boolean = false) =
         player.sendMessage(Component.text(text, if (error) NamedTextColor.RED else NamedTextColor.GREEN))
-    override fun suggest(source: CommandSender, arguments: Array<out String>) =
-        if (checkCanExecute(source) && arguments.size == 2)
-            listOf("connect", "browse", "search", "disconnect", "cancel").filter { it.startsWith(arguments[1], true) } else emptyList()
+    override fun suggest(source: CommandSender, arguments: Array<out String>): List<String> {
+        if (!checkCanExecute(source)) return emptyList()
+        val choices = when {
+            arguments.size == 2 -> listOf("connect", "browse", "search", "disconnect", "cancel", "transcode")
+            arguments.size == 3 && arguments[1].equals("transcode", true) -> listOf("on", "off", "toggle", "status")
+            else -> return emptyList()
+        }
+        return choices.filter { it.startsWith(arguments.last(), true) }
+    }
 
     override fun execute(sender: CommandSender, arguments: Array<out String>) {
         val player = sender as? Player ?: return
         if (!checkCanExecute(player)) { message(player, "No permission to use Jellyfin and burn discs.", true); return }
         when (arguments.getOrNull(1)?.lowercase()) {
+            "transcode" -> {
+                val mode = arguments.getOrNull(2)?.lowercase() ?: "toggle"
+                if (arguments.size > 3 || mode !in listOf("on", "off", "toggle", "status")) {
+                    message(player, "Usage: /disc jellyfin transcode [on|off|toggle|status]", true)
+                    return
+                }
+                run(player) {
+                    val connection = if (mode == "status") library.connection(player.uniqueId)
+                        ?: throw JellyfinException("Connect to Jellyfin first with /disc jellyfin connect.")
+                    else library.setTranscoding(player.uniqueId, when (mode) { "on" -> true; "off" -> false; else -> null })
+                    suspendSyncFor(player, voiceServer, plugin) {
+                        message(player, "Jellyfin transcoding is ${if (connection.transcodingEnabled) "ON" else "OFF (original media)"} for your profile." +
+                            if (mode == "status") "" else " Restart playback to apply it to your discs.")
+                    }
+                }
+            }
             "cancel" -> {
                 prompts.remove(player.uniqueId); requests.remove(player.uniqueId); dialogSessions.remove(player.uniqueId)
                 message(player, "Jellyfin input cancelled.")
@@ -133,7 +155,7 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
                     }
                 } else browse(player, 0, "")
             }
-            else -> message(player, "Usage: /disc jellyfin [connect [url]|browse|search <text>|disconnect|cancel]", true)
+            else -> message(player, "Usage: /disc jellyfin [connect [url]|browse|search <text>|transcode [on|off|toggle|status]|disconnect|cancel]", true)
         }
     }
 

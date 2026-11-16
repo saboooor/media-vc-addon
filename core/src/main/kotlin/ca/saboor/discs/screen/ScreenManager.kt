@@ -10,6 +10,10 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import ca.saboor.discs.utils.PlayerAudience
+import ca.saboor.discs.utils.extend.suspendSyncFor
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
@@ -360,122 +364,156 @@ class ScreenManager : PluginKoinComponent {
         scope.launch(Dispatchers.IO) {
             if (!config.screen.enabled) return@launch
 
-            val videoId = VideoSourceResolver.extractYouTubeVideoId(identifier)
-            val fallbackImg = artworkUrl ?: videoId?.let { VideoSourceResolver.getYouTubeThumbnailUrl(it) }
-
-            val jellyfin = if (identifier.startsWith("jellyfin:")) {
-                try { jellyfinLibrary.resolve(identifier) } catch (e: Exception) {
-                    plugin.slF4JLogger.warn("Cannot open Jellyfin video for screen '${screen.name}': ${e.message}")
-                    return@launch
-                }
-            } else null
-            if (jellyfin != null && jellyfin.second.type !in listOf("Movie", "Episode", "MusicVideo", "Video")) return@launch
-            val sourceAuthorization = jellyfin?.first?.session?.let {
-                ca.saboor.discs.jellyfin.JellyfinClient.authorization(it.deviceId, it.token)
-            }
-            val externalYoutube = if (jellyfin == null && videoId != null) audioPlayerManager.youtubeExtractor() else null
-            val externalVideo = externalYoutube?.let { extractor ->
-                try {
-                    extractor.video(videoId!!, when (config.screen.companionResolution.lowercase()) {
-                        "720p" -> 720
-                        "source" -> 2160
-                        else -> 1080
-                    })
-                } catch (e: Exception) {
-                    plugin.slF4JLogger.warn("yt-dlp video extraction failed for screen '${screen.name}'; displaying artwork if available")
-                    null
+            val stage = java.util.concurrent.atomic.AtomicReference("Resolving video source")
+            val started = System.nanoTime()
+            val progress = launch {
+                while (isActive) {
+                    val current = synchronized(playbackLock) {
+                        !shuttingDown && playbackRequests[lower] === request
+                    }
+                    if (!current || activePlayers[lower]?.hasRenderedFrame == true) break
+                    val message = Component.text(
+                        "Loading video '${screen.name}': ${stage.get()}… (${(System.nanoTime() - started) / 1_000_000_000}s)",
+                        NamedTextColor.YELLOW
+                    )
+                    for (viewer in PlayerAudience.nearby(screen.worldName, screen.centerX, screen.centerY,
+                        screen.centerZ, config.screen.maxDistance.coerceIn(8, 128).toDouble())) {
+                        suspendSyncFor(viewer, null, plugin) {
+                            if (viewer.isOnline && synchronized(playbackLock) { playbackRequests[lower] === request })
+                                viewer.sendActionBar(message)
+                        }
+                    }
+                    delay(1000L)
                 }
             }
-            val jfClient = if (jellyfin != null) JellyfinClient() else null
-            val initialScreenFps = screen.effectiveVideoFps(maxVideoFps)
-            val initialSize = CompanionResolution.mapSize(screen.totalWidthPixels, screen.totalHeightPixels)
-            val resolvedUrl = if (externalYoutube != null) externalVideo?.url ?: fallbackImg.orEmpty()
-            else if (jellyfin != null && jfClient != null) {
-                jfClient.videoStreamUrl(
-                    session = jellyfin.first.session,
-                    itemId = jellyfin.second.mediaId,
-                    width = initialSize.width,
-                    height = initialSize.height,
-                    maxFramerate = initialScreenFps,
-                    videoBitRate = config.screen.companionBitrateKbps.coerceIn(256, 20000) * 1000
-                )
-            } else VideoSourceResolver.resolveVideoUrl(
-                identifier = identifier,
-                audioPlayerManager = audioPlayerManager,
-                ytdlpPath = config.screen.ytdlpPath,
-                artworkUrl = artworkUrl,
-                isYouTubeMusic = isYouTubeMusic,
-                highResolution = config.screen.companionRgb && config.screen.companionResolution.lowercase() in setOf("720p", "1080p", "source"),
-                maxVideoHeight = when (config.screen.companionResolution.lowercase()) {
-                    "720p" -> 720
-                    "source" -> 2160
-                    else -> 1080
+            try {
+                val videoId = VideoSourceResolver.extractYouTubeVideoId(identifier)
+                val fallbackImg = artworkUrl ?: videoId?.let { VideoSourceResolver.getYouTubeThumbnailUrl(it) }
+
+                val jellyfin = if (identifier.startsWith("jellyfin:")) {
+                    try { jellyfinLibrary.resolve(identifier) } catch (e: Exception) {
+                        plugin.slF4JLogger.warn("Cannot open Jellyfin video for screen '${screen.name}': ${e.message}")
+                        return@launch
+                    }
+                } else null
+                if (jellyfin != null && jellyfin.second.type !in listOf("Movie", "Episode", "MusicVideo", "Video")) return@launch
+                val sourceAuthorization = jellyfin?.first?.session?.let {
+                    ca.saboor.discs.jellyfin.JellyfinClient.authorization(it.deviceId, it.token)
                 }
-            )
-
-            val resolvedFfmpegPath = FFmpegResolver.resolve(
-                dataFolder = plugin.dataFolder,
-                configuredPath = config.screen.ffmpegPath,
-                autoInstall = config.screen.autoInstallFfmpeg
-            ) ?: config.screen.ffmpegPath
-
-            lateinit var videoPlayer: VideoPlayer
-            videoPlayer = VideoPlayer(
-                screen = screen,
-                sourceUrl = resolvedUrl,
-                sourceAuthorization = sourceAuthorization,
-                sourceHeaders = externalVideo?.headers.orEmpty(),
-                streamUrlProvider = if (jellyfin != null && jfClient != null) { width, height, targetFps, posMs ->
+                val externalYoutube = if (jellyfin == null && videoId != null) audioPlayerManager.youtubeExtractor() else null
+                val externalVideo = externalYoutube?.let { extractor ->
+                    try {
+                        extractor.video(videoId!!, when (config.screen.companionResolution.lowercase()) {
+                            "720p" -> 720
+                            "source" -> 2160
+                            else -> 1080
+                        })
+                    } catch (e: Exception) {
+                        plugin.slF4JLogger.warn("yt-dlp video extraction failed for screen '${screen.name}'; displaying artwork if available")
+                        null
+                    }
+                }
+                val jfClient = if (jellyfin != null) JellyfinClient() else null
+                val initialScreenFps = screen.effectiveVideoFps(maxVideoFps)
+                val initialSize = CompanionResolution.mapSize(screen.totalWidthPixels, screen.totalHeightPixels)
+                val resolvedUrl = if (externalYoutube != null) externalVideo?.url ?: fallbackImg.orEmpty()
+                else if (jellyfin != null && jfClient != null) {
                     jfClient.videoStreamUrl(
                         session = jellyfin.first.session,
                         itemId = jellyfin.second.mediaId,
-                        width = width,
-                        height = height,
-                        maxFramerate = targetFps,
-                        videoBitRate = config.screen.companionBitrateKbps.coerceIn(256, 20000) * 1000,
-                        startPositionMs = posMs
+                        width = initialSize.width,
+                        height = initialSize.height,
+                        maxFramerate = initialScreenFps,
+                        static = !jellyfin.first.transcodingEnabled,
+                        videoBitRate = config.screen.companionBitrateKbps.coerceIn(256, 20000) * 1000
                     )
-                } else null,
-                playbackPositionMs = playbackPositionMs,
-                companionRgb = config.screen.companionRgb,
-                companionQuality = config.screen.companionQuality,
-                companionResolution = config.screen.companionResolution,
-                companionCodec = config.screen.companionCodec,
-                companionBitrateKbps = config.screen.companionBitrateKbps,
-                ditherStrength = effectiveDitherStrength(screen),
-                ditherMode = effectiveDitherMode(screen),
-                distanceAdaptiveDithering = isDistanceAdaptiveDithering(screen),
-                fps = initialScreenFps,
-                maxDistance = config.screen.maxDistance.coerceIn(8, 128),
-                ffmpegPath = resolvedFfmpegPath,
-                fallbackImageUrl = fallbackImg,
-                coroutineScope = scope,
-                onCompletion = {
+                } else VideoSourceResolver.resolveVideoUrl(
+                    identifier = identifier,
+                    audioPlayerManager = audioPlayerManager,
+                    ytdlpPath = config.screen.ytdlpPath,
+                    artworkUrl = artworkUrl,
+                    isYouTubeMusic = isYouTubeMusic,
+                    highResolution = config.screen.companionRgb && config.screen.companionResolution.lowercase() in setOf("720p", "1080p", "source"),
+                    maxVideoHeight = when (config.screen.companionResolution.lowercase()) {
+                        "720p" -> 720
+                        "source" -> 2160
+                        else -> 1080
+                    }
+                )
+
+                stage.set("Preparing video decoder")
+                val resolvedFfmpegPath = FFmpegResolver.resolve(
+                    dataFolder = plugin.dataFolder,
+                    configuredPath = config.screen.ffmpegPath,
+                    autoInstall = config.screen.autoInstallFfmpeg,
+                    onProgress = { stage.set(it) }
+                ) ?: config.screen.ffmpegPath
+
+                lateinit var videoPlayer: VideoPlayer
+                videoPlayer = VideoPlayer(
+                    screen = screen,
+                    sourceUrl = resolvedUrl,
+                    sourceAuthorization = sourceAuthorization,
+                    durationMs = jellyfin?.second?.durationMs ?: 0L,
+                    sourceHeaders = externalVideo?.headers.orEmpty(),
+                    streamUrlProvider = if (jellyfin != null && jfClient != null && jellyfin.first.transcodingEnabled) { width, height, targetFps, posMs ->
+                        jfClient.videoStreamUrl(
+                            session = jellyfin.first.session,
+                            itemId = jellyfin.second.mediaId,
+                            width = width,
+                            height = height,
+                            maxFramerate = targetFps,
+                            videoBitRate = config.screen.companionBitrateKbps.coerceIn(256, 20000) * 1000,
+                            startPositionMs = posMs
+                        )
+                    } else null,
+                    playbackPositionMs = playbackPositionMs,
+                    companionRgb = config.screen.companionRgb,
+                    companionQuality = config.screen.companionQuality,
+                    companionResolution = config.screen.companionResolution,
+                    companionCodec = config.screen.companionCodec,
+                    companionBitrateKbps = config.screen.companionBitrateKbps,
+                    ditherStrength = effectiveDitherStrength(screen),
+                    ditherMode = effectiveDitherMode(screen),
+                    distanceAdaptiveDithering = isDistanceAdaptiveDithering(screen),
+                    fps = initialScreenFps,
+                    maxDistance = config.screen.maxDistance.coerceIn(8, 128),
+                    ffmpegPath = resolvedFfmpegPath,
+                    fallbackImageUrl = fallbackImg,
+                    coroutineScope = scope,
+                    onCompletion = {
+                        synchronized(playbackLock) {
+                            if (activePlayers.remove(lower, videoPlayer)) subtitleStates.remove(lower)?.overlay?.stop()
+                        }
+                    }
+                )
+
+                synchronized(playbackLock) {
+                    // URL resolution and FFmpeg setup can finish after a stop or newer play request.
+                    if (shuttingDown || playbackRequests[lower] !== request) return@launch
+                    plugin.slF4JLogger.info(
+                        "Screen '${screen.name}' playback starting: source='${VideoPlayer.describeSource(resolvedUrl)}', ffmpeg='$resolvedFfmpegPath'"
+                    )
+                    activePlayers[lower] = videoPlayer
+                    stage.set("Buffering first frame")
+                    videoPlayer.start(requestedPositions[lower] ?: startPositionMs)
+                }
+                if (jellyfin != null) {
+                    val tracks = try { JellyfinClient().getSubtitleTracks(jellyfin.first.session, jellyfin.second.mediaId) }
+                        catch (_: Exception) { plugin.slF4JLogger.warn("Could not list subtitles for screen '${screen.name}'."); emptyList() }
                     synchronized(playbackLock) {
-                        if (activePlayers.remove(lower, videoPlayer)) subtitleStates.remove(lower)?.overlay?.stop()
+                        if (shuttingDown || playbackRequests[lower] !== request || activePlayers[lower] !== videoPlayer) return@launch
+                        val overlay = ScreenSubtitles(screen, videoPlayer)
+                        subtitleStates[lower] = SubtitleState(jellyfin.first.session, jellyfin.second.mediaId, tracks, overlay)
+                        overlay.start()
+                        reloadSubtitles(screen)
                     }
                 }
-            )
-
-            synchronized(playbackLock) {
-                // URL resolution and FFmpeg setup can finish after a stop or newer play request.
-                if (shuttingDown || playbackRequests[lower] !== request) return@launch
-                plugin.slF4JLogger.info(
-                    "Screen '${screen.name}' playback starting: source='${VideoPlayer.describeSource(resolvedUrl)}', ffmpeg='$resolvedFfmpegPath'"
-                )
-                activePlayers[lower] = videoPlayer
-                videoPlayer.start(requestedPositions[lower] ?: startPositionMs)
-            }
-            if (jellyfin != null) {
-                val tracks = try { JellyfinClient().getSubtitleTracks(jellyfin.first.session, jellyfin.second.mediaId) }
-                    catch (_: Exception) { plugin.slF4JLogger.warn("Could not list subtitles for screen '${screen.name}'."); emptyList() }
-                synchronized(playbackLock) {
-                    if (shuttingDown || playbackRequests[lower] !== request || activePlayers[lower] !== videoPlayer) return@launch
-                    val overlay = ScreenSubtitles(screen, videoPlayer)
-                    subtitleStates[lower] = SubtitleState(jellyfin.first.session, jellyfin.second.mediaId, tracks, overlay)
-                    overlay.start()
-                    reloadSubtitles(screen)
-                }
+                // Keep reporting while FFmpeg opens the stream and decodes its first frame.
+                while (synchronized(playbackLock) { playbackRequests[lower] === request } &&
+                    activePlayers[lower] === videoPlayer && !videoPlayer.hasRenderedFrame) delay(250L)
+            } finally {
+                progress.cancel()
             }
         }
     }

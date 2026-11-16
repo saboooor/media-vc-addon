@@ -43,4 +43,24 @@ class H264StreamEncoderTest {
         } finally { encoder.close() }
         assertFalse(encoder.submit(ByteArray(128 * 72 * 3)))
     }
+    @Test fun `independent screen frames recover immediately after client queue drops`() {
+        assumeTrue(runCatching { ProcessBuilder("ffmpeg", "-version")
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start().waitFor() == 0 }.getOrDefault(false))
+        val frames = Collections.synchronizedList(mutableListOf<Boolean>())
+        val ready = CountDownLatch(8)
+        val encoder = H264StreamEncoder("ffmpeg", 128, 72, 30, 1000, keyframeInterval = 1) { _, _, _, key ->
+            frames += key
+            ready.countDown()
+        }
+        try {
+            repeat(20) { n ->
+                assertTrue(encoder.submit(ByteArray(128 * 72 * 3) { (it + n).toByte() }))
+                Thread.sleep(40)
+            }
+            assertTrue(ready.await(3, TimeUnit.SECONDS))
+            assertTrue(frames.all { it }, "Every screen frame must be independently decodable after a gap")
+        } finally { encoder.close() }
+    }
+
 }

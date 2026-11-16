@@ -9,7 +9,10 @@ import java.util.UUID
 /** Server-private token store. A disc grants playback of one selected item, not library access. */
 class JellyfinLibrary(private val file: Path,
     private val persist: (Path, String) -> Unit = ::writePrivateFile) {
-    class Connection(val id: UUID, val owner: UUID, val session: JellyfinClient.Session) {
+    class Connection(val id: UUID, val owner: UUID, val session: JellyfinClient.Session,
+        private val directPlay: Boolean = false) {
+        // Missing fields in existing Gson stores default to false, retaining transcoding.
+        val transcodingEnabled: Boolean get() = !directPlay
         override fun toString() = "Jellyfin connection $id"
     }
     data class Grant(val id: UUID, val connection: UUID, val mediaId: String, val label: String, val type: String? = "Audio", val durationMs: Long = 0)
@@ -33,9 +36,17 @@ class JellyfinLibrary(private val file: Path,
 
     // Writers serialize with each other; readers keep using the last durable immutable snapshot.
     @Synchronized fun connect(owner: UUID, session: JellyfinClient.Session): Connection {
-        val connection = Connection(UUID.nameUUIDFromBytes("$owner|${session.baseUrl}|${session.userId}".toByteArray(Charsets.UTF_8)), owner, session)
+        val id = UUID.nameUUIDFromBytes("$owner|${session.baseUrl}|${session.userId}".toByteArray(Charsets.UTF_8))
+        val old = snapshot.connections[owner]?.takeIf { it.id == id }
+        val connection = Connection(id, owner, session, old?.transcodingEnabled == false)
         commit(Snapshot(snapshot.connections + (owner to connection), snapshot.grants))
         return connection
+    }
+    @Synchronized fun setTranscoding(owner: UUID, enabled: Boolean? = null): Connection {
+        val old = snapshot.connections[owner] ?: throw JellyfinException("Connect to Jellyfin first with /disc jellyfin connect.")
+        val next = Connection(old.id, old.owner, old.session, !(enabled ?: !old.transcodingEnabled))
+        commit(Snapshot(snapshot.connections + (owner to next), snapshot.grants))
+        return next
     }
     @Synchronized fun disconnect(owner: UUID): Connection? {
         val old = snapshot.connections[owner] ?: return null

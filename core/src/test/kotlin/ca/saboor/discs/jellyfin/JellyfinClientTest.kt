@@ -133,6 +133,11 @@ class JellyfinClientTest {
             val videoUrl = client.streamUrl(session, page.items.single().id, "Movie")
             assertEquals("${session.baseUrl}Videos/${page.items.single().id}/stream?static=true",
                 client.videoStreamUrl(session, page.items.single().id))
+            assertEquals("${session.baseUrl}Videos/${page.items.single().id}/stream?static=true",
+                client.streamUrl(session, page.items.single().id, "Movie", 50_000, transcode = false))
+            assertEquals("${session.baseUrl}Videos/${page.items.single().id}/stream?static=true",
+                client.videoStreamUrl(session, page.items.single().id, width = 640, height = 358,
+                    maxFramerate = 30, startPositionMs = 50_000, static = true))
             val transcodedVideo = client.videoStreamUrl(session, page.items.single().id, width = 640, height = 355, maxFramerate = 24, startPositionMs = 14_452)
             assertTrue(transcodedVideo.contains("Videos/${page.items.single().id}/stream.mkv?static=false"))
             assertTrue(transcodedVideo.contains("videoCodec=h264"))

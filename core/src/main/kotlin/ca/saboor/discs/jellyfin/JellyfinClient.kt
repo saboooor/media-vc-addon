@@ -72,8 +72,9 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
 
     fun logout(session: Session) { request(session.baseUrl, "Sessions/Logout", session.deviceId, session.token, JsonObject()) }
 
-    fun streamUrl(session: Session, itemId: String, type: String = "Audio", startPositionMs: Long = 0): String =
-        session.baseUrl + "Audio/${mediaId(itemId)}/stream" +
+    fun streamUrl(session: Session, itemId: String, type: String = "Audio", startPositionMs: Long = 0, transcode: Boolean = true): String =
+        if (!transcode && type !in listOf("Audio", "AudioBook")) videoStreamUrl(session, itemId, static = true)
+        else session.baseUrl + "Audio/${mediaId(itemId)}/stream" +
             if (type in listOf("Audio", "AudioBook")) "?static=true"
             else "?container=mp3&audioCodec=mp3&audioBitRate=192000&audioChannels=2&static=false" +
                 "&startTimeTicks=${startPositionMs.coerceIn(0, Long.MAX_VALUE / 10_000) * 10_000}" +

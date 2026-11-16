@@ -4,7 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 
 /** A shared buffer pool bounds all queued, decoding and presenting RGB48 frames together. */
-internal class VideoDecodeBuffer(frameBytes: Int, fps: Int, budgetBytes: Int = 96 * 1024 * 1024) {
+internal class VideoDecodeBuffer(frameBytes: Int, budgetBytes: Int = 96 * 1024 * 1024) {
     val capacity: Int
     private val free: Channel<ByteArray>
     val frames: Channel<Frame>
@@ -16,8 +16,8 @@ internal class VideoDecodeBuffer(frameBytes: Int, fps: Int, budgetBytes: Int = 9
 
     init {
         require(frameBytes > 0 && budgetBytes >= frameBytes * 2L) { "Decode buffer must fit two frames" }
-        // Aim for one second ahead, subject to a per-screen memory ceiling.
-        capacity = minOf(fps.coerceIn(1, 30) + 2, budgetBytes / frameBytes)
+        // One frame can be presented while the other is read; do not build a decode-ahead queue.
+        capacity = 2
         free = Channel(capacity)
         frames = Channel(capacity)
         repeat(capacity) { free.trySend(ByteArray(frameBytes)).getOrThrow() }

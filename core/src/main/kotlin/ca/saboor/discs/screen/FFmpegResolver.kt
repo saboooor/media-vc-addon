@@ -32,7 +32,8 @@ object FFmpegResolver {
     suspend fun resolve(
         dataFolder: File,
         configuredPath: String = "ffmpeg",
-        autoInstall: Boolean = true
+        autoInstall: Boolean = true,
+        onProgress: ((String) -> Unit)? = null
     ): String? {
         cachedResolvedPath?.let { cached ->
             if (testExecutable(cached)) return cached
@@ -93,7 +94,7 @@ object FFmpegResolver {
 
             // 4. If auto-install is enabled, download static portable binary
             if (autoInstall) {
-                val installed = installStaticFFmpeg(dataFolder)
+                val installed = installStaticFFmpeg(dataFolder, onProgress)
                 if (installed != null) {
                     cachedResolvedPath = installed
                     return@withContext installed

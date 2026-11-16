@@ -45,8 +45,12 @@ class VideoPlayer(
     private val companionResolution: String = "map",
     val playbackPositionMs: (() -> Long?)? = null,
     private val sourceHeaders: Map<String, String> = emptyMap(),
+    private val durationMs: Long = 0L,
     private val streamUrlProvider: ((width: Int, height: Int, fps: Int, startPositionMs: Long) -> String)? = null
 ) {
+    @Volatile var hasRenderedFrame: Boolean = false
+        private set
+
     @Volatile var fps: Int = fps.coerceIn(1, 30)
         private set
 
@@ -171,7 +175,7 @@ class VideoPlayer(
                 val next = coroutineScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
                     try {
                         var resumePositionMs = positionMs.coerceAtLeast(0)
-                        var recoveries = 0
+                        val recovery = VideoRecoveryPolicy()
                         while (currentCoroutineContext().isActive && !stopped.get()) {
                             try {
                                 runPlayback(resumePositionMs)
@@ -179,12 +183,13 @@ class VideoPlayer(
                             } catch (e: ResyncPlayback) {
                                 resumePositionMs = e.positionMs.coerceAtLeast(0)
                             } catch (e: StalledPlayback) {
-                                if (++recoveries > 3) {
-                                    logger.error("Video for screen '${screen.name}' stalled repeatedly; stopping playback")
+                                resumePositionMs = playbackPositionMs?.invoke()?.coerceAtLeast(0) ?: e.positionMs
+                                if (!recovery.allow(e.decodedDurationMs)) {
+                                    logger.error("Video for screen '${screen.name}' repeatedly failed to advance; stopping playback")
                                     break
                                 }
-                                resumePositionMs = playbackPositionMs?.invoke()?.coerceAtLeast(0) ?: e.positionMs
-                                logger.warn("Restarting stalled video for screen '${screen.name}' at ${resumePositionMs}ms (attempt $recoveries/3)")
+                                logger.warn("Restarting interrupted video for screen '${screen.name}' at ${resumePositionMs}ms (${e.message}; attempt ${recovery.attempts}/3)")
+                                delay(500L)
                             }
                         }
                     } finally {
@@ -275,7 +280,7 @@ class VideoPlayer(
         }
         if (seekProxy != null) command.addAll(proxiedInputOptions())
         // Keep normal probing and decoder filtering for original Jellyfin files. Bounded
-        // decode-ahead handles delivery jitter without trading away codec correctness/quality.
+        // a two-frame handoff keeps reads separate from presentation without a deep queue.
         command.addAll(decoderInputOptions())
         command.add("-i")
         command.add(seekProxy?.url ?: effectiveSourceUrl)
@@ -289,7 +294,7 @@ class VideoPlayer(
         // With linked audio, pace by decoded frame timestamps rather than a second wall clock.
         command.add((if (audioClock != null) filter.removeSuffix(",realtime") else filter) + ",showinfo=checksum=0")
         // Raw RGB needs no frame-threaded encoder queue; flush each frame to the renderer.
-        command.addAll(listOf("-threads:v", "1", "-flush_packets", "1"))
+        command.addAll(rawVideoOutputOptions())
         command.add("-f")
         command.add("rawvideo")
         command.add("-pix_fmt")
@@ -300,9 +305,12 @@ class VideoPlayer(
 
         var proc: Process? = null
         val stderrLines = ConcurrentLinkedQueue<String>()
+        var lastFrameTimestampMs = effectiveStartMs
         var framesRendered = 0L
         var framesDelivered = 0L
-        val delivery = VideoFrameDelivery(refreshNanos = 200_000_000L)
+        val decodedFrames = AtomicLong()
+        val firstDecodedAtNanos = AtomicLong()
+        val delivery = VideoFrameDelivery(refreshNanos = TimeUnit.SECONDS.toNanos(1) / fps)
         var lastLagWarning: Long? = null
         var lagCheckStartNanos: Long? = null
         var lagCheckStartMs = 0L
@@ -394,8 +402,8 @@ class VideoPlayer(
             readMonitor.timeoutNanos = TimeUnit.SECONDS.toNanos(15)
             val frameSizeBytes = outputSize.width * outputSize.height * 3
             val rawFrameBuffer = ByteArray(frameSizeBytes)
-            val buffer = VideoDecodeBuffer(frameSizeBytes * 2, fps)
-            logger.info("Screen '${screen.name}': decoding ahead with ${buffer.capacity} reusable frame buffers " +
+            val buffer = VideoDecodeBuffer(frameSizeBytes * 2)
+            logger.info("Screen '${screen.name}': using ${buffer.capacity} reusable frame buffers " +
                 "(${buffer.capacity.toLong() * frameSizeBytes * 2 / 1024 / 1024} MiB)")
             decoderJob = coroutineScope.launch(Dispatchers.IO) {
                 var first = true
@@ -407,7 +415,9 @@ class VideoPlayer(
                         if (!ok) null else {
                             val relativeMs = frameTimes.receiveCatching().getOrNull()
                                 ?: throw IOException("Missing video frame timestamp")
+                            decodedFrames.incrementAndGet()
                             if (first) {
+                                firstDecodedAtNanos.set(System.nanoTime())
                                 first = false
                                 logger.info("Screen '${screen.name}': first decoded video frame (${outputSize.width}x${outputSize.height})")
                             }
@@ -424,6 +434,7 @@ class VideoPlayer(
                     if (stopped.get()) break
                     framesRendered++
                     val videoMs = frame.timestampMs
+                    lastFrameTimestampMs = videoMs
                     if (audioClock != null) {
                         val syncStarted = System.nanoTime()
                         var syncWarned = false
@@ -461,14 +472,18 @@ class VideoPlayer(
                                 lagCheckStartNanos = null
                             }
                         }
-                        if (delivery.shouldDrop(videoMs, audioMs, now, buffer.hasQueuedFrames || lagMs > 250L)) continue
+                        if (delivery.shouldDrop(videoMs, audioMs, now, buffer.hasQueuedFrames)) continue
                         if (VideoAudioSync.stale(videoMs, audioMs) &&
                             (lastLagWarning == null || now - lastLagWarning!! >= TimeUnit.SECONDS.toNanos(30))) {
                             lastLagWarning = now
+                            val elapsed = (now - firstDecodedAtNanos.get()).coerceAtLeast(1_000_000_000L) / 1_000_000_000.0
+                            val rates = String.format(Locale.US, "decoded=%.1f FPS, delivered=%.1f FPS",
+                                decodedFrames.get() / elapsed, framesDelivered / elapsed)
                             logger.warn("Video on screen '${screen.name}' is ${lagMs}ms behind audio; " +
-                                "presenting late frames while catching up. Source decoding or rendering may be too slow")
+                                "presenting late frames while catching up ($rates)")
                         }
                     }
+                    hasRenderedFrame = true
                     displayedPositionMs = videoMs
                     // Process frame and send packets
                     renderWarning.set(false)
@@ -502,6 +517,17 @@ class VideoPlayer(
             }
 
             currentCoroutineContext().ensureActive()
+            if (!stopped.get() && isNetworkStream && streamEndedEarly(durationMs, lastFrameTimestampMs)) {
+                withTimeoutOrNull(2000L) { stderrJob?.join() }
+                val details = stderrLines.joinToString("\n")
+                    .replace(effectiveSourceUrl, describeSource(effectiveSourceUrl))
+                    .replace(sourceUrl, describeSource(sourceUrl))
+                val exit = if (!proc.isAlive) runCatching { proc.exitValue() }.getOrNull() else null
+                logger.warn("Video stream ended early on screen '${screen.name}' at ${lastFrameTimestampMs}ms " +
+                    "of ${durationMs}ms (FFmpeg exit=$exit). Reopening at the audio position. Recent FFmpeg output:\n$details")
+                throw StalledPlayback(lastFrameTimestampMs, "stream ended before the media finished",
+                    (lastFrameTimestampMs - effectiveStartMs).coerceAtLeast(0))
+            }
             if (!stopped.get() && framesRendered > 0L) {
                 logger.info("Video stream ended on screen '${screen.name}' after $framesRendered frames " +
                     "at ${effectiveStartMs + outputPositionUs.get() / 1000}ms")
@@ -533,8 +559,11 @@ class VideoPlayer(
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             if (e is ResyncPlayback) throw e
+            if (e is StalledPlayback) throw StalledPlayback(e.positionMs, e.message ?: "video interrupted",
+                maxOf(e.decodedDurationMs, lastFrameTimestampMs - effectiveStartMs))
             if (!currentCoroutineContext().isActive || stopped.get()) return
-            if (stalled.get()) throw StalledPlayback(effectiveStartMs + outputPositionUs.get() / 1000)
+            if (stalled.get()) throw StalledPlayback(lastFrameTimestampMs,
+                decodedDurationMs = (lastFrameTimestampMs - effectiveStartMs).coerceAtLeast(0))
             if (e is java.io.IOException && (e.message?.contains("Cannot run program") == true || e.message?.contains("error: 2") == true || e.message?.contains("error: 13") == true)) {
                 ffmpegCache[ffmpegPath] = false
                 if (!warnedNoFfmpeg.getAndSet(true)) {
@@ -549,6 +578,10 @@ class VideoPlayer(
                     clearScreen()
                     return
                 }
+            } else if (isNetworkStream && e is IOException && streamEndedEarly(durationMs, lastFrameTimestampMs)) {
+                logger.warn("Video input interrupted on screen '${screen.name}' at ${lastFrameTimestampMs}ms; reopening stream (${e.javaClass.simpleName})")
+                throw StalledPlayback(lastFrameTimestampMs, "video input interrupted",
+                    (lastFrameTimestampMs - effectiveStartMs).coerceAtLeast(0))
             } else if (e !is CancellationException && !stopped.get()) {
                 logger.error("Error during video playback for screen '${screen.name}': ${e.message}", e)
             }
@@ -582,7 +615,8 @@ class VideoPlayer(
         }
     }
 
-    private class StalledPlayback(val positionMs: Long) : IOException("Video frame read stalled")
+    private class StalledPlayback(val positionMs: Long, reason: String = "video frame read stalled",
+        val decodedDurationMs: Long = 0L) : IOException(reason)
     private class ResyncPlayback(val positionMs: Long) : IOException("Video resynchronizing with audio")
 
     private suspend fun renderImagePlayback(imgUrl: String) {
@@ -599,6 +633,7 @@ class VideoPlayer(
             return
         }
 
+        hasRenderedFrame = true
         val initialPlayers = getNearbyPlayers()
         sliceAndSend(rawFrameBuffer, initialPlayers, imgWidth, imgHeight)
 
@@ -702,7 +737,10 @@ class VideoPlayer(
                     var encoder = h264Encoder
                     if (encoder == null || encoder.width != width || encoder.height != height || encoder.fps != fps) {
                         closeH264()
-                        encoder = H264StreamEncoder(ffmpegPath, width, height, fps, companionBitrateKbps, ::sendH264)
+                        // Independent frames let overloaded/returning clients recover immediately,
+                        // rather than displaying only the once-per-second keyframes.
+                        encoder = H264StreamEncoder(ffmpegPath, width, height, fps, companionBitrateKbps,
+                            keyframeInterval = 1, output = ::sendH264)
                         h264Encoder = encoder
                     }
                     if (encoder.submit(sourceFrame)) rgbDelivered = true
@@ -887,6 +925,11 @@ class VideoPlayer(
                 "-skip_loop_filter", "noref"
             )
 
+        // Each raw frame must have exactly one showinfo timestamp. FFmpeg's default
+        // output sync can duplicate frames after the filter, leaving no timestamp to read.
+        internal fun rawVideoOutputOptions(): List<String> =
+            listOf("-fps_mode", "passthrough", "-threads:v", "1", "-flush_packets", "1")
+
         internal fun videoFilter(fps: Int, width: Int, height: Int, preventUpscale: Boolean = false): String {
             val scale = if (preventUpscale) "scale='min(iw,$width)':'min(ih,$height)':force_original_aspect_ratio=decrease,"
                 else "scale=$width:$height:force_original_aspect_ratio=decrease,"
@@ -896,6 +939,9 @@ class VideoPlayer(
                 else "pad=$width:$height:(ow-iw)/2:(oh-ih)/2:black")
             return "$base,realtime"
         }
+
+        internal fun streamEndedEarly(durationMs: Long, positionMs: Long): Boolean =
+            durationMs > 0 && positionMs < durationMs - 2_000L
 
         internal fun shouldReportExit(exit: Int?, cancelled: Boolean, stopped: Boolean): Boolean =
             exit != null && exit != 0 && !cancelled && !stopped

@@ -6,9 +6,9 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 class VideoDecodeBufferTest {
-    @Test fun `decoder runs ahead while presentation waits but stops at the memory limit`() = runBlocking {
-        val buffer = VideoDecodeBuffer(6, 1, 24)
-        assertEquals(3, buffer.capacity)
+    @Test fun `two buffers overlap reading and presentation without building a deep queue`() = runBlocking {
+        val buffer = VideoDecodeBuffer(6, 24)
+        assertEquals(2, buffer.capacity)
         var decoded = 0
         val producer = launch {
             buffer.decode { pixels ->
@@ -20,16 +20,16 @@ class VideoDecodeBufferTest {
         }
         try {
             yield()
-            assertEquals(3, decoded, "Decode continues without waiting for audio/presentation")
+            assertEquals(2, decoded, "Only two frames may be decoded before presentation releases one")
             assertTrue(buffer.waitingForBuffer, "Full decode buffer reports intentional backpressure")
             val first = buffer.frames.receive()
             assertEquals(0L, first.timestampMs)
             yield()
-            assertEquals(3, decoded, "The presenting frame counts towards the memory ceiling")
+            assertEquals(2, decoded, "The presenting frame counts towards the pool limit")
             assertTrue(first.pixels.all { it == 0.toByte() })
             buffer.release(first)
             yield()
-            assertEquals(4, decoded)
+            assertEquals(3, decoded)
             for (expected in 1..4) {
                 val frame = buffer.frames.receive()
                 assertEquals(expected * 40L, frame.timestampMs)
@@ -42,7 +42,7 @@ class VideoDecodeBufferTest {
     }
 
     @Test fun `decoder failure reaches presentation after queued frames`() = runBlocking {
-        val buffer = VideoDecodeBuffer(6, 15)
+        val buffer = VideoDecodeBuffer(6)
         val producer = launch {
             var reads = 0
             buffer.decode { if (reads++ == 0) 42L else throw IOException("Decoder failed") }
@@ -55,7 +55,7 @@ class VideoDecodeBufferTest {
     }
 
     @Test fun `paused or abandoned presentation can cancel a full buffer`() = runBlocking {
-        val buffer = VideoDecodeBuffer(6, 30, 12)
+        val buffer = VideoDecodeBuffer(6, 12)
         assertEquals(2, buffer.capacity)
         var decoded = 0
         val producer = launch { buffer.decode { decoded++; 0L } }
@@ -67,12 +67,12 @@ class VideoDecodeBufferTest {
 
     @Test fun `four K buffering respects the per-screen memory ceiling`() {
         val bytes = 3840 * 2160 * 6
-        val buffer = VideoDecodeBuffer(bytes, 30)
+        val buffer = VideoDecodeBuffer(bytes)
         assertEquals(2, buffer.capacity)
         assertTrue(buffer.capacity.toLong() * bytes <= 96L * 1024 * 1024)
     }
     @Test fun `presentation wait does not hide stalled decode and full pool does not start a read`() = runBlocking {
-        val buffer = VideoDecodeBuffer(6, 1, 12)
+        val buffer = VideoDecodeBuffer(6, 12)
         val monitor = VideoReadMonitor(15)
         val allowRead = CompletableDeferred<Unit>()
         val reading = CompletableDeferred<Unit>()

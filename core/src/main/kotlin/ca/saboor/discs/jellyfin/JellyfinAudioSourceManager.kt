@@ -15,7 +15,8 @@ import su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.*
 import su.plo.voice.lavaplayer.libs.org.apache.http.client.config.RequestConfig
 import su.plo.voice.lavaplayer.libs.org.apache.http.message.BasicHeader
 
-class JellyfinAudioSourceManager(private val library: JellyfinLibrary) : AudioSourceManager {
+class JellyfinAudioSourceManager(private val library: JellyfinLibrary,
+    private val ffmpeg: () -> String = { "ffmpeg" }) : AudioSourceManager {
     private class Backend(val session: JellyfinClient.Session, val source: HttpAudioSourceManager)
     private val client = JellyfinClient()
     private val backends = ConcurrentHashMap<UUID, Backend>()
@@ -46,11 +47,11 @@ class JellyfinAudioSourceManager(private val library: JellyfinLibrary) : AudioSo
             }
         }!!
         // Only this trusted, fixed Jellyfin route receives the user's header. Never follow references/redirects.
-        val url = client.streamUrl(connection.session, grant.mediaId, grant.type ?: "Audio")
+        val url = client.streamUrl(connection.session, grant.mediaId, grant.type ?: "Audio", transcode = connection.transcodingEnabled)
         return try {
             val track = backend.source.loadItem(manager, AudioReference(url, grant.label)) as? AudioTrack
                 ?: throw JellyfinException("Jellyfin did not return a supported audio file.")
-            if ((grant.type ?: "Audio") in listOf("Audio", "AudioBook")) track
+            if (!connection.transcodingEnabled || (grant.type ?: "Audio") in listOf("Audio", "AudioBook")) track
             else JellyfinTranscodedTrack(track as InternalAudioTrack, grant.durationMs, { position ->
                 val seekUrl = client.streamUrl(connection.session, grant.mediaId, grant.type ?: "Audio", position)
                 backend.source.loadItem(manager, AudioReference(seekUrl, grant.label)) as? InternalAudioTrack
@@ -68,6 +69,15 @@ class JellyfinAudioSourceManager(private val library: JellyfinLibrary) : AudioSo
                     ?: throw JellyfinException("Jellyfin did not return supported audio for this track.")
             })
         } catch (e: FriendlyException) {
+            if (!connection.transcodingEnabled && e.message?.contains("supported audio tracks", true) == true) {
+                return JellyfinLocalAudioTrack(AudioTrackInfo(grant.label, "Jellyfin", grant.durationMs,
+                    reference.identifier, false, reference.identifier), this, ffmpeg) {
+                    val (current, media) = library.resolve(reference.identifier)
+                    if (current.session !== connection.session) throw JellyfinException("Jellyfin connection changed. Restart playback.")
+                    client.streamUrl(current.session, media.mediaId, media.type ?: "Audio", transcode = false) to
+                        JellyfinClient.authorization(current.session.deviceId, current.session.token)
+                }
+            }
             if (generateSequence<Throwable>(e) { it.cause }.any { it is SocketTimeoutException }) {
                 throw FriendlyException("Jellyfin took too long to start the audio stream. Check the Jellyfin server and its transcoding logs, then try again.",
                     FriendlyException.Severity.COMMON, e)

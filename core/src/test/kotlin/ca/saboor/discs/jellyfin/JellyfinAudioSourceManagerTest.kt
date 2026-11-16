@@ -38,6 +38,13 @@ class JellyfinAudioSourceManagerTest {
             exchange.sendResponseHeaders(200, wav.size.toLong())
             exchange.responseBody.use { it.write(wav) }; exchange.close()
         }
+        server.createContext("/jellyfin/Videos/") { exchange ->
+            authorization.set(exchange.requestHeaders.getFirst("Authorization"))
+            requestedPath.set(exchange.requestURI.toString())
+            exchange.responseHeaders.set("Content-Type", "audio/wav")
+            exchange.sendResponseHeaders(200, wav.size.toLong())
+            exchange.responseBody.use { it.write(wav) }; exchange.close()
+        }
         server.start()
         val playerManager = DefaultAudioPlayerManager()
         val library = JellyfinLibrary(folder.resolve("jellyfin.json"))
@@ -97,6 +104,13 @@ class JellyfinAudioSourceManagerTest {
                 assertTrue(path!!.contains("startTimeTicks=500000000"))
                 assertTrue(authorization.get()!!.contains("Token=\"private-token\""))
             } finally { controls.detach(player); player.destroy() }
+            library.setTranscoding(connection.owner, false)
+            val directVideo = source.loadItem(playerManager, AudioReference(videoRef, null)) as AudioTrack
+            assertTrue(requestedPath.get()!!.startsWith("/jellyfin/Videos/"))
+            assertTrue(requestedPath.get()!!.endsWith("/stream?static=true"))
+            assertTrue(authorization.get()!!.contains("Token=\"private-token\""))
+            assertFalse(directVideo is JellyfinTranscodedTrack)
+            assertTrue(directVideo.isSeekable)
             assertNull(source.loadItem(playerManager, AudioReference("https://example.com/", null)))
             library.disconnect(connection.owner)
             assertThrows(JellyfinException::class.java) { source.loadItem(playerManager, AudioReference(ref, null)) }

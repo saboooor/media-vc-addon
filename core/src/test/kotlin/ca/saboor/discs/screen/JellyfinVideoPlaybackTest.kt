@@ -82,7 +82,7 @@ class JellyfinVideoPlaybackTest {
             val bytes = process.inputStream.use { input ->
                 if (!buffered) input.readBytes() else runBlocking {
                     // Exercise backpressure and pooled RGB48 frames with a slow/paused viewer.
-                    val buffer = VideoDecodeBuffer(64 * 64 * 6, 24, 64 * 64 * 6 * 3)
+                    val buffer = VideoDecodeBuffer(64 * 64 * 6, 64 * 64 * 6 * 3)
                     val producer = launch(Dispatchers.IO) {
                         buffer.decode { pixels ->
                             var offset = 0

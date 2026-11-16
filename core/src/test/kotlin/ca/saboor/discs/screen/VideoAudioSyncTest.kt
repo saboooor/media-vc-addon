@@ -15,28 +15,25 @@ class VideoAudioSyncTest {
         assertFalse(VideoAudioSync.stale(1500, 1000))
         assertFalse(VideoAudioSync.stale(1000, 1100))
     }
-    @Test fun `slow movie decoding presents first frame and cannot discard every subsequent frame`() {
-        val delivery = VideoFrameDelivery()
-        // Audio has started before the expensive movie decoder produces its first frame.
-        assertFalse(delivery.shouldDrop(0, 1500, 0))
-        assertTrue(delivery.shouldDrop(40, 1540, 40_000_000))
-        assertTrue(delivery.shouldDrop(480, 1980, 480_000_000))
-        assertFalse(delivery.shouldDrop(520, 2020, 520_000_000))
-        // Sustained decoding lag still refreshes the screen instead of leaving it black/frozen.
-        assertTrue(delivery.shouldDrop(600, 3000, 600_000_000))
-        assertFalse(delivery.shouldDrop(1040, 5000, 1_040_000_000))
-        // Once decoding catches up, every timely frame is presented normally.
-        assertFalse(delivery.shouldDrop(5000, 5050, 1_080_000_000))
-        assertFalse(delivery.shouldDrop(5040, 5090, 1_120_000_000))
+    @Test fun `sustained lag retains normal refresh instead of switching to slideshow catch up`() {
+        val delivery = VideoFrameDelivery(refreshNanos = 1_000_000_000L / 24)
+        var delivered = 0
+        repeat(240) { frame ->
+            val videoMs = frame * 1000L / 24
+            val now = frame * 1_000_000_000L / 24
+            if (!delivery.shouldDrop(videoMs, videoMs + 5_000, now, hasQueuedFrames = true)) delivered++
+        }
+        assertEquals(240, delivered, "A steady 24 FPS decoder must not be throttled because timestamps are late")
     }
 
-    @Test fun `late frames are presented when decode buffer has no newer frame queued`() {
+    @Test fun `catch up skips obsolete burst frames only when a replacement is queued`() {
         val delivery = VideoFrameDelivery()
-        assertFalse(delivery.shouldDrop(0, 5540, 0, hasQueuedFrames = false))
-        assertTrue(delivery.shouldDrop(20, 5560, 10_000_000, hasQueuedFrames = false))
-        assertFalse(delivery.shouldDrop(42, 5582, 42_000_000, hasQueuedFrames = false))
-        assertFalse(delivery.shouldDrop(83, 5623, 83_000_000, hasQueuedFrames = false))
-        assertTrue(delivery.shouldDrop(125, 5665, 125_000_000, hasQueuedFrames = true))
+        assertFalse(delivery.shouldDrop(0, 5000, 0))
+        assertTrue(delivery.shouldDrop(40, 5040, 1_000_000, hasQueuedFrames = true))
+        assertTrue(delivery.shouldDrop(80, 5080, 2_000_000, hasQueuedFrames = true))
+        assertFalse(delivery.shouldDrop(120, 5120, 3_000_000, hasQueuedFrames = false))
+        assertFalse(delivery.shouldDrop(160, 5160, 43_000_000, hasQueuedFrames = true))
+        assertFalse(delivery.shouldDrop(5200, 5200, 44_000_000, hasQueuedFrames = true))
     }
 
     @Test fun `frame timing uses presentation timestamps including fractional and slow sources`() {
@@ -44,5 +41,25 @@ class VideoAudioSyncTest {
         assertEquals(2000L, VideoAudioSync.timestamp("[Parsed_showinfo_3 @ 0x1] n: 1 pts: 2 pts_time:2 duration_time:2"))
         assertNull(VideoAudioSync.timestamp("out_time_us=500000"))
     }
+    @Test fun `raw output retains one timestamp per frame across timeline gaps`() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(runCatching {
+            ProcessBuilder("ffmpeg", "-version").redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD).start().waitFor() == 0
+        }.getOrDefault(false))
+        val log = java.nio.file.Files.createTempFile("frame-timestamps", ".log").toFile()
+        val command = listOf("ffmpeg", "-hide_banner", "-f", "lavfi", "-i",
+            "testsrc=size=16x16:rate=10:duration=1", "-vf", "setpts=2*PTS,showinfo=checksum=0") +
+            VideoPlayer.rawVideoOutputOptions() + listOf("-f", "rawvideo", "-pix_fmt", "rgb48le", "pipe:1")
+        val process = ProcessBuilder(command).redirectError(log).start()
+        try {
+            val bytes = process.inputStream.use { it.readBytes() }
+            assertEquals(0, process.waitFor(), log.readText())
+            val timestamps = log.readLines().mapNotNull(VideoAudioSync::timestamp)
+            assertEquals(10, timestamps.size)
+            assertEquals(timestamps.size * 16 * 16 * 6, bytes.size)
+            assertEquals(1800L, timestamps.last())
+        } finally { process.destroyForcibly(); log.delete() }
+    }
+
 }
 

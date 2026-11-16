@@ -151,8 +151,12 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
     private val edgeCache by lazy {
         ca.saboor.discs.utils.AsyncLruCache<Pair<String, Long>, ca.saboor.discs.audio.SongEdges>(scope, 256)
     }
+    private fun canScanSongEdges(track: AudioTrack): Boolean =
+        track !is ca.saboor.discs.jellyfin.JellyfinLocalAudioTrack &&
+            track.isSeekable && !track.info.isStream && track.duration > 0
+
     private suspend fun songEdges(track: AudioTrack): ca.saboor.discs.audio.SongEdges? {
-        if (!track.isSeekable || track.info.isStream || track.duration <= 0) return null
+        if (!canScanSongEdges(track)) return null
         val key = track.identifier to track.duration
         return edgeCache.load(key) { scanSongEdges(track) }.await()
     }
@@ -227,6 +231,12 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
             }
 
             override fun onTrackStuck(player: AudioPlayer, track: AudioTrack, thresholdMs: Long) {
+                if (track is ca.saboor.discs.jellyfin.JellyfinLocalAudioTrack && track.awaitingFirstFrame) {
+                    // FFmpeg probing has its own bounded startup timeout. LavaPlayer's
+                    // default ten-second threshold can fire before the first PCM arrives.
+                    plugin.slF4JLogger.info("Waiting for local Jellyfin audio decoder to start: ${track.info.title}")
+                    return
+                }
                 controls?.fail("Audio stream stalled for ${thresholdMs}ms")
                 plugin.slF4JLogger.warn("Disc audio stream stalled for ${thresholdMs}ms: ${track.info.title}")
             }
@@ -295,7 +305,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 val right = format.createEncoder(manager.configuration).also { rightEncoder = it }
                 StereoPcmFrameEncoder(left, right)
             } else null
-            if (track.isSeekable && !track.info.isStream && track.duration > 0) {
+            if (canScanSongEdges(track)) {
                 val key = track.identifier to track.duration
                 val cachedEdges = edgeCache.peek(key)
                 if (cachedEdges != null) controls.setSongEdges(cachedEdges.startMs, cachedEdges.endMs)
@@ -602,7 +612,12 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         lavaPlayerManager.registerSourceManagerCatching("twitch") { TwitchStreamAudioSourceManager() }
         lavaPlayerManager.registerSourceManagerCatching("beam.pro") { BeamAudioSourceManager() }
         lavaPlayerManager.registerSourceManagerCatching("getyarn.io") { GetyarnAudioSourceManager() }
-        lavaPlayerManager.registerSourceManagerCatching("jellyfin") { JellyfinAudioSourceManager(jellyfinLibrary) }
+        lavaPlayerManager.registerSourceManagerCatching("jellyfin") { JellyfinAudioSourceManager(jellyfinLibrary) {
+            kotlinx.coroutines.runBlocking {
+                ca.saboor.discs.screen.FFmpegResolver.resolve(plugin.dataFolder, config.screen.ffmpegPath,
+                    config.screen.autoInstallFfmpeg) ?: config.screen.ffmpegPath
+            }
+        } }
         lavaPlayerManager.registerSourceManagerCatching("http") { CustomHttpAudioSourceManager() }
 
         if (config.localSource.enabled) {

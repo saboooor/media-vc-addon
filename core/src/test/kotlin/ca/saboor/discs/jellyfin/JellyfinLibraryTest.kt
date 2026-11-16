@@ -88,4 +88,40 @@ class JellyfinLibraryTest {
         } finally { release.countDown(); executor.shutdownNow() }
     }
 
+    @Test fun `transcoding preference persists per owner and existing discs use the new preference`() {
+        val file = folder.resolve("preferences.json")
+        val library = JellyfinLibrary(file)
+        val owner = UUID.randomUUID()
+        val original = library.connect(owner, session())
+        val other = library.connect(UUID.randomUUID(), session())
+        val disc = library.grant(original, song)
+        assertTrue(original.transcodingEnabled)
+        assertFalse(library.setTranscoding(owner).transcodingEnabled)
+        assertFalse(library.resolve(disc).first.transcodingEnabled)
+        assertTrue(library.connection(other.owner)!!.transcodingEnabled)
+        val restored = JellyfinLibrary(file)
+        assertFalse(restored.connection(owner)!!.transcodingEnabled)
+        assertFalse(restored.connect(owner, session(token = "new-token")).transcodingEnabled)
+        assertEquals(original.id, restored.resolve(disc).first.id)
+        assertTrue(restored.setTranscoding(owner, true).transcodingEnabled)
+        assertTrue(JellyfinLibrary(file).connection(owner)!!.transcodingEnabled)
+        assertThrows(JellyfinException::class.java) { restored.setTranscoding(UUID.randomUUID(), false) }
+    }
+
+    @Test fun `legacy connections default to transcoding and failed preference writes keep the old state`() {
+        val file = folder.resolve("legacy.json")
+        val library = JellyfinLibrary(file)
+        val owner = UUID.randomUUID()
+        library.connect(owner, session())
+        val json = com.google.gson.JsonParser.parseString(Files.readString(file)).asJsonObject
+        json.getAsJsonArray("connections")[0].asJsonObject.remove("directPlay")
+        Files.writeString(file, json.toString())
+        val restored = JellyfinLibrary(file) { _, _ -> throw java.io.IOException("Disk unavailable") }
+        val original = restored.connection(owner)!!
+        assertTrue(original.transcodingEnabled)
+        assertThrows(java.io.IOException::class.java) { restored.setTranscoding(owner, false) }
+        assertSame(original, restored.connection(owner))
+        assertTrue(restored.connection(owner)!!.transcodingEnabled)
+    }
+
 }

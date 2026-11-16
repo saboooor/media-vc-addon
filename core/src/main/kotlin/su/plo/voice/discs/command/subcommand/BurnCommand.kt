@@ -6,6 +6,7 @@ import ca.saboor.discs.utils.extend.suspendSyncAt
 import ca.saboor.discs.utils.extend.suspendSyncFor
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -135,79 +136,100 @@ class BurnCommand : SubCommand() {
             }) return@launch
         }
 
-        var burnIdentifier = identifier
-        val track = try {
-            val song = withContext(Dispatchers.IO) { PublicPlaylistClient().loadSong(identifier) }
-            if (song == null) audioPlayerManager.getTrack(identifier).await()
-            else withTimeout(30_000L) {
-                audioPlayerManager.getPlaylist("ytsearch:${song.query}").await().tracks.firstOrNull()
-                    ?: error("No playable match for ${song.artist} - ${song.title}")
+        val progressStage = java.util.concurrent.atomic.AtomicReference("Resolving track")
+        val started = System.nanoTime()
+        val progress = launch {
+            while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                suspendSyncFor(player, voiceServer, plugin) {
+                    if (player.isOnline) player.sendActionBar(Component.text(
+                        "Burning disc: ${progressStage.get()}… (${(System.nanoTime() - started) / 1_000_000_000}s)",
+                        NamedTextColor.YELLOW
+                    ))
+                }
+                kotlinx.coroutines.delay(1000L)
             }
-        } catch (e: Exception) {
-            val errorMsg = e.message ?: "Unexpected error"
+        }
+        try {
+            var burnIdentifier = identifier
+            val track = try {
+                val song = withContext(Dispatchers.IO) { PublicPlaylistClient().loadSong(identifier) }
+                progressStage.set("Loading audio")
+                if (song == null) audioPlayerManager.getTrack(identifier).await()
+                else withTimeout(30_000L) {
+                    audioPlayerManager.getPlaylist("ytsearch:${song.query}").await().tracks.firstOrNull()
+                        ?: error("No playable match for ${song.artist} - ${song.title}")
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
+                val errorMsg = e.message ?: "Unexpected error"
+                if (voicePlayer != null) {
+                    voicePlayer.instance.sendTranslatable("pv.addon.discs.error.get_track_fail", errorMsg)
+                } else {
+                    player.sendMessage(Component.text("Failed to get track: $errorMsg", NamedTextColor.RED))
+                }
+                debugLogger.log("Failed to load track", e)
+                return@launch
+            }
+
+            if (identifier.startsWith("spotify:") || runCatching { java.net.URI(identifier).host }.getOrNull() in setOf("open.spotify.com", "music.apple.com"))
+                burnIdentifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.identifier
+
+            val name = arguments.drop(2)
+                .joinToString(" ")
+                .ifEmpty { formatTrackDisplay(track.info.title, track.info.author) }
+
+            progressStage.set("Preparing disc")
+            val item = suspendSyncFor(player, voiceServer, plugin) { player.inventory.itemInMainHand }
+
+            if (!checkBurnable(player, voicePlayer, item)) return@launch
+
+            val isGoatHorn = item.type.name == "GOAT_HORN"
+
+            if (isGoatHorn && !hornManager.canPlay(track)) {
+                if (voicePlayer != null) {
+                    voicePlayer.instance.sendTranslatable(
+                        "pv.addon.discs.error.horn_too_long", config.goatHorn.maxDurationSeconds
+                    )
+                } else {
+                    player.sendMessage(Component.text("Track is too long. Maximum duration in seconds: ${config.goatHorn.maxDurationSeconds}", NamedTextColor.RED))
+                }
+                return@launch
+            }
+
             if (voicePlayer != null) {
-                voicePlayer.instance.sendTranslatable("pv.addon.discs.error.get_track_fail", errorMsg)
-            } else {
-                player.sendMessage(Component.text("Failed to get track: $errorMsg", NamedTextColor.RED))
-            }
-            debugLogger.log("Failed to load track", e)
-            return@launch
-        }
-
-        if (identifier.startsWith("spotify:") || runCatching { java.net.URI(identifier).host }.getOrNull() in setOf("open.spotify.com", "music.apple.com"))
-            burnIdentifier = track.info.uri?.takeIf { it.isNotBlank() } ?: track.identifier
-
-        val name = arguments.drop(2)
-            .joinToString(" ")
-            .ifEmpty { formatTrackDisplay(track.info.title, track.info.author) }
-
-        val item = suspendSyncFor(player, voiceServer, plugin) { player.inventory.itemInMainHand }
-
-        if (!checkBurnable(player, voicePlayer, item)) return@launch
-
-        val isGoatHorn = item.type.name == "GOAT_HORN"
-
-        if (isGoatHorn && !hornManager.canPlay(track)) {
-            if (voicePlayer != null) {
-                voicePlayer.instance.sendTranslatable(
-                    "pv.addon.discs.error.horn_too_long", config.goatHorn.maxDurationSeconds
-                )
-            } else {
-                player.sendMessage(Component.text("Track is too long. Maximum duration in seconds: ${config.goatHorn.maxDurationSeconds}", NamedTextColor.RED))
-            }
-            return@launch
-        }
-
-        if (voicePlayer != null) {
-            if (!suspendSyncFor(player, voiceServer, plugin) {
-                PlayerBurnEvent(voicePlayer, track, item).callEvent()
-            }) return@launch
-        }
-
-        suspendSyncAt(player.location, voiceServer, plugin) {
-            if (Bukkit.getServer().getMinecraftVersionInt() >= 12103) {
-                discHelper.showSongTooltip(item, false)
+                if (!suspendSyncFor(player, voiceServer, plugin) {
+                    PlayerBurnEvent(voicePlayer, track, item).callEvent()
+                }) return@launch
             }
 
-            val hasIdentifier = item.hasIdentifier()
+            progressStage.set("Writing disc")
+            suspendSyncAt(player.location, voiceServer, plugin) {
+                if (Bukkit.getServer().getMinecraftVersionInt() >= 12103) {
+                    discHelper.showSongTooltip(item, false)
+                }
 
-            if (isGoatHorn && !hasIdentifier) {
-                val instrument = hornHelper.getInstrument(item)
-                if (instrument.isNotEmpty()) item.editMeta { meta ->
-                    meta.persistentDataContainer.set(AddonKeys.instrumentKey, PersistentDataType.STRING, instrument)
+                val hasIdentifier = item.hasIdentifier()
+
+                if (isGoatHorn && !hasIdentifier) {
+                    val instrument = hornHelper.getInstrument(item)
+                    if (instrument.isNotEmpty()) item.editMeta { meta ->
+                        meta.persistentDataContainer.set(AddonKeys.instrumentKey, PersistentDataType.STRING, instrument)
+                    }
+                }
+                item.burnMetadata(burnIdentifier, name, config, discHelper)
+
+                if (isGoatHorn) {
+                    hornHelper.setEmptyInstrument(item)
+                }
+
+                if (voicePlayer != null) {
+                    voicePlayer.instance.sendTranslatable("pv.addon.discs.success.burn", name)
+                } else {
+                    player.sendMessage(Component.text("Disc burned. Label: $name", NamedTextColor.GREEN))
                 }
             }
-            item.burnMetadata(burnIdentifier, name, config, discHelper)
-
-            if (isGoatHorn) {
-                hornHelper.setEmptyInstrument(item)
-            }
-
-            if (voicePlayer != null) {
-                voicePlayer.instance.sendTranslatable("pv.addon.discs.success.burn", name)
-            } else {
-                player.sendMessage(Component.text("Disc burned. Label: $name", NamedTextColor.GREEN))
-            }
+        } finally {
+            progress.cancel()
         }
     }}
 
