@@ -36,6 +36,8 @@ class VideoPlayer(
     val onCompletion: (() -> Unit)? = null,
     private val sourceAuthorization: String? = null,
     ditherStrength: Int = 12,
+    ditherMode: DitherMode = DitherMode.IGN,
+    distanceAdaptiveDithering: Boolean = true,
     private val companionRgb: Boolean = true,
     private val companionQuality: Int = 85,
     private val companionCodec: String = "h264",
@@ -100,7 +102,34 @@ class VideoPlayer(
     // Pre-allocated tile buffers for each item frame map (128x128 = 16,384 bytes)
     private val tileBuffers = Array(rows) { Array(cols) { ByteArray(16384) } }
 
-    private val dither = if (ditherStrength > 0) OrderedMapDither(ditherStrength) else null
+    @Volatile private var configuredDitherStrength = ditherStrength.coerceIn(0, 32)
+    @Volatile private var configuredDitherMode = ditherMode
+    @Volatile private var adaptiveDithering = distanceAdaptiveDithering
+    @Volatile private var activeDither = if (configuredDitherStrength > 0) {
+        OrderedMapDither(configuredDitherStrength, configuredDitherMode)
+    } else null
+
+    @Synchronized
+    fun updateDithering(
+        strength: Int,
+        mode: DitherMode = configuredDitherMode,
+        distanceAdaptive: Boolean = adaptiveDithering
+    ) {
+        val clamped = strength.coerceIn(0, 32)
+        val changed = configuredDitherStrength != clamped ||
+            configuredDitherMode != mode ||
+            adaptiveDithering != distanceAdaptive
+        configuredDitherStrength = clamped
+        configuredDitherMode = mode
+        adaptiveDithering = distanceAdaptive
+        if (changed) {
+            activeDither = if (clamped > 0) OrderedMapDither(clamped, mode) else null
+            for (row in rgbTiles) for (tile in row) tile.invalidate()
+        }
+    }
+
+    @Synchronized
+    fun updateDitherStrength(strength: Int) = updateDithering(strength)
     @Volatile private var h264Encoder: H264StreamEncoder? = null
     private var h264Failed = false
     private val rgbEncoder = CompanionFrameEncoder()
@@ -571,7 +600,7 @@ class VideoPlayer(
         sliceAndSend(rawFrameBuffer, initialPlayers)
 
         while (!stopped.get() && currentCoroutineContext().isActive) {
-            delay(1000L)
+            delay(250L)
             if (isPaused) continue
             val nearbyPlayers = getNearbyPlayers()
             sliceAndSend(rawFrameBuffer, nearbyPlayers)
@@ -692,6 +721,34 @@ class VideoPlayer(
         if (mapPlayers.isEmpty()) {
             previousViewers = emptyMap()
             return
+        }
+        val effectiveStrength = if (configuredDitherStrength <= 0) {
+            0
+        } else if (adaptiveDithering) {
+            val minDistance = mapPlayers.minOfOrNull { player ->
+                runCatching {
+                    val loc = runCatching { player.eyeLocation }.getOrNull() ?: player.location
+                    screen.distanceTo(loc.x, loc.y, loc.z)
+                }.getOrDefault(0.0)
+            } ?: 0.0
+            OrderedMapDither.adaptiveStrength(configuredDitherStrength, minDistance)
+        } else {
+            configuredDitherStrength
+        }
+        val currentDither = activeDither
+        val dither = if (effectiveStrength <= 0) {
+            if (currentDither != null) {
+                activeDither = null
+                for (row in rgbTiles) for (tile in row) tile.invalidate()
+            }
+            null
+        } else if (currentDither == null || currentDither.strength != effectiveStrength || currentDither.mode != configuredDitherMode) {
+            OrderedMapDither(effectiveStrength, configuredDitherMode).also {
+                activeDither = it
+                for (row in rgbTiles) for (tile in row) tile.invalidate()
+            }
+        } else {
+            currentDither
         }
         val rawFrame = mapScaler.scale(sourceFrame, width, height, totalWidth, totalHeight)
         val (existingViewers, newViewers) = mapPlayers.partition { previousViewers[it.uniqueId] === it }

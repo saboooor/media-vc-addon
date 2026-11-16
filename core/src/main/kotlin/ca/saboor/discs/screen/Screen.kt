@@ -27,10 +27,35 @@ data class Screen(
     var subtitleTrackIndex: Int? = null,
     var subtitleMediaId: String? = null,
     @Volatile var videoFps: Int? = null,
+    @Volatile var dithering: Boolean? = null,
+    @Volatile var ditherMode: String? = null,
+    @Volatile var distanceAdaptiveDithering: Boolean? = null,
 ) {
     fun effectiveVideoFps(serverMax: Int): Int {
         val maximum = serverMax.coerceIn(5, 30)
         return (videoFps ?: maximum).coerceIn(1, maximum)
+    }
+
+    fun effectiveDithering(serverDefault: Boolean = true): Boolean = dithering ?: serverDefault
+
+    fun effectiveDitherMode(serverDefault: String = "ign"): DitherMode =
+        DitherMode.fromId(ditherMode ?: serverDefault)
+
+    fun effectiveDistanceAdaptiveDithering(serverDefault: Boolean = true): Boolean =
+        distanceAdaptiveDithering ?: serverDefault
+
+    fun distanceTo(x: Double, y: Double, z: Double): Double {
+        val halfCols = (columns - 1).coerceAtLeast(0) * 0.5
+        val halfRows = (rows - 1).coerceAtLeast(0) * 0.5
+        val (spanX, spanY, spanZ) = when (facing) {
+            BlockFace.EAST, BlockFace.WEST -> Triple(0.0, halfRows, halfCols)
+            BlockFace.UP, BlockFace.DOWN -> Triple(halfCols, 0.0, halfRows)
+            else -> Triple(halfCols, halfRows, 0.0)
+        }
+        val dx = (kotlin.math.abs(x - centerX) - spanX).coerceAtLeast(0.0)
+        val dy = (kotlin.math.abs(y - centerY) - spanY).coerceAtLeast(0.0)
+        val dz = (kotlin.math.abs(z - centerZ) - spanZ).coerceAtLeast(0.0)
+        return kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
     }
 
     @Transient

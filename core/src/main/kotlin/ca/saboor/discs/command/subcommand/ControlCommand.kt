@@ -351,6 +351,9 @@ class ControlCommand(
                 body += Component.text("Linked screen: ${screen.name} (${screen.columns}x${screen.rows} frames)", NamedTextColor.AQUA)
                 val maxFps = screenManager!!.maxVideoFps
                 val fps = screen.effectiveVideoFps(maxFps)
+                val dithering = screenManager!!.isDitheringEnabled(screen)
+                val ditherMode = screenManager!!.effectiveDitherMode(screen)
+                val adaptiveDither = screenManager!!.isDistanceAdaptiveDithering(screen)
                 body += Component.text("Video FPS: up to $fps (server max: $maxFps)", NamedTextColor.GRAY)
                 buttons += "FPS −1" to (prefix + "screen_fps_${(fps - 1).coerceAtLeast(1)}")
                 buttons += "FPS +1" to (prefix + "screen_fps_${(fps + 1).coerceAtMost(maxFps)}")
@@ -358,6 +361,13 @@ class ControlCommand(
                     buttons += "$preset FPS${if (fps == preset) " ✓" else ""}" to (prefix + "screen_fps_$preset")
                 }
                 buttons += "FPS: Server default ($maxFps)" to (prefix + "screen_fps_auto")
+                body += Component.text(
+                    "Dithering: ${if (dithering) "${ditherMode.label}${if (adaptiveDither) " · Distance-adaptive" else ""}" else "Disabled"}",
+                    NamedTextColor.GRAY
+                )
+                buttons += "Dithering: ${if (dithering) "On" else "Off"}" to (prefix + "screen_dither")
+                buttons += "Dither mode: ${ditherMode.label}" to (prefix + "screen_dither_mode")
+                buttons += "Distance-adaptive dither: ${if (adaptiveDither) "On" else "Off"}" to (prefix + "screen_dither_adaptive")
                 body += Component.text("Subtitles: ${if (screen.subtitlesEnabled) "Enabled" else "Disabled"}", NamedTextColor.GRAY)
                 buttons += "Subtitles: ${if (screen.subtitlesEnabled) "On" else "Off"}" to (prefix + "screen_subtitles")
                 buttons += "Unlink Screen" to (prefix + "screen_unlink")
@@ -861,6 +871,19 @@ class ControlCommand(
                         }
                     }
                 }
+                return
+            }
+            "screen_dither", "screen_dither_mode", "screen_dither_adaptive" -> {
+                if (!player.isOp && !player.hasPermission("pv.addon.discs.screen") &&
+                    !player.hasPermission("vc.addon.discs.screen")) return
+                val sm = screenManager ?: return
+                val screen = sm.getScreenForJukebox(session.block) ?: return
+                when (arguments[2]) {
+                    "screen_dither" -> sm.toggleDithering(screen)
+                    "screen_dither_mode" -> sm.cycleDitherMode(screen)
+                    "screen_dither_adaptive" -> sm.toggleDistanceAdaptiveDithering(screen)
+                }
+                show(player, session.block, screenMenu = true)
                 return
             }
             "screen_subtitles" -> { show(player, session.block, subtitlesMenu = true); return }

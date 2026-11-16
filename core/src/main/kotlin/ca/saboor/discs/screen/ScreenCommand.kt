@@ -28,13 +28,13 @@ class ScreenCommand : SubCommand() {
         }
 
         if (arguments.size == 2) {
-            val sub = listOf("create", "delete", "link", "unlink", "list", "play", "stop", "clear", "subtitles", "cancel", "finish", "install-ffmpeg")
+            val sub = listOf("create", "delete", "link", "unlink", "list", "play", "stop", "clear", "dither", "subtitles", "cancel", "finish", "install-ffmpeg")
             return sub.filter { it.startsWith(arguments[1].lowercase(Locale.ROOT)) }
         }
 
         if (arguments.size == 3) {
             val action = arguments[1].lowercase(Locale.ROOT)
-            if (action in listOf("delete", "link", "unlink", "play", "stop", "clear", "subtitles")) {
+            if (action in listOf("delete", "link", "unlink", "play", "stop", "clear", "dither", "dithering", "subtitles")) {
                 val screens = screenManager.getAllScreens().map { it.name }
                 return screens.filter { it.startsWith(arguments[2].lowercase(Locale.ROOT)) }
             }
@@ -42,6 +42,15 @@ class ScreenCommand : SubCommand() {
 
         if (arguments.size == 4 && arguments[1].equals("subtitles", ignoreCase = true)) {
             return listOf("on", "off").filter { it.startsWith(arguments[3].lowercase(Locale.ROOT)) }
+        }
+
+        if (arguments.size == 4 && arguments[1].lowercase(Locale.ROOT) in listOf("dither", "dithering")) {
+            return listOf("on", "off", "ign", "bayer", "adaptive").filter { it.startsWith(arguments[3].lowercase(Locale.ROOT)) }
+        }
+
+        if (arguments.size == 5 && arguments[1].lowercase(Locale.ROOT) in listOf("dither", "dithering") &&
+            arguments[3].equals("adaptive", ignoreCase = true)) {
+            return listOf("on", "off").filter { it.startsWith(arguments[4].lowercase(Locale.ROOT)) }
         }
 
         return emptyList()
@@ -203,6 +212,44 @@ class ScreenCommand : SubCommand() {
                 player.sendMessage(Component.text("Screen '$name' cleared.", NamedTextColor.GREEN))
             }
 
+            "dither", "dithering" -> {
+                if (arguments.size < 3) {
+                    player.sendMessage(Component.text("Usage: /disc screen dither <name> [on|off|ign|bayer|adaptive]", NamedTextColor.RED))
+                    return
+                }
+                val name = arguments[2]
+                val screen = screenManager.getScreen(name)
+                if (screen == null) {
+                    player.sendMessage(Component.text("Screen '$name' not found.", NamedTextColor.RED))
+                    return
+                }
+                when (val arg = arguments.getOrNull(3)?.lowercase(Locale.ROOT)) {
+                    "ign", "bluenoise", "blue-noise", "bayer", "ordered" -> {
+                        val mode = DitherMode.fromId(arg)
+                        screenManager.setDitherMode(screen, mode)
+                        player.sendMessage(Component.text("Dithering set to ${mode.label} on screen '$name'.", NamedTextColor.GREEN))
+                    }
+                    "adaptive" -> {
+                        val adaptive = when (arguments.getOrNull(4)?.lowercase(Locale.ROOT)) {
+                            "on", "true", "enable" -> true
+                            "off", "false", "disable" -> false
+                            else -> !screenManager.isDistanceAdaptiveDithering(screen)
+                        }
+                        screenManager.setDistanceAdaptiveDithering(screen, adaptive)
+                        player.sendMessage(Component.text("Distance-adaptive dithering ${if (adaptive) "enabled" else "disabled"} on screen '$name'.", NamedTextColor.GREEN))
+                    }
+                    else -> {
+                        val state = when (arg) {
+                            "on", "true", "enable" -> true
+                            "off", "false", "disable" -> false
+                            else -> !screenManager.isDitheringEnabled(screen)
+                        }
+                        screenManager.setDithering(screen, state)
+                        player.sendMessage(Component.text("Dithering ${if (state) "enabled" else "disabled"} on screen '$name'.", NamedTextColor.GREEN))
+                    }
+                }
+            }
+
             "subtitles" -> {
                 if (arguments.size < 3) {
                     player.sendMessage(Component.text("Usage: /disc screen subtitles <name> [on|off]", NamedTextColor.RED))
@@ -252,6 +299,7 @@ class ScreenCommand : SubCommand() {
         player.sendMessage(Component.text("/disc screen play <name> <url>", NamedTextColor.AQUA).append(Component.text(" - Manually play video on screen", NamedTextColor.GRAY)))
         player.sendMessage(Component.text("/disc screen stop [name]", NamedTextColor.AQUA).append(Component.text(" - Stop screen playback", NamedTextColor.GRAY)))
         player.sendMessage(Component.text("/disc screen clear [name]", NamedTextColor.AQUA).append(Component.text(" - Clear screen to black", NamedTextColor.GRAY)))
+        player.sendMessage(Component.text("/disc screen dither <name> [on|off|ign|bayer|adaptive]", NamedTextColor.AQUA).append(Component.text(" - Configure screen dithering", NamedTextColor.GRAY)))
         player.sendMessage(Component.text("/disc screen subtitles <name> [on|off]", NamedTextColor.AQUA).append(Component.text(" - Toggle or set subtitles", NamedTextColor.GRAY)))
         player.sendMessage(Component.text("/disc screen delete <name>", NamedTextColor.AQUA).append(Component.text(" - Delete a screen", NamedTextColor.GRAY)))
         player.sendMessage(Component.text("/disc screen cancel", NamedTextColor.AQUA).append(Component.text(" - Cancel active selection", NamedTextColor.GRAY)))

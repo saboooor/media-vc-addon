@@ -31,6 +31,49 @@ class ScreenManagerTest {
     }
 
     @Test
+    fun `screen dithering persists and follows server default for old saves`() {
+        val screen = Screen("tv", "world", "NORTH", 1, 1, emptyList(), emptyList())
+        val oldSave = gson.toJson(screen)
+        val restored = gson.fromJson(oldSave, Screen::class.java)
+        assertNull(restored.dithering)
+        assertTrue(restored.effectiveDithering(true))
+        assertFalse(restored.effectiveDithering(false))
+        restored.dithering = false
+        val saved = gson.fromJson(gson.toJson(restored), Screen::class.java)
+        assertEquals(false, saved.dithering)
+        assertFalse(saved.effectiveDithering(true))
+        saved.dithering = true
+        assertTrue(saved.effectiveDithering(false))
+        assertEquals(DitherMode.IGN, saved.effectiveDitherMode("ign"))
+        assertEquals(DitherMode.BAYER, saved.effectiveDitherMode("bayer"))
+        saved.ditherMode = "bayer"
+        saved.distanceAdaptiveDithering = false
+        val savedWithMode = gson.fromJson(gson.toJson(saved), Screen::class.java)
+        assertEquals(DitherMode.BAYER, savedWithMode.effectiveDitherMode("ign"))
+        assertFalse(savedWithMode.effectiveDistanceAdaptiveDithering(true))
+    }
+
+    @Test
+    fun `screen distance accounts for multi-frame span`() {
+        val screen = Screen(
+            name = "cinema",
+            worldName = "world",
+            facingName = BlockFace.SOUTH.name,
+            columns = 5,
+            rows = 3,
+            frameUuids = emptyList(),
+            mapIds = emptyList(),
+            centerX = 10.5,
+            centerY = 65.5,
+            centerZ = 20.5
+        )
+        // Standing 4 blocks in front of the left edge (x = 8.5 is within [8.5, 12.5])
+        assertEquals(4.0, screen.distanceTo(8.5, 65.5, 24.5), 1e-6)
+        // Moving 3 blocks past the right edge (x = 15.5 is 3 blocks past 12.5) and 4 blocks in front
+        assertEquals(5.0, screen.distanceTo(15.5, 65.5, 24.5), 1e-6)
+    }
+
+    @Test
     fun `screen serializes and deserializes correctly with json`() {
         val screen = Screen(
             name = "cinema",

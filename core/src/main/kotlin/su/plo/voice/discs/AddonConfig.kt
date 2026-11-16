@@ -352,6 +352,12 @@ class AddonConfig {
         @ConfigField(comment = "Enable stable ordered dithering for smoother screen colors and gradients")
         var dithering: Boolean = true
 
+        @ConfigField(comment = "Dithering pattern: 'ign' (interleaved gradient / blue-noise, prevents distance moire) or 'bayer' (classic 4x4 grid)")
+        var ditherMode: String = "ign"
+
+        @ConfigField(comment = "Automatically reduce dithering strength as viewers move away from the screen to prevent distance moire artifacts")
+        var distanceAdaptiveDithering: Boolean = true
+
         @ConfigField(comment = "Send full-color video to negotiated Fabric screen companion clients")
         var companionRgb: Boolean = true
 

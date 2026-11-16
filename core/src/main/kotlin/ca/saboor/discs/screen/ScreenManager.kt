@@ -442,7 +442,9 @@ class ScreenManager : PluginKoinComponent {
                 companionResolution = config.screen.companionResolution,
                 companionCodec = config.screen.companionCodec,
                 companionBitrateKbps = config.screen.companionBitrateKbps,
-                ditherStrength = if (config.screen.dithering) config.screen.ditherStrength.coerceIn(0, 32) else 0,
+                ditherStrength = effectiveDitherStrength(screen),
+                ditherMode = effectiveDitherMode(screen),
+                distanceAdaptiveDithering = isDistanceAdaptiveDithering(screen),
                 fps = initialScreenFps,
                 maxDistance = config.screen.maxDistance.coerceIn(8, 128),
                 ffmpegPath = resolvedFfmpegPath,
@@ -492,6 +494,62 @@ class ScreenManager : PluginKoinComponent {
     }
 
     val maxVideoFps: Int get() = config.screen.fps.coerceIn(5, 30)
+
+    val defaultDithering: Boolean get() = config.screen.dithering && config.screen.ditherStrength > 0
+
+    fun isDitheringEnabled(screen: Screen): Boolean = screen.effectiveDithering(defaultDithering)
+
+    fun effectiveDitherMode(screen: Screen): DitherMode = screen.effectiveDitherMode(config.screen.ditherMode)
+
+    fun isDistanceAdaptiveDithering(screen: Screen): Boolean =
+        screen.effectiveDistanceAdaptiveDithering(config.screen.distanceAdaptiveDithering)
+
+    fun effectiveDitherStrength(screen: Screen): Int =
+        if (isDitheringEnabled(screen)) config.screen.ditherStrength.takeIf { it > 0 }?.coerceIn(1, 32) ?: 12 else 0
+
+    private fun refreshActivePlayerDithering(screen: Screen) {
+        activePlayers[screen.name.lowercase(Locale.ROOT)]?.updateDithering(
+            strength = effectiveDitherStrength(screen),
+            mode = effectiveDitherMode(screen),
+            distanceAdaptive = isDistanceAdaptiveDithering(screen)
+        )
+    }
+
+    fun setDithering(screen: Screen, enabled: Boolean): Boolean {
+        synchronized(playbackLock) {
+            screen.dithering = enabled
+            refreshActivePlayerDithering(screen)
+        }
+        saveScreens()
+        return enabled
+    }
+
+    fun toggleDithering(screen: Screen): Boolean = setDithering(screen, !isDitheringEnabled(screen))
+
+    fun setDitherMode(screen: Screen, mode: DitherMode): DitherMode {
+        synchronized(playbackLock) {
+            screen.ditherMode = mode.id
+            screen.dithering = true
+            refreshActivePlayerDithering(screen)
+        }
+        saveScreens()
+        return mode
+    }
+
+    fun cycleDitherMode(screen: Screen): DitherMode =
+        setDitherMode(screen, effectiveDitherMode(screen).next())
+
+    fun setDistanceAdaptiveDithering(screen: Screen, enabled: Boolean): Boolean {
+        synchronized(playbackLock) {
+            screen.distanceAdaptiveDithering = enabled
+            refreshActivePlayerDithering(screen)
+        }
+        saveScreens()
+        return enabled
+    }
+
+    fun toggleDistanceAdaptiveDithering(screen: Screen): Boolean =
+        setDistanceAdaptiveDithering(screen, !isDistanceAdaptiveDithering(screen))
 
     fun setVideoFps(screen: Screen, fps: Int?): Boolean {
         if (fps != null && fps !in 1..maxVideoFps) return false

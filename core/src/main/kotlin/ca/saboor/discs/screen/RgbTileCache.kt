@@ -5,6 +5,9 @@ import java.util.Arrays
 /** Exact RGB comparison avoids palette matching unchanged tiles without hash collisions. */
 internal class RgbTileCache {
     private var previous: ByteArray? = null
+    fun invalidate() {
+        previous = null
+    }
     fun update(frame: ByteArray, frameWidth: Int, x: Int, y: Int): Boolean {
         val old = previous
         if (old != null) {
