@@ -8,7 +8,6 @@ import ca.saboor.discs.audio.MixFeatures
 import ca.saboor.discs.audio.MixPlan
 import ca.saboor.discs.audio.PlaybackFailure
 import ca.saboor.discs.utils.extend.burnMetadata
-import ca.saboor.discs.utils.extend.eraseBurnMetadata
 import ca.saboor.discs.utils.extend.formatTrackDisplay
 import ca.saboor.discs.utils.extend.suspendSyncAt
 import ca.saboor.discs.utils.extend.suspendSyncFor
@@ -411,7 +410,6 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
             var preparingDisc: ItemStack? = null
             var preparingForAutoMix = false
             var preparationFailed = false
-            var preparingTarget = -1
             fun fadeDuration() = if (autoMixEnabled(block)) 2_000L else state.crossfadeSeconds * 1_000L
             fun prepare(target: Int) {
                 val disc = liveDiscs.getOrNull(target) ?: return
@@ -419,7 +417,6 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                 if (preparing != null && preparingDisc == disc && preparingForAutoMix == analyze) return
                 preparing?.cancel()
                 preparingDisc = disc.clone()
-                preparingTarget = target
                 preparingForAutoMix = analyze
                 preparationFailed = false
                 preparing = async(Dispatchers.IO) {
@@ -437,7 +434,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         null
                     } catch (e: Exception) {
                         // Retry through normal playback for a useful error, without erasing a valid URL.
-                        preparationFailed = !PlaybackFailure.keepDisc(e)
+                        preparationFailed = true
                         audioPlayerManager.reportPlaybackFailure(disc.customDiscIdentifier(discHelper)!!,
                             PlaybackFailure.message(e, "Next-song preload failed"), e, "Next-song preload")
                         null
@@ -458,20 +455,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         state.currentIndex = index
                         val disc = discOverride ?: liveDiscs.getOrNull(index) ?: return@suspendSyncAt null
                         activeDisc = disc
-                        val occurrence = liveDiscs.take(index).count { it == disc }
                         jukeboxes.playChestTrack(disc.customDiscIdentifier(discHelper)!!, block, disc.itemMeta,
-                            player, controls = nextControls, overlap = overlap, preparedTrack = prepared?.track, onFailure = {
-                                val inventory = chest.block.state.playlistContainer()?.inventory
-                                if (inventory != null) {
-                                    val matchingSlots = (0 until inventory.size).filter { inventory.getItem(it) == disc }
-                                    val slot = matchingSlots.getOrNull(occurrence) ?: matchingSlots.firstOrNull()
-                                    if (slot != null) {
-                                        val blank = inventory.getItem(slot)!!.clone()
-                                        blank.eraseBurnMetadata(config, discHelper)
-                                        inventory.setItem(slot, blank)
-                                    }
-                                }
-                            })
+                            player, controls = nextControls, overlap = overlap, preparedTrack = prepared?.track)
                     }
                 }
             suspend fun recoverOutgoing(): Boolean {
@@ -563,22 +548,6 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     }
                     controls.autoMixAnalysis = autoMixEnabled(block)
                     if (!controls.autoMixAnalysis) { controls.autoMixStatus = null; mixCommitment.clear() }
-                    if (preparing?.isCompleted == true && preparationFailed) {
-                        // Consume the completed result before touching inventory on its owning thread.
-                        preparing?.await()
-                        val failedDisc = preparingDisc
-                        val occurrence = liveDiscs.take(preparingTarget.coerceAtLeast(0)).count { it == failedDisc }
-                        if (failedDisc != null) suspendSyncAt(block.location, voiceServer, plugin) {
-                            val inventory = chest.block.state.playlistContainer()?.inventory ?: return@suspendSyncAt
-                            val slots = (0 until inventory.size).filter { inventory.getItem(it) == failedDisc }
-                            val slot = slots.getOrNull(occurrence) ?: return@suspendSyncAt
-                            val blank = inventory.getItem(slot)!!.clone()
-                            blank.eraseBurnMetadata(config, discHelper)
-                            inventory.setItem(slot, blank)
-                        }
-                        preparing = null; preparingDisc = null; preparationFailed = false
-                        refreshTicks = 40 // Refresh/remap the queue before selecting the following song.
-                    }
                     if (++refreshTicks >= 40 || dirtyInventories.remove(block) || current?.isActive != true) {
                         refreshTicks = 0
                         val updated = suspendSyncAt(block.location, voiceServer, plugin) {
@@ -673,8 +642,8 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                     if (!playing.isActive) {
                         playing.join()
                         if (playing.isCancelled || haltAtEnd) break
-                        if (controls.failure != null && (activeDisc.identifier()?.startsWith("jellyfin:") == true ||
-                            PlaybackFailure.keepDisc(controls.failure))) break
+                        // Keep failed discs intact and stop rather than retrying the same queue indefinitely.
+                        if (controls.failure != null) break
                         val target = order.next(liveDiscs.size, index, playbackModes(block).first,
                             playbackModes(block).second, removedNextIndex) ?: break
                         if (!transition(target, null, true)) break
@@ -722,7 +691,7 @@ class PlaylistCommand(private val jukeboxes: JukeboxEventListener) : SubCommand(
                         controls.seekable && !controls.isStream && remaining > 0
                     controls.autoMixStatus = when {
                         !controls.seekable || controls.isStream -> "AutoMix: unavailable for live/non-seekable audio"
-                        preparationFailed -> "AutoMix: skipping unavailable next song"
+                        preparationFailed -> "AutoMix: next-song preload failed; retrying on playback"
                         ready == null -> "AutoMix: analyzing next song"
                         plan.beatAligned -> plan.readyDescription
                         incomingFeatures == null -> "AutoMix: intro analysis unavailable; smooth fade"

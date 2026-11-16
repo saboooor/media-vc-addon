@@ -32,6 +32,11 @@ class OauthCommand : SubCommand() {
             return
         }
 
+        if (audioPlayerManager.youtubeExtractor() != null) {
+            sender.sendMessage(Component.text("YouTube uses yt-dlp. Configure its PO-token provider or private cookies file; Google device OAuth is not used by this backend.", NamedTextColor.YELLOW))
+            return
+        }
+
         val tokenFile = File(plugin.dataFolder, ".youtube-token")
         val force = arguments.getOrNull(1).equals("force", ignoreCase = true)
         val status = arguments.getOrNull(1).equals("status", ignoreCase = true)

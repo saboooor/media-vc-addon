@@ -105,6 +105,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         webhooks.close()
         tokenTimers.forEach { it.cancel() }
         tokenTimers.clear()
+        ytDlp?.close()
         lavaPlayerManager.shutdown()
         stereoPlayerManager.shutdown()
     }
@@ -185,6 +186,9 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         finally { tap?.close(); probe.destroy() }
     }
 
+    private var ytDlp: ca.saboor.discs.youtube.YtDlpClient? = null
+    internal fun youtubeExtractor(): ca.saboor.discs.youtube.YtDlpClient? = ytDlp
+
     fun getYoutubeSourceManager(): YoutubeAudioSourceManager? {
         return lavaPlayerManager.source(QualityYoutubeSourceManager::class.java)
             ?: lavaPlayerManager.source(YoutubeAudioSourceManager::class.java)
@@ -215,20 +219,10 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
             override fun onTrackException(player: AudioPlayer, track: AudioTrack, exception: FriendlyException) {
                 controls?.fail(PlaybackFailure.message(exception, "Audio stream failed"))
                 plugin.slF4JLogger.error("Disc audio stream failed: ${track.info.title}", exception)
-                val msg = exception.message ?: ""
-                val cause = exception.cause
-                val causeMsg = cause?.message ?: ""
-                val isAuthIssue = msg.contains("login", ignoreCase = true) || causeMsg.contains("login", ignoreCase = true) ||
-                    msg.contains("bot", ignoreCase = true) || causeMsg.contains("bot", ignoreCase = true) ||
-                    cause?.javaClass?.simpleName == "AllClientsFailedException"
-
-                if (isAuthIssue) {
-                    plugin.slF4JLogger.warn("===================================================================")
-                    plugin.slF4JLogger.warn("YouTube blocked stream loading (requires login or bot verification).")
-                    plugin.slF4JLogger.warn("To resolve this, authorize YouTube via OAuth2:")
-                    plugin.slF4JLogger.warn("Run '/disc oauth' or set 'use_oauth2 = true' in discs.toml,")
-                    plugin.slF4JLogger.warn("then visit https://www.google.com/device and enter the code.")
-                    plugin.slF4JLogger.warn("===================================================================")
+                if (ca.saboor.discs.webhook.PlaybackWebhooks.isYoutube(track.info.uri ?: track.identifier)) {
+                    PlaybackFailure.youtubeIssue(exception)?.let { issue ->
+                        plugin.slF4JLogger.warn(PlaybackFailure.youtubeAdvice(issue))
+                    }
                 }
             }
 
@@ -546,6 +540,16 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         proxyHttpBuilder?.let { lavaPlayerManager.setHttpBuilderConfigurator(it) }
 
         lavaPlayerManager.registerSourceManagerCatching("youtube") {
+            require(config.youtubeSource.backend in listOf("lavaplayer", "yt-dlp")) {
+                "youtube_source.backend must be lavaplayer or yt-dlp"
+            }
+            if (config.youtubeSource.backend == "yt-dlp") {
+                val extractor = ca.saboor.discs.youtube.YtDlpClient(config.youtubeSource.ytdlpPath,
+                    config.youtubeSource.ytdlpConfig)
+                ytDlp = extractor
+                plugin.slF4JLogger.info("YouTube uses yt-dlp for audio and screen video; Java OAuth is not used by this backend")
+                return@registerSourceManagerCatching ca.saboor.discs.youtube.YtDlpAudioSourceManager(extractor)
+            }
             val youtubeClients = config.youtubeSource.clients
                 ?.mapNotNull {
                     try {

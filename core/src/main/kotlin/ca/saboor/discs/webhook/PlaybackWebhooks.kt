@@ -42,11 +42,12 @@ class PlaybackWebhooks(
     fun failure(identifier: String, message: String, error: Throwable? = null, context: String = "Playback") {
         if (destination() == null) return
         val youtube = isYoutube(identifier)
-        val login = youtube && (if (error != null) PlaybackFailure.keepDisc(error) else PlaybackFailure.keepDisc(message)) &&
-            !Regex("rate[ -]?limit|too many requests|429", RegexOption.IGNORE_CASE).containsMatchIn(message)
+        val issue = if (youtube) error?.let(PlaybackFailure::youtubeIssue) ?: PlaybackFailure.youtubeIssue(message) else null
+        val login = issue == PlaybackFailure.YoutubeIssue.TOKEN_REJECTED
         val source = if (youtube) "YouTube" else if (identifier.startsWith("jellyfin:")) "Jellyfin" else "Media provider"
-        post("failure:$source:${if (login) "login" else clean(message)}",
-            "$context failed · $source\n${clean(message)}" + if (login) "\nDisc kept. Reauthorize YouTube to retry playback.\nManual command: /disc oauth force" else "")
+        post("failure:$source:${issue?.name ?: clean(message)}",
+            "$context failed · $source\n${clean(message)}" +
+                (issue?.let { "\nDisc kept. ${PlaybackFailure.youtubeAdvice(it)}" } ?: ""))
         if (login) synchronized(this) { pendingPrompt?.takeIf { clock() < authPendingUntil } }?.let(::sendPrompt)
         if (login && config().autoYoutubeOauth) {
             val start = synchronized(this) {

@@ -19,7 +19,7 @@ class AddonConfig {
         var url = ""
         @ConfigField(comment = "Minimum seconds between repeated notifications of the same issue (1..3600).")
         var cooldownSeconds = 60
-        @ConfigField(comment = "Start replacement YouTube OAuth on login/bot failures and post its verification URL and pairing code. Use a private admin channel. Tokens are never posted. Applies only while a webhook URL is configured.")
+        @ConfigField(comment = "Start replacement YouTube OAuth only on explicit token rejection/expiry (not bot checks, rate limits or generic client failures) and post its verification URL and pairing code. Use a private admin channel. Tokens are never posted. Applies only while a webhook URL is configured.")
         var autoYoutubeOauth = true
     }
     @ConfigField
@@ -201,6 +201,15 @@ class AddonConfig {
 
     @Config
     class YouTubeSourceConfig {
+        @ConfigField(comment = "YouTube backend: lavaplayer (built in) or yt-dlp (external executable and optional PO-token provider). Restart after changing.")
+        var backend: String = "lavaplayer"
+
+        @ConfigField(comment = "yt-dlp executable for the yt-dlp YouTube backend, shared by audio and screen video.")
+        var ytdlpPath: String = "yt-dlp"
+
+        @ConfigField(comment = "Optional explicit yt-dlp config file for proxy, cookies or PO-token provider options. Other yt-dlp config files are ignored. Empty uses yt-dlp defaults and automatic provider plugin discovery. Restart after changing.")
+        var ytdlpConfig: String = ""
+
         @ConfigField(
             comment = """
                 If you see a error like "Sign in to confirm you're not a bot",
@@ -210,8 +219,8 @@ class AddonConfig {
                 you will see "OAUTH INTEGRATION" in your console.
                 Follow the instructions in this prompt.
                 If you do everything right, you will see "Token retrieved successfully" in your console.
-                You only need to do this once;
-                the token will be stored in "vc-addon-discs/.youtube-token" after successful authorization.
+                OAuth is not a guaranteed fix for bot checks or server IP restrictions;
+                the refresh token will be stored in "vc-addon-discs/.youtube-token" after successful authorization.
             """
         )
         val useOauth2: Boolean = false

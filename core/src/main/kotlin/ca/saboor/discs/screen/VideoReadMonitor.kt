@@ -1,8 +1,11 @@
 package ca.saboor.discs.screen
 
-/** Tracks blocked frame reads without counting pause time or frame rendering work. */
-internal class VideoReadMonitor(private val timeoutNanos: Long) {
+import java.util.concurrent.TimeUnit
+
+/** Tracks blocked frame reads without counting pause, audio-sync wait, or frame rendering time. */
+internal class VideoReadMonitor(@Volatile var timeoutNanos: Long) {
     @Volatile private var readStarted: Long? = null
+    val timeoutSeconds: Long get() = TimeUnit.NANOSECONDS.toSeconds(timeoutNanos).coerceAtLeast(1)
 
     @Synchronized
     fun beginRead(now: Long) { readStarted = now }
@@ -10,9 +13,9 @@ internal class VideoReadMonitor(private val timeoutNanos: Long) {
     fun endRead() { readStarted = null }
 
     @Synchronized
-    fun isStalled(now: Long, paused: Boolean): Boolean {
+    fun isStalled(now: Long, waiting: Boolean): Boolean {
         val started = readStarted ?: return false
-        if (paused) {
+        if (waiting) {
             readStarted = now
             return false
         }

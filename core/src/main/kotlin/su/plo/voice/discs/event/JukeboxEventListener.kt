@@ -9,7 +9,6 @@ import ca.saboor.discs.svc.SvcDiscsPlugin
 import ca.saboor.discs.utils.extend.cleanArtistName
 import ca.saboor.discs.utils.extend.cleanTrackName
 import ca.saboor.discs.utils.extend.containsArtist
-import ca.saboor.discs.utils.extend.eraseBurnMetadata
 import ca.saboor.discs.utils.extend.suspendSyncAt
 import ca.saboor.discs.utils.extend.suspendSyncFor
 import java.util.concurrent.ConcurrentHashMap
@@ -354,10 +353,10 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
     }
 
     fun playChestTrack(identifier: String, block: Block, itemMeta: ItemMeta?, player: Player? = null, chestQueue: Boolean = true,
-                       controls: PlaybackControls = PlaybackControls(), overlap: Boolean = false, onFailure: (() -> Unit)? = null, preparedTrack: su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack? = null): Job {
+                       controls: PlaybackControls = PlaybackControls(), overlap: Boolean = false, preparedTrack: su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack? = null): Job {
         check(overlap || !isPlaying(block)) { "Jukebox is already playing" }
         val voicePlayer = player?.let { p -> voiceServer?.let { p.asVoicePlayer(it) } }
-        val job = playTrack(identifier, block, itemMeta, voicePlayer, player, chestQueue = chestQueue, controls = controls, onFailure = onFailure, preparedTrack = preparedTrack)
+        val job = playTrack(identifier, block, itemMeta, voicePlayer, player, chestQueue = chestQueue, controls = controls, preparedTrack = preparedTrack)
         jobByBlock[block] = job
         job.invokeOnCompletion { jobByBlock.remove(block, job) }
         return job
@@ -376,7 +375,6 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
         player: Player? = null,
         chestQueue: Boolean = false,
         controls: PlaybackControls = PlaybackControls(),
-        onFailure: (() -> Unit)? = null,
         preparedTrack: su.plo.voice.lavaplayer.libs.com.sedmelluq.discord.lavaplayer.track.AudioTrack? = null,
         seedIdentifier: String = identifier,
         seedMeta: ItemMeta? = itemMeta,
@@ -396,23 +394,10 @@ class JukeboxEventListener : Listener, PluginKoinComponent {
                 controls.title = "Failed: $message"
                 suspendSyncAt(block.location, voiceServer, plugin) {
                     val jellyfin = identifier.startsWith("jellyfin:")
-                    val keepDisc = jellyfin || PlaybackFailure.keepDisc(message)
                     val error = Component.text(if (jellyfin) "Could not play Jellyfin media. Check the connection; the disc was kept."
-                        else if (keepDisc) "Could not play song: $message. Disc kept; check provider sign-in before retrying."
-                        else "Could not play song: $message. Disc unburned; skipping.", NamedTextColor.RED)
+                        else "Could not play song: $message. Disc kept; retry playback after resolving the error.", NamedTextColor.RED)
                     player?.sendMessage(error)
                     player?.sendActionBar(error)
-                    if (!keepDisc) onFailure?.invoke()
-                    if (!chestQueue && !keepDisc) {
-                        val jukebox = block.asJukebox() ?: return@suspendSyncAt
-                        val record = jukebox.record
-                        if (record.customDiscIdentifier(discHelper) == identifier && record.itemMeta == itemMeta) {
-                            record.eraseBurnMetadata(config, discHelper)
-                            jukebox.setRecord(record)
-                            jukebox.update()
-                            jukebox.eject()
-                        }
-                    }
                 }
             }
             val track = try {

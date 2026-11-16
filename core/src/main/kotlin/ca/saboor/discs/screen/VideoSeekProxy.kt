@@ -11,7 +11,8 @@ import java.util.concurrent.Executors
 
 /** A per-playback loopback bridge: Java handles TLS, while FFmpeg retains HTTP range seeking. */
 internal class VideoSeekProxy(private val source: String, private val userAgent: String,
-    private val authorization: String? = null
+    private val authorization: String? = null,
+    private val sourceHeaders: Map<String, String> = emptyMap()
 ) : AutoCloseable {
     private val connections = ConcurrentHashMap.newKeySet<HttpURLConnection>()
     private val executor = Executors.newCachedThreadPool { task -> Thread(task, "disc-video-seek").apply { isDaemon = true } }
@@ -42,14 +43,16 @@ internal class VideoSeekProxy(private val source: String, private val userAgent:
                 upstream.readTimeout = if (authorization != null) 60_000 else 20_000
                 upstream.requestMethod = exchange.requestMethod
                 upstream.setRequestProperty("User-Agent", userAgent)
+                sourceHeaders.filterKeys { it.lowercase() !in setOf("host", "connection", "content-length", "range", "if-range") }
+                    .forEach { (name, value) -> upstream.setRequestProperty(name, value) }
                 authorization?.let { upstream.setRequestProperty("Authorization", it) }
                 exchange.requestHeaders.getFirst("Range")?.let { upstream.setRequestProperty("Range", it) }
                 exchange.requestHeaders.getFirst("If-Range")?.let { upstream.setRequestProperty("If-Range", it) }
                 val status = upstream.responseCode
                 if (status in listOf(301, 302, 303, 307, 308)) {
                     // Authenticated Jellyfin streams must never forward credentials to redirects.
-                    if (authorization != null) {
-                        logger.warn("Video upstream returned redirect $status for ${VideoPlayer.describeSource(source)}; use the final Jellyfin server URL (credentials were not forwarded)")
+                    if (authorization != null || sourceHeaders.keys.any { it.equals("Cookie", true) || it.equals("Authorization", true) }) {
+                        logger.warn("Video upstream returned redirect $status for ${VideoPlayer.describeSource(source)}; use the final media server URL (credentials were not forwarded)")
                         exchange.sendResponseHeaders(502, -1)
                         return
                     }
@@ -70,7 +73,7 @@ internal class VideoSeekProxy(private val source: String, private val userAgent:
                     val length = upstream.contentLengthLong
                     exchange.sendResponseHeaders(status, if (length > 0) length else 0)
                     val input = if (status >= 400) upstream.errorStream else upstream.inputStream
-                    input?.use { it.copyTo(exchange.responseBody) }
+                    input?.use { it.copyTo(exchange.responseBody, 64 * 1024) }
                 }
                 return
             }

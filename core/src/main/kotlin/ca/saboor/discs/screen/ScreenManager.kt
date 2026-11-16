@@ -373,7 +373,21 @@ class ScreenManager : PluginKoinComponent {
             val sourceAuthorization = jellyfin?.first?.session?.let {
                 ca.saboor.discs.jellyfin.JellyfinClient.authorization(it.deviceId, it.token)
             }
-            val resolvedUrl = if (jellyfin != null) {
+            val externalYoutube = if (jellyfin == null && videoId != null) audioPlayerManager.youtubeExtractor() else null
+            val externalVideo = externalYoutube?.let { extractor ->
+                try {
+                    extractor.video(videoId!!, when (config.screen.companionResolution.lowercase()) {
+                        "720p" -> 720
+                        "source" -> 2160
+                        else -> 1080
+                    })
+                } catch (e: Exception) {
+                    plugin.slF4JLogger.warn("yt-dlp video extraction failed for screen '${screen.name}'; displaying artwork if available")
+                    null
+                }
+            }
+            val resolvedUrl = if (externalYoutube != null) externalVideo?.url ?: fallbackImg.orEmpty()
+            else if (jellyfin != null) {
                 val jfClient = JellyfinClient()
                 jfClient.videoStreamUrl(jellyfin.first.session, jellyfin.second.mediaId)
             } else VideoSourceResolver.resolveVideoUrl(
@@ -401,6 +415,7 @@ class ScreenManager : PluginKoinComponent {
                 screen = screen,
                 sourceUrl = resolvedUrl,
                 sourceAuthorization = sourceAuthorization,
+                sourceHeaders = externalVideo?.headers.orEmpty(),
                 playbackPositionMs = playbackPositionMs,
                 companionRgb = config.screen.companionRgb,
                 companionQuality = config.screen.companionQuality,

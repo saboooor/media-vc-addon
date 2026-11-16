@@ -39,7 +39,7 @@ class PlaybackWebhooksTest {
         val started = CountDownLatch(1)
         val webhook = PlaybackWebhooks(scope, { config }, { throw AssertionError(it) }, { starts.incrementAndGet(); started.countDown(); true })
         try {
-            repeat(3) { webhook.failure("https://www.youtube.com/watch?v=abcdefghijk", "Sign in to confirm you're not a bot") }
+            repeat(3) { webhook.failure("https://www.youtube.com/watch?v=abcdefghijk", "OAuth refresh token expired") }
             assertTrue(started.await(5, TimeUnit.SECONDS))
             val prompt = OauthPrompt.parse("OAUTH INTEGRATION: To give youtube-source access to your account, go to https://www.google.com/device and enter code ABCD-EFGH")!!
             repeat(2) { webhook.oauthPrompt(prompt) }
@@ -50,6 +50,34 @@ class PlaybackWebhooksTest {
             for (message in messages) assertEquals(0, JsonParser.parseString(message).asJsonObject.getAsJsonObject("allowed_mentions").getAsJsonArray("parse").size())
         } finally { webhook.close(); scope.cancel(); server.stop(0) }
     }
+    @Test fun `bot checks and nested rate limits never start replacement OAuth`() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val delivered = CountDownLatch(4)
+        val messages = java.util.concurrent.CopyOnWriteArrayList<String>()
+        server.createContext("/webhook") { exchange ->
+            messages += exchange.requestBody.bufferedReader().readText()
+            exchange.sendResponseHeaders(204, -1); exchange.close(); delivered.countDown()
+        }
+        server.start()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val config = AddonConfig.WebhookConfig().apply { url = "http://127.0.0.1:${server.address.port}/webhook" }
+        val starts = AtomicInteger()
+        val webhook = PlaybackWebhooks(scope, { config }, {}, { starts.incrementAndGet(); true })
+        class AllClientsFailedException : RuntimeException("All clients failed")
+        try {
+            webhook.failure("https://youtu.be/abcdefghijk", "Sign in to confirm you're not a bot")
+            webhook.failure("https://youtu.be/abcdefghijk", "Login required")
+            webhook.failure("https://youtu.be/abcdefghijk", "Wrapper", AllClientsFailedException())
+            webhook.failure("https://youtu.be/abcdefghijk", "OAuth token expired",
+                RuntimeException("OAuth token expired", RuntimeException("HTTP 429 Too many requests")))
+            assertTrue(delivered.await(5, TimeUnit.SECONDS))
+            assertEquals(0, starts.get())
+            assertTrue(messages.none { it.contains("/disc oauth force") })
+            assertTrue(messages.any { it.contains("rate-limited") })
+            assertTrue(messages.any { it.contains("PO-token") })
+        } finally { webhook.close(); scope.cancel(); server.stop(0) }
+    }
+
     @Test fun `disabled endpoint never starts automatic authorization`() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val webhook = PlaybackWebhooks(scope, { AddonConfig.WebhookConfig() }, {}, { throw AssertionError("Must stay disabled") })

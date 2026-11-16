@@ -51,12 +51,13 @@ internal class H264StreamEncoder(
     init {
         repeat(3) { pool.add(ByteArray(width * height * 3)) }
         val rate = bitrateKbps.coerceIn(256, 20000)
+        val encodeThreads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
         process = ProcessBuilder(ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "rawvideo",
             "-pix_fmt", "rgb24", "-s", "${width}x$height", "-r", fps.toString(), "-i", "pipe:0",
             "-an", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264", "-preset", "ultrafast",
-            "-tune", "zerolatency", "-profile:v", "baseline", "-pix_fmt", "yuv420p", "-threads", "1",
+            "-tune", "zerolatency", "-profile:v", "baseline", "-pix_fmt", "yuv420p", "-threads", encodeThreads.toString(),
             "-crf", "23", "-maxrate", "${rate}k", "-bufsize", "${rate / 4}k",
-            "-x264-params", "aud=1:repeat-headers=1:keyint=$fps:min-keyint=$fps:scenecut=0:bframes=0:ref=1",
+            "-x264-params", "aud=1:repeat-headers=1:keyint=$fps:min-keyint=$fps:scenecut=0:bframes=0:ref=1:sliced-threads=1",
             "-flush_packets", "1", "-f", "h264", "pipe:1")
             .redirectError(ProcessBuilder.Redirect.DISCARD).start()
         thread(isDaemon = true, name = "vcb-h264-input") {

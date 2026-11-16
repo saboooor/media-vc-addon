@@ -71,7 +71,10 @@ internal class VideoToneMapper(private val info: VideoColorInfo) {
     private fun sample(input: ByteArray, offset: Int) =
         (input[offset].toInt() and 255) or ((input[offset + 1].toInt() and 255) shl 8)
 
-    private fun display(linear: Double, lut: ByteArray) = lut[(linear.coerceIn(0.0, 1.0) * 65535).roundToInt()]
+    private fun display(linear: Double, lut: ByteArray): Byte {
+        val clamped = if (linear <= 0.0) 0.0 else if (linear >= 1.0) 1.0 else linear
+        return lut[(clamped * 65535.0 + 0.5).toInt()]
+    }
 
     companion object {
         private val pq by lazy {

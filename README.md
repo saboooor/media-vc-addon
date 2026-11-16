@@ -45,7 +45,7 @@ Chest queues:
 - Opening, closing, clicking, or dragging items in the chest does not start playback. Use **Play chest** in jukebox controls to start it. Playlist burning and hopper transfers into the chest can still start playback. Right-clicking the jukebox with a disc stores one disc in the chest and starts playback when idle. A full chest leaves the disc in your hand. Placing a chest above an occupied jukebox transfers its disc into the chest. Discs stay in the chest during playback; ordinary unburned discs are stored but skipped by the custom-audio queue.
 - Tracks crossfade over three seconds by default. Open Crossfade settings from the jukebox dialog and use its -1s/+1s buttons to adjust it from 0–30 seconds, or Enable/Disable crossfade to toggle it. The dialog shows the current setting. Changes apply to upcoming transitions in that queue; an ongoing fade finishes at its original duration. New jukeboxes default to three seconds; subsequent queues reuse the jukebox’s chosen crossfade setting. Live streams use normal transitions. Pause and volume affect both tracks during a fade; skipping or stopping cancels the transition. Network loading delays can shorten the overlap.
 - The active queue follows chest contents in slot order, including hopper transfers. Inventory events request an update on the next queue tick; a two-second reconciliation catches changes made by other plugins. Unchanged queues reuse their disc snapshots. Added discs join the queue, removed discs leave it, and moving discs changes their order. The current song keeps playing; removing its disc lets it finish before continuing from that position. Refresh an open jukebox dialog to see updated queue buttons. The queue plays once by default. Enable Loop in the jukebox controls to repeat the queue, and Shuffle to visit each disc once in random order per pass. Loop also repeats a standalone custom disc. Use Play chest in the controls to restart a stopped queue.
-- If a song cannot be resolved or its audio stream fails/stalls, playback reports the error, removes the failed disc’s custom audio, and skips to the next queued disc. Audio lookup and startup time out after 30 seconds rather than loading indefinitely. Ordinary pauses and manual stops do not erase discs.
+- If a song cannot be resolved or its audio stream fails/stalls, playback reports the error and stops the queue. The disc keeps its custom audio and settings. Audio lookup and startup time out after 30 seconds rather than loading indefinitely.
 - For autoplay, place a copper golem statue directly above a jukebox instead of a queue container, then insert a custom disc. During playback, autoplay prepares an unheard song from the current song's YouTube mix, falling back to an artist search, then starts it when the current song finishes or is skipped. All oxidized and waxed statue variants work. The inserted disc stays in the jukebox; recommendations never overwrite it. Autoplay takes priority over standalone Loop and avoids the last 50 songs. Skip advances immediately to the next autoplay recommendation. Stop playback or eject the disc to stop; removing the statue prevents further recommendations. If no new song is available or lookup fails, playback stops.
 
 - Right-click the jukebox to open playback controls; choose Stop playback to stop. Breaking the chest or jukebox, unloading the jukebox chunk, or restarting the server stops the queue. Queues do not resume automatically.
@@ -96,7 +96,7 @@ Optional full-color Fabric client: see [`screen-companion`](../screen-companion/
 
 `/disc hologram [edit|done|gui|move|offset|reset]` – Hold a stick and look at a jukebox, then run `/disc hologram` to position its playback hologram directly in the world. `/disc hologram gui` opens the hologram settings, with a Move in world action and position reset. Directional `move`, exact `offset <x> <y> <z>`, and `reset` remain available.
 
-`/disc oauth [force|status]` – Authorize YouTube access via Google device OAuth2 to prevent "Sign in to confirm you're not a bot" or "This video requires login" errors. Check server console for the pairing code, visit https://www.google.com/device with a burner account, and authorize. Use `/disc oauth force` to re-authorize and refresh the stored token.
+`/disc oauth [force|status]` – Authorize the built-in YouTube source via Google device OAuth2, which may help with "Sign in to confirm you're not a bot" or "This video requires login" errors. Check server console for the pairing code, visit https://www.google.com/device with a burner account, and authorize. Use `/disc oauth force` to re-authorize and refresh the stored token.
 
 `/disc reload` – Reload runtime options from `discs.toml` without interrupting playback. Works from the console.
 
@@ -204,12 +204,12 @@ dependencies {
 4) If this doesn't work, [try oauth2](#sign-in-to-confirm-youre-not-a-bot--please-sign-in-using-youtube).
 
 ## "Sign in to confirm you're not a bot" / "Please sign in" using YouTube
-1) Make sure you're using the latest versions of `vc-addon-discs` and `vc-addon-lavaplayer-lib`.
-2) Set `youtube_source.use_oauth2` to `true` in `plugins/vc-addon-discs/discs.toml`.
-3) Restart the server (`/vreload` will not work).
-4) When `vc-addon-discs` initializes, you'll see a message in your console like this (code will be different): https://i.imgur.com/r1o5v8v.png. Follow the instructions in the console message.
-5) After successful authorization, you'll see a message in your console: https://i.imgur.com/BD9jCRe.png. You don't need to save token manually, it will be saved when the server is stopped.
-6) Done! YouTube tracks should now work as expected.
+
+Repeated authorization is not a reliable fix. Bot checks, rate limits, player-script failures and rejected OAuth tokens are different problems. The addon preserves discs on provider blocks and only starts automatic replacement OAuth for an explicit rejected/expired token. Inspect the underlying console error before forcing another login. OAuth in the built-in source is supported only by particular clients; its upstream documentation describes varying effectiveness.
+
+For a maintained external alternative, use the optional [yt-dlp backend](docs/youtube-ytdlp.md). It handles audio, metadata, searches, playlists and screen video through the same executable/config, with an automatic PO-token provider instead of repeated Google device pairing. The default remains `backend = "lavaplayer"`.
+
+For the built-in backend, `/disc oauth` starts device authorization and `/disc oauth status` checks whether a saved token exists. Use `/disc oauth force` when the credential actually needs replacing. Successful authorization saves the refresh token automatically in `.youtube-token`. Bot/IP restrictions can remain even after successful login; do not repeatedly reauthorize for those failures. See [youtube-source OAuth documentation](https://github.com/lavalink-devs/youtube-source#using-oauth-tokens).
 
 ## Read timed out
 This usually means that your server can't reach the server hosting the track.
@@ -345,7 +345,7 @@ Open jukebox controls → **Manage holograms** to toggle the main playback holog
 
 Playback pauses when its chunk unloads. Within the same server session, reloading the chunk resumes the inserted disc or current chest-queue song at its saved position, retaining pause state even with looping disabled. If a queued disc moved to another chest slot, it is located again before resuming; a removed or replaced disc is not resumed. Non-seekable streams reconnect without a saved seek position. Resume snapshots are kept in memory and do not survive a server restart or plugin reload.
 
-When AutoMix is enabled for a chest queue, the playback hologram and controls show its current analysis status. A sparkle means a confident beat-compatible transition is ready; an uncertain beat, incompatible tempos, unavailable intro analysis, or failed preload is explained explicitly. AutoMix still uses a smooth fade when it cannot beat-match. Enable it in **Mixing → Enable AutoMix**; it is off by default. Enabling it after a normal preload reruns that preload with intro analysis. A next-song load/decoder failure or metadata load timeout erases that disc’s burn metadata and selects the following song while current playback continues. An absent or uncertain beat estimate alone does not erase discs.
+When AutoMix is enabled for a chest queue, the playback hologram and controls show its current analysis status. A sparkle means a confident beat-compatible transition is ready; an uncertain beat, incompatible tempos, unavailable intro analysis, or failed preload is explained explicitly. AutoMix still uses a smooth fade when it cannot beat-match. Enable it in **Mixing → Enable AutoMix**; it is off by default. Enabling it after a normal preload reruns that preload with intro analysis. A next-song preload failure leaves the disc intact while current playback continues. The queue retries it through normal playback when selected and stops if playback fails.
 
 For an uncertain next-song intro, AutoMix continues scanning eight-second sections up to 60 seconds into the song, with a 20-second wall-time budget. A confident later beat can supply a cue past the slow intro when tempos match; otherwise the transition retains the original intro and uses a smooth fade. Later cues leave enough audio for the incoming fade.
 
@@ -406,7 +406,7 @@ does not automatically resume after reconnecting or restarting. Separately craft
 receive independent identities on first use. Separate stacked unused devices before using
 them. Crafting is available only on Minecraft versions with copper nuggets and amethyst shards.
 
-Provider sign-in, OAuth, CAPTCHA/bot-verification, and rate-limit errors preserve the disc's burn metadata, including failures during next-song preloading. A chest queue stops on an authentication failure rather than repeatedly retrying or erasing its discs; retry playback after fixing the provider connection. Other unavailable-media failures retain the existing skip/erase behavior.
+All playback and next-song preload errors preserve the disc's burn metadata and settings. A chest queue stops when playback fails, so it does not repeatedly retry its failed discs. Retry playback after fixing the error. Use `/disc erase` to explicitly remove a burn.
 
 ### Playback and OAuth webhooks
 
@@ -419,7 +419,7 @@ cooldown_seconds = 60
 auto_youtube_oauth = true
 ```
 
-An empty URL disables delivery and automatic authorization. Playback failures and next-song preload failures are logged asynchronously with duplicate suppression. On YouTube sign-in/bot failures, automatic OAuth requests a replacement authorization and posts the Google verification URL and pairing code to the webhook. Complete that prompt using the intended account; the replacement token is saved automatically and a success notification follows. Retry playback afterward. `/disc oauth force` still starts authorization manually, and its pairing prompt is also posted. Rate limits alone do not trigger OAuth.
+An empty URL disables delivery and automatic authorization. Playback failures and next-song preload failures are logged asynchronously with duplicate suppression. On explicit YouTube token rejection/expiry, automatic OAuth requests a replacement authorization and posts the Google verification URL and pairing code to the webhook. Complete that prompt using the intended account; the replacement token is saved automatically and a success notification follows. Retry playback afterward. `/disc oauth force` still starts authorization manually, and its pairing prompt is also posted. Bot checks, sign-in requests without explicit token rejection, generic client failures and rate limits do not trigger replacement OAuth. The yt-dlp backend does not use the Java OAuth flow.
 
 Use a private admin channel: a pairing code can authorize this server to use the account you choose. Access/refresh tokens, device codes, passwords, and private source URLs are not included. Error notifications redact credential assignments and URLs, and Discord mentions are disabled. Existing saved credentials remain on disk until replacement authorization succeeds. Repeated pairing starts are suppressed for 15 minutes; delivery has a bounded queue, HTTP timeouts, and no redirect following. Failed deliveries warn in the server console without printing the webhook URL.
 

@@ -33,52 +33,77 @@ internal object CompanionResolution {
 /** Reuses a map-sized RGB buffer; the companion keeps the original high-resolution buffer. */
 internal class RgbFrameScaler {
     private var output = ByteArray(0)
+    private var cachedWidth = 0
+    private var cachedHeight = 0
+    private var cachedTargetWidth = 0
+    private var cachedTargetHeight = 0
+    private var x0s = IntArray(0)
+    private var x1s = IntArray(0)
+    private var fxs = IntArray(0)
+    private var y0s = IntArray(0)
+    private var y1s = IntArray(0)
+    private var fys = IntArray(0)
+
     fun scale(source: ByteArray, width: Int, height: Int, targetWidth: Int, targetHeight: Int): ByteArray {
         require(source.size == width * height * 3)
         if (width == targetWidth && height == targetHeight) return source
         val targetSize = targetWidth * targetHeight * 3
         if (output.size != targetSize) output = ByteArray(targetSize)
 
-        val x0s = IntArray(targetWidth)
-        val x1s = IntArray(targetWidth)
-        val fxs = DoubleArray(targetWidth)
-        for (x in 0 until targetWidth) {
-            val sx = ((x + 0.5) * width / targetWidth - 0.5).coerceIn(0.0, (width - 1).toDouble())
-            val x0 = sx.toInt()
-            x0s[x] = x0
-            x1s[x] = (x0 + 1).coerceAtMost(width - 1)
-            fxs[x] = sx - x0
+        if (width != cachedWidth || height != cachedHeight || targetWidth != cachedTargetWidth || targetHeight != cachedTargetHeight) {
+            cachedWidth = width
+            cachedHeight = height
+            cachedTargetWidth = targetWidth
+            cachedTargetHeight = targetHeight
+            x0s = IntArray(targetWidth)
+            x1s = IntArray(targetWidth)
+            fxs = IntArray(targetWidth)
+            for (x in 0 until targetWidth) {
+                val sx = ((x + 0.5) * width / targetWidth - 0.5).coerceIn(0.0, (width - 1).toDouble())
+                val x0 = sx.toInt()
+                x0s[x] = x0 * 3
+                x1s[x] = (x0 + 1).coerceAtMost(width - 1) * 3
+                fxs[x] = ((sx - x0) * 1024.0 + 0.5).toInt()
+            }
+            y0s = IntArray(targetHeight)
+            y1s = IntArray(targetHeight)
+            fys = IntArray(targetHeight)
+            for (y in 0 until targetHeight) {
+                val sy = ((y + 0.5) * height / targetHeight - 0.5).coerceIn(0.0, (height - 1).toDouble())
+                val y0 = sy.toInt()
+                y0s[y] = y0 * width * 3
+                y1s[y] = (y0 + 1).coerceAtMost(height - 1) * width * 3
+                fys[y] = ((sy - y0) * 1024.0 + 0.5).toInt()
+            }
         }
 
+        val lx0 = x0s
+        val lx1 = x1s
+        val lfx = fxs
+        val out = output
         var outOffset = 0
         for (y in 0 until targetHeight) {
-            val sy = ((y + 0.5) * height / targetHeight - 0.5).coerceIn(0.0, (height - 1).toDouble())
-            val y0 = sy.toInt()
-            val y1 = (y0 + 1).coerceAtMost(height - 1)
-            val fy = sy - y0
-            val oneMinusFy = 1.0 - fy
-
-            val row0 = y0 * width
-            val row1 = y1 * width
+            val fy = fys[y]
+            val oneMinusFy = 1024 - fy
+            val row0 = y0s[y]
+            val row1 = y1s[y]
 
             for (x in 0 until targetWidth) {
-                val x0 = x0s[x]
-                val x1 = x1s[x]
-                val fx = fxs[x]
-                val oneMinusFx = 1.0 - fx
+                val fx = lfx[x]
+                val oneMinusFx = 1024 - fx
 
-                val p00 = (row0 + x0) * 3
-                val p10 = (row0 + x1) * 3
-                val p01 = (row1 + x0) * 3
-                val p11 = (row1 + x1) * 3
+                val p00 = row0 + lx0[x]
+                val p10 = row0 + lx1[x]
+                val p01 = row1 + lx0[x]
+                val p11 = row1 + lx1[x]
 
                 for (c in 0..2) {
                     val top = (source[p00 + c].toInt() and 255) * oneMinusFx + (source[p10 + c].toInt() and 255) * fx
                     val bottom = (source[p01 + c].toInt() and 255) * oneMinusFx + (source[p11 + c].toInt() and 255) * fx
-                    output[outOffset++] = (top * oneMinusFy + bottom * fy + 0.5).toInt().toByte()
+                    out[outOffset++] = ((top * oneMinusFy + bottom * fy + 524288) shr 20).toByte()
                 }
             }
         }
-        return output
+        return out
     }
 }
