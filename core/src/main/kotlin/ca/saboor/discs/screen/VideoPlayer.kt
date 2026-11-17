@@ -919,7 +919,7 @@ class VideoPlayer(
     }
 
     companion object {
-        private const val COMPANION_DOWNLOAD_URL = "https://github.com/plasmoapp/vc-addon-discs/releases/latest"
+        private const val COMPANION_DOWNLOAD_URL = "https://drive.proton.me/urls/B1Q1P4K464#y310qg8itvhl"
         internal fun chooseUserAgent(url: String, fallback: String = "Mozilla/5.0"): String = when {
             url.contains("c=TVHTML5") -> "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
             url.contains("c=ANDROID") -> "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip"
