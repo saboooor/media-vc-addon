@@ -21,6 +21,9 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.event.ClickEvent
+import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
 import org.bukkit.World
 import org.bukkit.entity.Player
@@ -43,6 +46,8 @@ class VideoPlayer(
     private val companionCodec: String = "h264",
     private val companionBitrateKbps: Int = 4000,
     private val companionResolution: String = "map",
+    private val maxResolution: String = "1080p",
+    private val mapSizeLimit: String = "0x0",
     val playbackPositionMs: (() -> Long?)? = null,
     private val sourceHeaders: Map<String, String> = emptyMap(),
     private val durationMs: Long = 0L,
@@ -90,8 +95,16 @@ class VideoPlayer(
 
     private val totalWidth = screen.totalWidthPixels
     private val totalHeight = screen.totalHeightPixels
-    private val videoSize = CompanionResolution.size(totalWidth, totalHeight, if (companionRgb) companionResolution else "map")
+    private val mapVideoSize = CompanionResolution.cappedSize(totalWidth, totalHeight, "map", maxResolution)
+    private val videoSize = CompanionResolution.cappedSize(
+        totalWidth,
+        totalHeight,
+        if (companionRgb) companionResolution else "map",
+        maxResolution
+    )
     private val mapScaler = RgbFrameScaler()
+    private val parsedMapSizeLimit = CompanionResolution.parseMapSizeLimit(mapSizeLimit)
+    private var mapCanvas = ByteArray(0)
     private val fallbackRgbEncoder = CompanionFrameEncoder()
     private val rows = screen.rows
     private val cols = screen.columns
@@ -134,6 +147,7 @@ class VideoPlayer(
     private val tileDeltas = Array(rows) { Array(cols) { MapTileDelta() } }
     private val rgbTiles = Array(rows) { Array(cols) { RgbTileCache() } }
     private val companionRecipients = FrameRecipients<Player>()
+    private val promptedCompanionPlayers = ConcurrentHashMap.newKeySet<UUID>()
     private var audienceChecked = Long.MIN_VALUE
     private var cachedAudience: List<Player> = emptyList()
     private var previousViewers: Map<UUID, Player> = emptyMap()
@@ -232,11 +246,10 @@ class VideoPlayer(
 
         val isNetworkStream = sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://")
 
-        // Decode at high companion resolution only when a negotiated companion client is viewing;
-        // otherwise decode directly at map resolution to avoid unnecessary 1080p/4K scaling & tone-mapping work.
+        // Decode at the companion target only when a negotiated companion client is viewing;
+        // otherwise decode at the capped map target to avoid unnecessary scaling and tone-mapping work.
         val usingHighResolution = companionRgb && getNearbyPlayers().any(CompanionScreens::capable)
-        val activeVideoSize = if (usingHighResolution) videoSize
-            else CompanionResolution.Size(totalWidth, totalHeight)
+        val activeVideoSize = if (usingHighResolution) videoSize else mapVideoSize
 
         val effectiveStartMs = maxOf(startPositionMs, playbackPositionMs?.invoke() ?: 0L)
         val activeSourceUrl = sourceUrlForSeek?.invoke(effectiveStartMs) ?: sourceUrl
@@ -471,12 +484,14 @@ class VideoPlayer(
                             sliceAndSend(rawFrameBuffer, nearbyPlayers, outputSize.width, outputSize.height)
                             continue
                         }
+                        promptForCompanion(nearbyPlayers)
                         if (!usingHighResolution && companionRgb &&
                             (videoSize.width != totalWidth || videoSize.height != totalHeight) &&
                             nearbyPlayers.any(CompanionScreens::capable)) {
                             restartPlayback(videoMs)
                             return
                         }
+
                         val mapper = toneMapper ?: VideoToneMapper(colorInfoReady.await().also { color ->
                             if (color.transfer != VideoTransfer.SDR) {
                                 logger.info("Screen '${screen.name}': tone mapping ${color.transfer} HDR to SDR")
@@ -771,7 +786,7 @@ class VideoPlayer(
         } else {
             currentDither
         }
-        val rawFrame = mapScaler.scale(sourceFrame, width, height, totalWidth, totalHeight)
+        val rawFrame = mapFrame(sourceFrame, width, height)
         val (existingViewers, newViewers) = mapPlayers.partition { previousViewers[it.uniqueId] === it }
         for (r in 0 until rows) {
             val startY = r * 128
@@ -793,6 +808,7 @@ class VideoPlayer(
                         tileBuffer[tileRowOffset + x] = dither?.lookup(red, green, blue, startX + x, globalY)
                             ?: MapPaletteLookup.lookup(red, green, blue)
                     }
+
                 }
 
                 val changed = if (rgbChanged) tileDeltas[r][c].update(tileBuffer) else null
@@ -806,6 +822,41 @@ class VideoPlayer(
             }
         }
         previousViewers = mapPlayers.associateBy { it.uniqueId }
+    }
+
+    private fun promptForCompanion(players: List<Player>) {
+        val limit = parsedMapSizeLimit ?: return
+        if (limit.columns >= cols && limit.rows >= rows) return
+        for (player in players) {
+            if (CompanionScreens.capable(player) || !promptedCompanionPlayers.add(player.uniqueId)) continue
+            player.sendMessage(
+                Component.text("This screen is larger than the vanilla map display limit. ", NamedTextColor.YELLOW)
+                    .append(
+                        Component.text("Download the screen companion", NamedTextColor.AQUA)
+                            .clickEvent(ClickEvent.openUrl(COMPANION_DOWNLOAD_URL))
+                    )
+            )
+        }
+    }
+
+    private fun mapFrame(sourceFrame: ByteArray, width: Int, height: Int): ByteArray {
+        val limit = parsedMapSizeLimit ?: return mapScaler.scale(sourceFrame, width, height, totalWidth, totalHeight)
+        val boxWidth = minOf(limit.columns, cols) * 128
+        val boxHeight = minOf(limit.rows, rows) * 128
+        val content = CompanionResolution.fitWithin(width, height, boxWidth, boxHeight)
+        val scaled = mapScaler.scale(sourceFrame, width, height, content.width, content.height)
+        if (mapCanvas.size != totalWidth * totalHeight * 3) mapCanvas = ByteArray(totalWidth * totalHeight * 3)
+        java.util.Arrays.fill(mapCanvas, 0)
+        val offsetX = (totalWidth - content.width) / 2
+        val offsetY = (totalHeight - content.height) / 2
+        for (y in 0 until content.height) {
+            System.arraycopy(
+                scaled, y * content.width * 3,
+                mapCanvas, ((offsetY + y) * totalWidth + offsetX) * 3,
+                content.width * 3
+            )
+        }
+        return mapCanvas
     }
 
     private fun sendMapTile(mapId: Int, region: MapTileRegion, viewers: List<Player>) {
@@ -868,6 +919,7 @@ class VideoPlayer(
     }
 
     companion object {
+        private const val COMPANION_DOWNLOAD_URL = "https://github.com/plasmoapp/vc-addon-discs/releases/latest"
         internal fun chooseUserAgent(url: String, fallback: String = "Mozilla/5.0"): String = when {
             url.contains("c=TVHTML5") -> "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
             url.contains("c=ANDROID") -> "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip"

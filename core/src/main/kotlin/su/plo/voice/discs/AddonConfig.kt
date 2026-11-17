@@ -367,6 +367,12 @@ class AddonConfig {
         @ConfigField(comment = "Companion resolution: map, 720p, 1080p, or source (up to 4K). Source content is never upscaled; settings apply to new playback")
         var companionResolution: String = "1080p"
 
+        @ConfigField(comment = "Maximum video resolution for both item-frame maps and companion clients: map, 720p, 1080p, or source (up to 4K). Source content is never upscaled; settings apply to new playback")
+        var maxResolution: String = "1080p"
+
+        @ConfigField(comment = "Maximum vanilla map display area as columns x rows, for example '8x5'. Outer frames show black letterboxing. Set to '0x0' to use the full screen. Companion clients always see the full screen.")
+        var mapSizeLimit: String = "0x0"
+
         @ConfigField(comment = "Companion video codec: h264 (native FFmpeg libx264) or jpeg. Artwork uses JPEG. Applies to new playback")
         var companionCodec: String = "h264"
 

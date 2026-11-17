@@ -6,7 +6,7 @@ Video retains the configured screen FPS. Companion texture resolution is indepen
 
 ## Install
 
-1. Replace the server's discs plugin with the updated `vc-addon-discs/plugin/build/libs/vc-addon-discs-1.2.1.jar` and restart. Both server and companion must use protocol v4; older companions fall back to vanilla maps.
+1. Replace the server's discs plugin with the updated `vc-addon-discs/plugin/build/libs/vc-addon-discs-1.2.1.jar` and restart. Both server and companion must use protocol v5; older companions fall back to vanilla maps.
 2. Install Fabric Loader 0.19.5 or later and Fabric API matching your Minecraft version.
 3. Put `screen-companion/build/libs/vcb-screen-companion-0.1.0.jar` in the client's `mods` directory. The same JAR supports all six Minecraft versions below. Remove any separately installed companion JAR first.
 4. Join and play a linked screen normally. Negotiation happens automatically within five seconds. Clients on servers without the updated plugin behave normally.
@@ -22,6 +22,8 @@ Video retains the configured screen FPS. Companion texture resolution is indepen
 
 In the server's `discs.toml`, under `[screen]`, `companion_rgb = true` enables negotiation and `companion_quality = 85` sets JPEG quality (40–95). Set `companion_rgb = false` before restarting playback to disable RGB. Dithering and Oklab palette conversion affect vanilla fallback only, not RGB clients.
 
+When `[screen].map_size_limit` is smaller than the physical screen, vanilla viewers see a centered letterboxed region and receive a clickable notice to download this companion. Companion viewers receive the full screen.
+
 ## Build and verify
 
 Run `./gradlew build` here to build and test all six targets and create the universal JAR in `build/libs/`. Use `./gradlew universalJar` to package without running tests, or `./gradlew :mc12111:build` for one standalone target. Gradle downloads the matching Java toolchains.
@@ -30,13 +32,14 @@ The universal JAR contains six nested Fabric mods. Fabric Loader selects the imp
 
 Before distributing, verify in a real client: join a server without the plugin; join with one vanilla and one companion client; start, stop, pause, seek, switch tracks, leave/re-enter screen range, reconnect, and switch worlds. Test ordinary maps, multiple screens, and resource reloads. Check edge-to-edge alignment, all wall directions, floor/ceiling screens, rotated frames, and restoration after stopping. Compiling a mixin does not replace checking its injection during game startup.
 
-## Protocol v4
+## Protocol v5
 
 All integers use network byte order, with no VarInt envelope inside plugin messages.
 
-- Client → server `vcb:screen_hello`: exactly one byte, `4`.
+- Client → server `vcb:screen_hello`: exactly one byte, `5`.
+- Server → client `vcb:screen_metadata`: anchor map ID, columns, rows, map count, and the map IDs in row-major order. This is sent once per screen and viewer.
 - Server → client `vcb:screen_rgb`: four 32-bit integers (upper-left map ID, frame sequence, complete body length, chunk offset), then up to 32748 body bytes. Total payload is at most 32764 bytes.
-- The reassembled body contains nine 32-bit integers: columns, rows, codec (0 JPEG, 1 H.264), pixel width, pixel height, stream ID, frame number, keyframe flag (0/1), and reserved (0). Then come columns × rows map IDs in row-major order and one JPEG or Annex B H.264 access unit. JPEG dimensions come from its header; its width/height fields are zero. H.264 streams use baseline, 8-bit YUV420, one reference frame, no B-frames, AUD delimiters and SPS/PPS repeated at every IDR.
+- The reassembled body contains nine 32-bit integers: columns, rows, codec (0 JPEG, 1 H.264), pixel width, pixel height, stream ID, frame number, keyframe flag (0/1), and reserved (0). Then comes one JPEG or Annex B H.264 access unit. JPEG dimensions come from its header; its width/height fields are zero. H.264 streams use baseline, 8-bit YUV420, one reference frame, no B-frames, AUD delimiters and SPS/PPS repeated at every IDR.
 - Server → client `vcb:screen_clear`: one 32-bit map ID; release the containing screen and restore vanilla rendering.
 
 Chunks must arrive in sequence with contiguous offsets and matching frame sequence/length. Partial images are never uploaded. The client bounds reassembly and decoding to eight screens, 256 frame positions per screen, 4 MiB encoded access units, 8192 pixels per dimension, and 8,294,400 decoded pixels per image. JPEG dimensions are read and checked before decoding; they are independent of the map layout. Unsupported dimensions retain vanilla fallback. JPEG and H.264 decoding run on a background worker; texture upload and drawing run on the client thread. Disconnect invalidates pending work and releases textures.

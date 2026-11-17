@@ -14,6 +14,27 @@ class CompanionResolutionTest {
         assertEquals(CompanionResolution.Size(512, 384), CompanionResolution.size(512, 384, "invalid"))
     }
 
+    @Test fun `maximum resolution caps both requested output and item frame grids`() {
+        assertEquals(
+            CompanionResolution.Size(1080, 1080),
+            CompanionResolution.cappedSize(4096, 4096, "source", "1080p")
+        )
+        assertEquals(
+            CompanionResolution.Size(512, 384),
+            CompanionResolution.cappedSize(512, 384, "1080p", "map")
+        )
+    }
+
+    @Test fun `map size limit parses dimensions and ignores unlimited value`() {
+        assertEquals(CompanionResolution.MapSizeLimit(8, 5), CompanionResolution.parseMapSizeLimit("8x5"))
+        assertNull(CompanionResolution.parseMapSizeLimit("0x0"))
+        assertNull(CompanionResolution.parseMapSizeLimit("unlimited"))
+    }
+
+    @Test fun `map content fits inside limited area without stretching`() {
+        assertEquals(CompanionResolution.Size(960, 640), CompanionResolution.fitWithin(1920, 1280, 1024, 640))
+    }
+
     @Test fun `vanilla fallback is resized independently with blended RGB pixels`() {
         val source = byteArrayOf(0, 0, 0, -1, -1, -1, -1, -1, -1, 0, 0, 0)
         val scaler = RgbFrameScaler()

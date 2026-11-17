@@ -5,8 +5,10 @@ import kotlin.math.min
 
 internal object CompanionResolution {
     data class Size(val width: Int, val height: Int)
+    data class MapSizeLimit(val columns: Int, val rows: Int)
 
     private val SHOWINFO_SIZE_REGEX = Regex("\\bs:(\\d+)x(\\d+)\\b")
+    private val MAP_SIZE_LIMIT_REGEX = Regex("^(\\d+)x(\\d+)$", RegexOption.IGNORE_CASE)
 
     fun size(mapWidth: Int, mapHeight: Int, setting: String): Size {
         val box = when (setting.lowercase()) {
@@ -18,6 +20,37 @@ internal object CompanionResolution {
         val factor = min(box.width.toDouble() / mapWidth, box.height.toDouble() / mapHeight)
         return Size(floor(mapWidth * factor).toInt().coerceAtLeast(1),
             floor(mapHeight * factor).toInt().coerceAtLeast(1))
+    }
+
+    fun cappedSize(mapWidth: Int, mapHeight: Int, requested: String, maximum: String): Size {
+        val requestedSize = size(mapWidth, mapHeight, requested)
+        val maximumSize = size(mapWidth, mapHeight, maximum)
+        val factor = min(
+            1.0,
+            min(
+                maximumSize.width.toDouble() / requestedSize.width,
+                maximumSize.height.toDouble() / requestedSize.height
+            )
+        )
+        return Size(
+            floor(requestedSize.width * factor).toInt().coerceAtLeast(1),
+            floor(requestedSize.height * factor).toInt().coerceAtLeast(1)
+        )
+    }
+
+    fun fitWithin(width: Int, height: Int, maxWidth: Int, maxHeight: Int): Size {
+        val factor = min(maxWidth.toDouble() / width, maxHeight.toDouble() / height)
+        return Size(
+            floor(width * factor).toInt().coerceAtLeast(1),
+            floor(height * factor).toInt().coerceAtLeast(1)
+        )
+    }
+
+    fun parseMapSizeLimit(setting: String): MapSizeLimit? {
+        val match = MAP_SIZE_LIMIT_REGEX.matchEntire(setting.trim()) ?: return null
+        val columns = match.groupValues[1].toIntOrNull() ?: return null
+        val rows = match.groupValues[2].toIntOrNull() ?: return null
+        return if (columns > 0 && rows > 0) MapSizeLimit(columns, rows) else null
     }
 
     fun parseOutputSize(line: String): Size? {

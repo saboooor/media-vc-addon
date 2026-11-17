@@ -99,7 +99,6 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
         return session.baseUrl + "Videos/${mediaId(itemId)}/stream.mkv?static=false" +
             "&videoCodec=h264&maxWidth=$cappedWidth&maxHeight=$cappedHeight&videoBitRate=$bitrate" +
             "&audioCodec=aac&audioBitRate=64000&audioChannels=2&subtitleStreamIndex=-1" +
-            "&copyTimestamps=true" +
             "&startTimeTicks=${startPositionMs.coerceIn(0, Long.MAX_VALUE / 10_000) * 10_000}" +
             "&playSessionId=${UUID.randomUUID()}"
     }

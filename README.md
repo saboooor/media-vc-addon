@@ -429,7 +429,13 @@ Jellyfin browsing groups TV episodes under their show. Click a show to open its 
 
 The Fabric screen companion supports higher-resolution video independently of vanilla map tiles. Set `[screen].companion_resolution` in `discs.toml` to `map`, `720p`, `1080p` (default), or `source` (up to 4K). Video preserves its aspect ratio and source detail without upscaling. Settings apply to newly started playback. Install the updated companion and server together; older companions use vanilla maps. Higher resolution increases server processing, memory, and network use.
 
-Companion video now uses low-latency H.264 by default, with `[screen].companion_codec = "h264"` and `companion_bitrate_kbps = 4000`. FFmpeg must include `libx264`; encoder failures fall back to JPEG. Set the codec to `jpeg` for independent frames. The companion bundles a pure Java decoder, so no client FFmpeg installation is required. H.264 reduces repeated image data but uses client CPU for software decoding. Both jars must use protocol v4; older companions receive vanilla maps. Settings apply to newly started playback. See [companion streaming details](screen-companion/README.md#h264-streaming).
+Set `[screen].max_resolution` to `map`, `720p`, `1080p` (default), or `source` (up to 4K) to cap the decoded video resolution for both item-frame maps and companion clients, regardless of the number of item frames. This cap is applied in addition to `companion_resolution`.
+
+Set `[screen].map_size_limit` to a size such as `8x5` to limit the vanilla map display to a centered 8-by-5 area; the remaining outer frames show black letterboxing. This does not prevent large screens from being created. Companion users see the full screen, so install the [screen companion](screen-companion/README.md) to view larger screens.
+
+Players without the companion are shown a clickable download notice when viewing a screen larger than this map limit.
+
+Companion video now uses low-latency H.264 by default, with `[screen].companion_codec = "h264"` and `companion_bitrate_kbps = 4000`. FFmpeg must include `libx264`; encoder failures fall back to JPEG. Set the codec to `jpeg` for independent frames. The companion bundles a pure Java decoder, so no client FFmpeg installation is required. H.264 reduces repeated image data but uses client CPU for software decoding. Both jars must use protocol v5; older companions receive vanilla maps. Settings apply to newly started playback. See [companion streaming details](screen-companion/README.md#h264-streaming).
 
 ### Find nearby playing jukeboxes
 

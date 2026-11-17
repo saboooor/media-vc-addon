@@ -401,13 +401,15 @@ class ScreenManager : PluginKoinComponent {
                     ca.saboor.discs.jellyfin.JellyfinClient.authorization(it.deviceId, it.token)
                 }
                 val externalYoutube = if (jellyfin == null && videoId != null) audioPlayerManager.youtubeExtractor() else null
+                val requestedVideoSize = CompanionResolution.cappedSize(
+                    screen.totalWidthPixels,
+                    screen.totalHeightPixels,
+                    if (config.screen.companionRgb) config.screen.companionResolution else "map",
+                    config.screen.maxResolution
+                )
                 val externalVideo = externalYoutube?.let { extractor ->
                     try {
-                        extractor.video(videoId!!, when (config.screen.companionResolution.lowercase()) {
-                            "720p" -> 720
-                            "source" -> 2160
-                            else -> 1080
-                        })
+                        extractor.video(videoId!!, requestedVideoSize.height)
                     } catch (e: Exception) {
                         plugin.slF4JLogger.warn("yt-dlp video extraction failed for screen '${screen.name}'; displaying artwork if available")
                         null
@@ -418,14 +420,7 @@ class ScreenManager : PluginKoinComponent {
                     when (val configured = jellyfin.first.videoMaxHeight) {
                         0 -> null
                         null -> if (!jellyfin.first.transcodingEnabled) null
-                        else if (config.screen.companionRgb && org.bukkit.Bukkit.getOnlinePlayers().any(CompanionScreens::capable)) {
-                            when (config.screen.companionResolution.lowercase()) {
-                                "source" -> null
-                                "1080p" -> 1080
-                                "720p" -> 720
-                                else -> (screen.rows * 128).coerceIn(240, 1080)
-                            }
-                        } else (screen.rows * 128).coerceIn(240, 1080)
+                        else requestedVideoSize.height
                         else -> configured
                     }
                 } else null
@@ -439,12 +434,8 @@ class ScreenManager : PluginKoinComponent {
                     ytdlpPath = config.screen.ytdlpPath,
                     artworkUrl = artworkUrl,
                     isYouTubeMusic = isYouTubeMusic,
-                    highResolution = config.screen.companionRgb && config.screen.companionResolution.lowercase() in setOf("720p", "1080p", "source"),
-                    maxVideoHeight = when (config.screen.companionResolution.lowercase()) {
-                        "720p" -> 720
-                        "source" -> 2160
-                        else -> 1080
-                    }
+                    highResolution = requestedVideoSize.height > screen.totalHeightPixels,
+                    maxVideoHeight = requestedVideoSize.height
                 )
 
                 stage.set("Preparing video decoder")
@@ -466,6 +457,8 @@ class ScreenManager : PluginKoinComponent {
                     companionRgb = config.screen.companionRgb,
                     companionQuality = config.screen.companionQuality,
                     companionResolution = config.screen.companionResolution,
+                    maxResolution = config.screen.maxResolution,
+                    mapSizeLimit = config.screen.mapSizeLimit,
                     companionCodec = config.screen.companionCodec,
                     companionBitrateKbps = config.screen.companionBitrateKbps,
                     ditherStrength = effectiveDitherStrength(screen),

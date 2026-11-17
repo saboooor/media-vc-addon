@@ -17,6 +17,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ScreensClient implements ClientModInitializer {
+    private record Metadata(int columns, int rows, int[] maps) {}
     private record Encoded(long session, long revision, byte[] jpeg, int columns, int rows, int[] maps, FrameAssembler.Frame video) {}
     private record Decoded(long session, long revision, int[] pixels, int width, int height, int columns, int rows, int[] maps) {}
     public record Texture(Identifier id, DynamicTexture image, int columns, int rows, int[] maps) {}
@@ -27,6 +28,7 @@ public class ScreensClient implements ClientModInitializer {
     private static final int LIMIT = 8;
     private static final Map<Integer, Texture> textures = new LinkedHashMap<>(16, .75f, true);
     private static final Map<Integer, Long> revisions = new HashMap<>();
+    private static final ConcurrentMap<Integer, Metadata> metadata = new ConcurrentHashMap<>();
     private static final ConcurrentMap<Integer, Encoded> pending = new ConcurrentHashMap<>();
     private static final ConcurrentMap<Integer, H264VideoDecoder> videos = new ConcurrentHashMap<>();
     private static final ConcurrentMap<Integer, Encoded> videoSessions = new ConcurrentHashMap<>();
@@ -41,11 +43,13 @@ public class ScreensClient implements ClientModInitializer {
 
     @Override public void onInitializeClient() {
         VersionNetworking.register();
+        ClientPlayNetworking.registerGlobalReceiver(ScreenMetadataPayload.TYPE, (payload, context) -> acceptMetadata(payload.bytes()));
         ClientPlayNetworking.registerGlobalReceiver(ScreenPayload.FRAME, (payload, context) -> accept(payload.bytes()));
         ClientPlayNetworking.registerGlobalReceiver(ClearPayload.TYPE, (payload, context) -> {
             int id = payload.mapId();
             int anchor = anchors.getOrDefault(id, id);
             revisions.remove(anchor); pending.remove(anchor); videos.remove(anchor); videoSessions.remove(anchor); decoded.remove(anchor); assembler.clear(anchor); release(anchor);
+            metadata.remove(anchor);
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> reset());
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
@@ -69,7 +73,11 @@ public class ScreensClient implements ClientModInitializer {
     }
 
     private static void accept(byte[] bytes) {
-        FrameAssembler.Frame frame = assembler.accept(bytes);
+        if (bytes.length < 4) return;
+        int anchor = java.nio.ByteBuffer.wrap(bytes).getInt();
+        Metadata screen = metadata.get(anchor);
+        if (screen == null) return;
+        FrameAssembler.Frame frame = assembler.accept(bytes, screen.maps(), screen.columns(), screen.rows());
         if (frame == null) return;
         int id = frame.anchor();
         if (!revisions.containsKey(id) && revisions.size() >= LIMIT) return;
@@ -84,6 +92,22 @@ public class ScreensClient implements ClientModInitializer {
             pending.put(id, encoded);
         }
         scheduleDecode();
+    }
+
+    private static void acceptMetadata(byte[] bytes) {
+        if (bytes.length < 16) return;
+        var input = java.nio.ByteBuffer.wrap(bytes);
+        int anchor = input.getInt(), columns = input.getInt(), rows = input.getInt(), count = input.getInt();
+        if (columns < 1 || rows < 1 || columns > 32 || rows > 32 || count != columns * rows
+                || bytes.length != 16 + count * 4) return;
+        int[] maps = new int[count];
+        Set<Integer> unique = new HashSet<>();
+        for (int i = 0; i < count; i++) {
+            maps[i] = input.getInt();
+            if (maps[i] < 0 || !unique.add(maps[i])) return;
+        }
+        if (maps[0] != anchor) return;
+        metadata.put(anchor, new Metadata(columns, rows, maps));
     }
 
     private static void scheduleDecode() {
@@ -175,7 +199,7 @@ public class ScreensClient implements ClientModInitializer {
         }
     }
     private static void reset() {
-        session++; videos.clear(); videoSessions.clear(); pending.clear(); decoded.clear(); revisions.clear(); assembler.reset(); renderedScreens.clear();
+        session++; videos.clear(); videoSessions.clear(); pending.clear(); decoded.clear(); revisions.clear(); metadata.clear(); assembler.reset(); renderedScreens.clear();
         for (int id : new ArrayList<>(textures.keySet())) release(id);
         ticks = 0; level = null;
     }

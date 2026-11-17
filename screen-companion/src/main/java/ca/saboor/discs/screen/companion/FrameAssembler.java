@@ -13,12 +13,12 @@ final class FrameAssembler {
     void clear(int anchor) { assemblies.remove(anchor); }
     void reset() { assemblies.clear(); }
 
-    Frame accept(byte[] bytes) {
+    Frame accept(byte[] bytes, int[] maps, int metadataColumns, int metadataRows) {
         if (bytes.length <= 16 || bytes.length > 32764) return null;
         ByteBuffer input = ByteBuffer.wrap(bytes);
         int id = input.getInt(), number = input.getInt(), total = input.getInt(), offset = input.getInt();
         int length = input.remaining();
-        if (id < 0 || total < 41 || total > MAX_BYTES || offset < 0 || offset > total - length) return null;
+        if (id < 0 || total < 37 || total > MAX_BYTES || offset < 0 || offset > total - length) return null;
         if (offset == 0) {
             if (!assemblies.containsKey(id) && assemblies.size() >= 8) return null;
             assemblies.put(id, new Assembly(number, new byte[total], 0));
@@ -34,20 +34,16 @@ final class FrameAssembler {
         assemblies.remove(id);
         ByteBuffer body = ByteBuffer.wrap(current.bytes);
         int columns = body.getInt(), rows = body.getInt();
-        if (columns < 1 || rows < 1 || columns > 64 || rows > 64 || columns * rows > 4096) return null;
+        if (columns != metadataColumns || rows != metadataRows || columns < 1 || rows < 1
+                || columns > 64 || rows > 64 || columns * rows > 4096
+                || maps == null || maps.length != columns * rows) return null;
+        Set<Integer> unique = new HashSet<>();
+        for (int map : maps) if (map < 0 || !unique.add(map)) return null;
         if (body.remaining() < 28) return null;
         int codec = body.getInt(), width = body.getInt(), height = body.getInt(), stream = body.getInt(), frameNumber = body.getInt(), key = body.getInt(), reserved = body.getInt();
         if (codec < 0 || codec > 1 || frameNumber < 0 || key < 0 || key > 1 || reserved != 0) return null;
         if (codec == 1 && !VideoDimensions.valid(width, height)) return null;
-        int count = columns * rows;
-        if (body.remaining() <= count * 4) return null;
-        int[] maps = new int[count];
-        Set<Integer> unique = new HashSet<>();
-        for (int i = 0; i < count; i++) {
-            maps[i] = body.getInt();
-            if (maps[i] < 0 || !unique.add(maps[i])) return null;
-        }
-        if (maps[0] != id) return null;
+        if (body.remaining() == 0 || maps[0] != id) return null;
         byte[] jpeg = new byte[body.remaining()];
         body.get(jpeg);
         return new Frame(id, columns, rows, maps, jpeg, codec, width, height, stream, frameNumber, key == 1);
