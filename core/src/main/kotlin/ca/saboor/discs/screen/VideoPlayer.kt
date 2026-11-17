@@ -24,6 +24,7 @@ import kotlinx.coroutines.sync.withLock
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.event.ClickEvent
 import net.kyori.adventure.text.format.NamedTextColor
+import net.kyori.adventure.text.format.TextDecoration
 import org.bukkit.Bukkit
 import org.bukkit.World
 import org.bukkit.entity.Player
@@ -830,11 +831,24 @@ class VideoPlayer(
         for (player in players) {
             if (CompanionScreens.capable(player) || !promptedCompanionPlayers.add(player.uniqueId)) continue
             player.sendMessage(
-                Component.text("This screen is larger than the vanilla map display limit. ", NamedTextColor.YELLOW)
+                Component.text("\n=== SCREEN COMPANION RECOMMENDED ===\n", NamedTextColor.GOLD)
+                    .decorate(TextDecoration.BOLD)
+                    .append(Component.text(
+                        "This screen is larger than the vanilla map display limit. " +
+                            "You are seeing a reduced, letterboxed version.\n",
+                        NamedTextColor.YELLOW
+                    ))
+                    .append(Component.text(
+                        "Install the Fabric Screen Companion to view the complete screen at full size.\n",
+                        NamedTextColor.WHITE
+                    ))
                     .append(
-                        Component.text("Download the screen companion", NamedTextColor.AQUA)
+                        Component.text("[ DOWNLOAD SCREEN COMPANION ]", NamedTextColor.AQUA)
+                            .decorate(TextDecoration.BOLD)
+                            .decorate(TextDecoration.UNDERLINED)
                             .clickEvent(ClickEvent.openUrl(COMPANION_DOWNLOAD_URL))
                     )
+                    .append(Component.text("\n", NamedTextColor.GRAY))
             )
         }
     }
