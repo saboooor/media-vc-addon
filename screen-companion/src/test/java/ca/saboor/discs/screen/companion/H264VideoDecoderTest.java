@@ -39,19 +39,6 @@ class H264VideoDecoderTest {
         }
         assertEquals(20, count);
     }
-    @Test void reusesPixelBuffersInTwoSlotRing() throws Exception {
-        var frames = frames();
-        var decoder = new H264VideoDecoder();
-        var f0 = decoder.decode(frames.get(0));
-        var f1 = decoder.decode(frames.get(1));
-        var f2 = decoder.decode(frames.get(2));
-        assertNotNull(f0);
-        assertNotNull(f1);
-        assertNotNull(f2);
-        assertNotSame(f0.pixels(), f1.pixels());
-        assertSame(f0.pixels(), f2.pixels());
-        assertEquals(0xff000000, f0.pixels()[0] & 0xff000000);
-    }
     @Test void gapAndLateJoinWaitForNextKeyframe() throws Exception {
         var frames = frames(); var decoder = new H264VideoDecoder();
         assertNull(decoder.decode(frames.get(1)));

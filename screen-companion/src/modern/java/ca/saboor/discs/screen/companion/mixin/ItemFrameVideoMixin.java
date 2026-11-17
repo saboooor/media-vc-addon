@@ -23,7 +23,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(ItemFrameRenderer.class)
 public abstract class ItemFrameVideoMixin {
     @Shadow @Final private MapRenderer mapRenderer;
-    private final Matrix4f vcb$rotation = new Matrix4f();
 
     @Inject(method = "extractRenderState(Lnet/minecraft/world/entity/decoration/ItemFrame;Lnet/minecraft/client/renderer/entity/state/ItemFrameRenderState;F)V",
             at = @At("TAIL"))
@@ -56,14 +55,14 @@ public abstract class ItemFrameVideoMixin {
         pose.translate(facing.getStepX() * 0.46875, facing.getStepY() * 0.46875,
                 facing.getStepZ() * 0.46875);
         if (facing.getAxis().isHorizontal()) {
-            pose.mulPose(vcb$rotation.rotation(Axis.YP.rotationDegrees(180.0F - facing.toYRot())));
+            pose.mulPose(new Matrix4f().rotation(Axis.YP.rotationDegrees(180.0F - facing.toYRot())));
         } else {
-            pose.mulPose(vcb$rotation.rotation(Axis.XP.rotationDegrees(-90.0F * facing.getAxisDirection().getStep())));
-            pose.mulPose(vcb$rotation.rotation(Axis.YP.rotationDegrees(180.0F)));
+            pose.mulPose(new Matrix4f().rotation(Axis.XP.rotationDegrees(-90.0F * facing.getAxisDirection().getStep())));
+            pose.mulPose(new Matrix4f().rotation(Axis.YP.rotationDegrees(180.0F)));
         }
         // Orient the complete display from the server grid, independently of item rotation.
         pose.translate(0.0F, 0.0F, 0.5F);
-        pose.mulPose(vcb$rotation.rotation(Axis.ZP.rotationDegrees(180.0F)));
+        pose.mulPose(new Matrix4f().rotation(Axis.ZP.rotationDegrees(180.0F)));
         if (facing == Direction.DOWN) pose.scale(1.0F, -1.0F, 1.0F);
         pose.translate((surface.columns() - 1) * 0.5F - col, (surface.rows() - 1) * 0.5F - row, 0.0F);
         // MapRenderer's quad is 128 units wide: stretch that single quad over the screen.

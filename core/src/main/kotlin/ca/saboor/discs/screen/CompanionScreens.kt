@@ -38,39 +38,25 @@ object CompanionScreens : Listener, PluginMessageListener {
     fun frame(screen: Screen, jpeg: ByteArray, players: List<Player>, codec: Int = 0, width: Int = 0, height: Int = 0, stream: Int = 0, frame: Int = 0, keyframe: Boolean = true) {
         require(jpeg.size <= 4 * 1024 * 1024)
         val ids = screen.flatMapIds
-        require(ids.size == screen.columns * screen.rows && ids.size in 1..4096)
+        require(ids.size == screen.columns * screen.rows && ids.size in 1..256)
         val viewers = players.filter(::capable)
         if (viewers.isEmpty()) return
         val anchor = ids.first()
         maps.add(anchor)
-        val totalSize = 36 + ids.size * 4 + jpeg.size
-        val number = sequence.incrementAndGet()
-        val playerManager = PacketEvents.getAPI().playerManager
-        // Single-fragment fast path avoids allocating and copying an intermediate payload buffer.
-        if (totalSize <= 32748) {
-            val chunk = ByteBuffer.allocate(16 + totalSize)
-                .putInt(anchor).putInt(number).putInt(totalSize).putInt(0)
-                .putInt(screen.columns).putInt(screen.rows)
-                .putInt(codec).putInt(width).putInt(height).putInt(stream).putInt(frame).putInt(if (keyframe) 1 else 0).putInt(0)
-            ids.forEach { chunk.putInt(it) }
-            chunk.put(jpeg)
-            val packet = WrapperPlayServerPluginMessage(FRAME, chunk.array())
-            viewers.forEach { playerManager.sendPacketSilently(it, packet) }
-            return
-        }
         // One JPEG for the entire display. Chunks are transport fragments, never render tiles.
-        val body = ByteBuffer.allocate(totalSize)
+        val body = ByteBuffer.allocate(36 + ids.size * 4 + jpeg.size)
             .putInt(screen.columns).putInt(screen.rows)
             .putInt(codec).putInt(width).putInt(height).putInt(stream).putInt(frame).putInt(if (keyframe) 1 else 0).putInt(0)
         ids.forEach { body.putInt(it) }
         body.put(jpeg)
         val bytes = body.array()
+        val number = sequence.incrementAndGet()
         for (offset in bytes.indices step 32748) {
             val length = minOf(32748, bytes.size - offset)
             val chunk = ByteBuffer.allocate(16 + length).putInt(anchor).putInt(number)
                 .putInt(bytes.size).putInt(offset).put(bytes, offset, length).array()
             val packet = WrapperPlayServerPluginMessage(FRAME, chunk)
-            viewers.forEach { playerManager.sendPacketSilently(it, packet) }
+            viewers.forEach { PacketEvents.getAPI().playerManager.sendPacketSilently(it, packet) }
         }
     }
     fun clear(mapId: Int) {

@@ -2,6 +2,7 @@ package ca.saboor.discs.screen.companion.mixin;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
+import org.joml.Matrix4f;
 import ca.saboor.discs.screen.companion.ScreensClient;
 import net.minecraft.client.renderer.MapRenderer;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -54,14 +55,14 @@ public abstract class ItemFrameVideoMixin {
         pose.translate(facing.getStepX() * 0.46875, facing.getStepY() * 0.46875,
                 facing.getStepZ() * 0.46875);
         if (facing.getAxis().isHorizontal()) {
-            pose.mulPose(Axis.YP.rotationDegrees(180.0F - facing.toYRot()));
+            pose.mulPose(new Matrix4f().rotation(Axis.YP.rotationDegrees(180.0F - facing.toYRot())));
         } else {
-            pose.mulPose(Axis.XP.rotationDegrees(-90.0F * facing.getAxisDirection().getStep()));
-            pose.mulPose(Axis.YP.rotationDegrees(180.0F));
+            pose.mulPose(new Matrix4f().rotation(Axis.XP.rotationDegrees(-90.0F * facing.getAxisDirection().getStep())));
+            pose.mulPose(new Matrix4f().rotation(Axis.YP.rotationDegrees(180.0F)));
         }
         // Orient the complete display from the server grid, independently of item rotation.
         pose.translate(0.0F, 0.0F, 0.5F);
-        pose.mulPose(Axis.ZP.rotationDegrees(180.0F));
+        pose.mulPose(new Matrix4f().rotation(Axis.ZP.rotationDegrees(180.0F)));
         if (facing == Direction.DOWN) pose.scale(1.0F, -1.0F, 1.0F);
         pose.translate((surface.columns() - 1) * 0.5F - col, (surface.rows() - 1) * 0.5F - row, 0.0F);
         // MapRenderer's quad is 128 units wide: stretch that single quad over the screen.

@@ -8,33 +8,21 @@ import kotlin.concurrent.thread
 
 /** Splits Annex B access units at AUD boundaries, independent of pipe read boundaries. */
 internal class H264AccessUnits(private val emit: (ByteArray, Boolean) -> Unit) {
-    private var buf = ByteArray(16384)
-    private var size = 0
+    private val bytes = ByteArrayOutputStream()
     private var zeros = 0
     private var header = false
     private var prefix = 0
     private var idr = false
-
-    private fun append(b: Int) {
-        if (size == buf.size) buf = buf.copyOf(buf.size * 2)
-        buf[size++] = b.toByte()
-    }
-
-    fun accept(buffer: ByteArray, offset: Int = 0, length: Int = buffer.size - offset) {
-        val end = offset + length
-        for (i in offset until end) accept(buffer[i].toInt())
-    }
-
     fun accept(value: Int) {
         val b = value and 255
-        append(b)
-        require(size <= 4 * 1024 * 1024 + 5) { "Oversized H.264 access unit" }
+        bytes.write(b)
+        require(bytes.size() <= 4 * 1024 * 1024 + 5) { "Oversized H.264 access unit" }
         if (header) {
             if (b and 31 == 9) {
-                val end = size - prefix - 1
-                if (end > 0) emit(buf.copyOf(end), idr)
-                buf[0] = 0; buf[1] = 0; buf[2] = 0; buf[3] = 1; buf[4] = b.toByte()
-                size = 5
+                val complete = bytes.toByteArray()
+                val end = complete.size - prefix - 1
+                if (end > 0) emit(complete.copyOf(end), idr)
+                bytes.reset(); bytes.write(byteArrayOf(0, 0, 0, 1, b.toByte()))
                 idr = false
             } else if (b and 31 == 5) idr = true
             header = false
@@ -42,11 +30,7 @@ internal class H264AccessUnits(private val emit: (ByteArray, Boolean) -> Unit) {
         if (b == 1 && zeros >= 2) { header = true; prefix = if (zeros >= 3) 4 else 3 }
         zeros = if (b == 0) zeros + 1 else 0
     }
-
-    fun finish() {
-        if (size > 0) emit(buf.copyOf(size), idr)
-        size = 0
-    }
+    fun finish() { if (bytes.size() > 0) emit(bytes.toByteArray(), idr); bytes.reset() }
 }
 
 /** Native low-latency encoder with three reusable input buffers and one pending raw frame. */
@@ -101,7 +85,7 @@ internal class H264StreamEncoder(
                     while (!closed) {
                         val count = input.read(buffer)
                         if (count < 0) break
-                        parser.accept(buffer, 0, count)
+                        for (i in 0 until count) parser.accept(buffer[i].toInt())
                     }
                 }
             } catch (_: Exception) { if (!closed) failed = true }
