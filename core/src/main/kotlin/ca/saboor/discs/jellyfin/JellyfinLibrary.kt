@@ -10,7 +10,8 @@ import java.util.UUID
 class JellyfinLibrary(private val file: Path,
     private val persist: (Path, String) -> Unit = ::writePrivateFile) {
     class Connection(val id: UUID, val owner: UUID, val session: JellyfinClient.Session,
-        private val directPlay: Boolean = false) {
+        private val directPlay: Boolean = false,
+        val videoMaxHeight: Int? = null) {
         // Missing fields in existing Gson stores default to false, retaining transcoding.
         val transcodingEnabled: Boolean get() = !directPlay
         override fun toString() = "Jellyfin connection $id"
@@ -38,13 +39,19 @@ class JellyfinLibrary(private val file: Path,
     @Synchronized fun connect(owner: UUID, session: JellyfinClient.Session): Connection {
         val id = UUID.nameUUIDFromBytes("$owner|${session.baseUrl}|${session.userId}".toByteArray(Charsets.UTF_8))
         val old = snapshot.connections[owner]?.takeIf { it.id == id }
-        val connection = Connection(id, owner, session, old?.transcodingEnabled == false)
+        val connection = Connection(id, owner, session, old?.transcodingEnabled == false, old?.videoMaxHeight)
         commit(Snapshot(snapshot.connections + (owner to connection), snapshot.grants))
         return connection
     }
     @Synchronized fun setTranscoding(owner: UUID, enabled: Boolean? = null): Connection {
         val old = snapshot.connections[owner] ?: throw JellyfinException("Connect to Jellyfin first with /disc jellyfin connect.")
-        val next = Connection(old.id, old.owner, old.session, !(enabled ?: !old.transcodingEnabled))
+        val next = Connection(old.id, old.owner, old.session, !(enabled ?: !old.transcodingEnabled), old.videoMaxHeight)
+        commit(Snapshot(snapshot.connections + (owner to next), snapshot.grants))
+        return next
+    }
+    @Synchronized fun setVideoMaxHeight(owner: UUID, maxHeight: Int?): Connection {
+        val old = snapshot.connections[owner] ?: throw JellyfinException("Connect to Jellyfin first with /disc jellyfin connect.")
+        val next = Connection(old.id, old.owner, old.session, !old.transcodingEnabled, maxHeight)
         commit(Snapshot(snapshot.connections + (owner to next), snapshot.grants))
         return next
     }

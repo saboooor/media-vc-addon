@@ -71,8 +71,9 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
     override fun suggest(source: CommandSender, arguments: Array<out String>): List<String> {
         if (!checkCanExecute(source)) return emptyList()
         val choices = when {
-            arguments.size == 2 -> listOf("connect", "browse", "search", "disconnect", "cancel", "transcode")
+            arguments.size == 2 -> listOf("connect", "browse", "search", "disconnect", "cancel", "transcode", "cap")
             arguments.size == 3 && arguments[1].equals("transcode", true) -> listOf("on", "off", "toggle", "status")
+            arguments.size == 3 && arguments[1].equals("cap", true) -> listOf("auto", "480p", "720p", "off", "status")
             else -> return emptyList()
         }
         return choices.filter { it.startsWith(arguments.last(), true) }
@@ -95,6 +96,41 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
                     suspendSyncFor(player, voiceServer, plugin) {
                         message(player, "Jellyfin transcoding is ${if (connection.transcodingEnabled) "ON" else "OFF (original media)"} for your profile." +
                             if (mode == "status") "" else " Restart playback to apply it to your discs.")
+                    }
+                }
+            }
+            "cap" -> {
+                val mode = arguments.getOrNull(2)?.lowercase() ?: "status"
+                val parsedHeight = when (mode) {
+                    "auto" -> null
+                    "480p", "480" -> 480
+                    "720p", "720" -> 720
+                    "off", "original", "none" -> 0
+                    "status" -> -1
+                    else -> {
+                        message(player, "Usage: /disc jellyfin cap [auto|480p|720p|off|status]", true)
+                        return
+                    }
+                }
+                if (arguments.size > 3) {
+                    message(player, "Usage: /disc jellyfin cap [auto|480p|720p|off|status]", true)
+                    return
+                }
+                run(player) {
+                    val connection = if (parsedHeight == -1) {
+                        library.connection(player.uniqueId)
+                            ?: throw JellyfinException("Connect to Jellyfin first with /disc jellyfin connect.")
+                    } else {
+                        library.setVideoMaxHeight(player.uniqueId, parsedHeight)
+                    }
+                    val desc = when (connection.videoMaxHeight) {
+                        null -> "AUTO (map size when transcode is ON)"
+                        0 -> "OFF (original quality)"
+                        else -> "${connection.videoMaxHeight}p"
+                    }
+                    suspendSyncFor(player, voiceServer, plugin) {
+                        message(player, "Jellyfin capped video stream is $desc." +
+                            if (mode == "status") "" else " Restart playback to apply it.")
                     }
                 }
             }
@@ -155,7 +191,7 @@ class JellyfinCommand(private val library: JellyfinLibrary) : SubCommand(), List
                     }
                 } else browse(player, 0, "")
             }
-            else -> message(player, "Usage: /disc jellyfin [connect [url]|browse|search <text>|transcode [on|off|toggle|status]|disconnect|cancel]", true)
+            else -> message(player, "Usage: /disc jellyfin [connect [url]|browse|search <text>|transcode [on|off|toggle|status]|cap [auto|480p|720p|off|status]|disconnect|cancel]", true)
         }
     }
 

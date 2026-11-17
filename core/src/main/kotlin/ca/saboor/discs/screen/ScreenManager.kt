@@ -414,10 +414,25 @@ class ScreenManager : PluginKoinComponent {
                     }
                 }
                 val jfClient = if (jellyfin != null) JellyfinClient() else null
+                val jfVideoMaxHeight: Int? = if (jellyfin != null) {
+                    when (val configured = jellyfin.first.videoMaxHeight) {
+                        0 -> null
+                        null -> if (!jellyfin.first.transcodingEnabled) null
+                        else if (config.screen.companionRgb && org.bukkit.Bukkit.getOnlinePlayers().any(CompanionScreens::capable)) {
+                            when (config.screen.companionResolution.lowercase()) {
+                                "source" -> null
+                                "1080p" -> 1080
+                                "720p" -> 720
+                                else -> (screen.rows * 128).coerceIn(240, 1080)
+                            }
+                        } else (screen.rows * 128).coerceIn(240, 1080)
+                        else -> configured
+                    }
+                } else null
                 val initialScreenFps = screen.effectiveVideoFps(maxVideoFps)
                 val resolvedUrl = if (externalYoutube != null) externalVideo?.url ?: fallbackImg.orEmpty()
                 else if (jellyfin != null && jfClient != null) {
-                    jfClient.videoStreamUrl(jellyfin.first.session, jellyfin.second.mediaId)
+                    jfClient.videoStreamUrl(jellyfin.first.session, jellyfin.second.mediaId, jfVideoMaxHeight, playbackPositionMs?.invoke() ?: 0L)
                 } else VideoSourceResolver.resolveVideoUrl(
                     identifier = identifier,
                     audioPlayerManager = audioPlayerManager,
@@ -461,6 +476,9 @@ class ScreenManager : PluginKoinComponent {
                     ffmpegPath = resolvedFfmpegPath,
                     fallbackImageUrl = fallbackImg,
                     coroutineScope = scope,
+                    sourceUrlForSeek = if (jellyfin != null && jfClient != null && jfVideoMaxHeight != null) {
+                        { posMs -> jfClient.videoStreamUrl(jellyfin.first.session, jellyfin.second.mediaId, jfVideoMaxHeight, posMs) }
+                    } else null,
                     onCompletion = {
                         synchronized(playbackLock) {
                             if (activePlayers.remove(lower, videoPlayer)) subtitleStates.remove(lower)?.overlay?.stop()

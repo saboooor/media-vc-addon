@@ -10,16 +10,11 @@ internal object VideoAudioSync {
     private val pts = Regex("\\bpts_time:([^\\s]+)")
 }
 
-/** Drop obsolete queued frames without imposing a separate low-FPS catch-up mode. */
+/** Skip obsolete queued frames whenever audio is ahead and a newer frame is available. */
 internal class VideoFrameDelivery(private val refreshNanos: Long = 40_000_000L) {
-    private var lastPresented: Long? = null
-
     fun shouldDrop(videoMs: Long, audioMs: Long, nowNanos: Long, hasQueuedFrames: Boolean = true): Boolean {
-        val previous = lastPresented
-        if (VideoAudioSync.stale(videoMs, audioMs) && hasQueuedFrames && previous != null &&
-            nowNanos - previous < refreshNanos) return true
+        if (VideoAudioSync.stale(videoMs, audioMs) && hasQueuedFrames) return true
         // If there is no replacement queued, present this frame rather than starving the screen.
-        lastPresented = nowNanos
         return false
     }
 }

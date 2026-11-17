@@ -606,10 +606,20 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
                 }
         }
 
+        val resolveFfmpeg: () -> String = {
+            kotlinx.coroutines.runBlocking {
+                ca.saboor.discs.screen.FFmpegResolver.resolve(
+                    plugin.dataFolder,
+                    config.screen.ffmpegPath,
+                    config.screen.autoInstallFfmpeg,
+                ) ?: config.screen.ffmpegPath
+            }
+        }
         lavaPlayerManager.registerSourceManagerCatching("soundcloud") {
             ca.saboor.discs.audio.SoundCloudFallbackAudioSourceManager(
                 ytdlpExecutable = { config.youtubeSource.ytdlpPath.ifBlank { config.screen.ytdlpPath } },
                 ytdlpConfig = { config.youtubeSource.ytdlpConfig },
+                ffmpegExecutable = resolveFfmpeg,
             )
         }
         lavaPlayerManager.registerSourceManagerCatching("bandcamp") { BandcampAudioSourceManager() }
@@ -617,12 +627,7 @@ class PlasmoAudioPlayerManager : PluginKoinComponent {
         lavaPlayerManager.registerSourceManagerCatching("twitch") { TwitchStreamAudioSourceManager() }
         lavaPlayerManager.registerSourceManagerCatching("beam.pro") { BeamAudioSourceManager() }
         lavaPlayerManager.registerSourceManagerCatching("getyarn.io") { GetyarnAudioSourceManager() }
-        lavaPlayerManager.registerSourceManagerCatching("jellyfin") { JellyfinAudioSourceManager(jellyfinLibrary) {
-            kotlinx.coroutines.runBlocking {
-                ca.saboor.discs.screen.FFmpegResolver.resolve(plugin.dataFolder, config.screen.ffmpegPath,
-                    config.screen.autoInstallFfmpeg) ?: config.screen.ffmpegPath
-            }
-        } }
+        lavaPlayerManager.registerSourceManagerCatching("jellyfin") { JellyfinAudioSourceManager(jellyfinLibrary, resolveFfmpeg) }
         lavaPlayerManager.registerSourceManagerCatching("http") { CustomHttpAudioSourceManager() }
 
         if (config.localSource.enabled) {

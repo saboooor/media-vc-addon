@@ -81,8 +81,28 @@ class JellyfinClient(private val http: HttpClient = HttpClient.newBuilder()
                 // Jellyfin keys progressive transcode files by session, not startTimeTicks.
                 "&playSessionId=${java.util.UUID.randomUUID()}"
 
-    fun videoStreamUrl(session: Session, itemId: String): String =
-        session.baseUrl + "Videos/${mediaId(itemId)}/stream?static=true"
+    fun videoStreamUrl(session: Session, itemId: String, maxHeight: Int? = null, startPositionMs: Long = 0): String =
+        if (maxHeight != null && maxHeight > 0) cappedVideoStreamUrl(session, itemId, maxHeight, startPositionMs)
+        else session.baseUrl + "Videos/${mediaId(itemId)}/stream?static=true"
+
+    /** Requests a lightweight resolution- and bitrate-capped H.264 stream from Jellyfin. */
+    fun cappedVideoStreamUrl(session: Session, itemId: String, maxHeight: Int, startPositionMs: Long = 0): String {
+        val cappedHeight = maxHeight.coerceIn(240, 2160)
+        val cappedWidth = (cappedHeight * 16 / 9).coerceAtLeast(426)
+        val bitrate = when {
+            cappedHeight <= 256 -> 600_000
+            cappedHeight <= 384 -> 1_000_000
+            cappedHeight <= 480 -> 1_500_000
+            cappedHeight <= 720 -> 3_000_000
+            else -> 5_000_000
+        }
+        return session.baseUrl + "Videos/${mediaId(itemId)}/stream.mkv?static=false" +
+            "&videoCodec=h264&maxWidth=$cappedWidth&maxHeight=$cappedHeight&videoBitRate=$bitrate" +
+            "&audioCodec=aac&audioBitRate=64000&audioChannels=2&subtitleStreamIndex=-1" +
+            "&copyTimestamps=true" +
+            "&startTimeTicks=${startPositionMs.coerceIn(0, Long.MAX_VALUE / 10_000) * 10_000}" +
+            "&playSessionId=${UUID.randomUUID()}"
+    }
 
     data class AudioTrack(val index: Int, val displayTitle: String, val language: String,
                           val isDefault: Boolean, val mediaSourceId: String)

@@ -46,7 +46,8 @@ class VideoPlayer(
     val playbackPositionMs: (() -> Long?)? = null,
     private val sourceHeaders: Map<String, String> = emptyMap(),
     private val durationMs: Long = 0L,
-    private val streamUrlProvider: ((width: Int, height: Int, fps: Int, startPositionMs: Long) -> String)? = null
+    private val streamUrlProvider: ((width: Int, height: Int, fps: Int, startPositionMs: Long) -> String)? = null,
+    private val sourceUrlForSeek: ((Long) -> String)? = null,
 ) {
     @Volatile var hasRenderedFrame: Boolean = false
         private set
@@ -237,12 +238,14 @@ class VideoPlayer(
         val activeVideoSize = if (usingHighResolution) videoSize
             else CompanionResolution.Size(totalWidth, totalHeight)
 
+        val effectiveStartMs = maxOf(startPositionMs, playbackPositionMs?.invoke() ?: 0L)
+        val activeSourceUrl = sourceUrlForSeek?.invoke(effectiveStartMs) ?: sourceUrl
         // MP4 metadata can live after the media data, including on initial playback.
         // Keep every network input seekable so FFmpeg can probe the end and return
         // to the first packet without buffering the entire original-quality file.
         val seekProxy = if (isNetworkStream) VideoSeekProxy(
-            sourceUrl,
-            chooseUserAgent(sourceUrl),
+            activeSourceUrl,
+            chooseUserAgent(activeSourceUrl),
             sourceAuthorization,
             sourceHeaders
         ) else null
@@ -251,23 +254,27 @@ class VideoPlayer(
         val colorInfoReady = CompletableDeferred<VideoColorInfo>()
         var toneMapper: VideoToneMapper? = null
 
-        val effectiveStartMs = maxOf(startPositionMs, playbackPositionMs?.invoke() ?: 0L)
         val command = mutableListOf<String>()
         command.add(ffmpegPath)
         command.add("-hide_banner")
         command.add("-nostats")
         command.addAll(listOf("-progress", "pipe:2"))
-        if (effectiveStartMs > 0) {
+        if (sourceUrlForSeek == null && effectiveStartMs > 0) {
             val sec = effectiveStartMs / 1000.0
             command.add("-ss")
             command.add(String.format(Locale.US, "%.3f", sec))
         }
-        if (seekProxy != null) command.addAll(proxiedInputOptions())
+        if (seekProxy != null) {
+            command.addAll(proxiedInputOptions())
+            if (activeSourceUrl.contains(".m3u8", ignoreCase = true)) {
+                command.addAll(listOf("-allowed_extensions", "ALL"))
+            }
+        }
         // Keep normal probing and decoder filtering for original Jellyfin files. Bounded
         // a two-frame handoff keeps reads separate from presentation without a deep queue.
         command.addAll(decoderInputOptions())
         command.add("-i")
-        command.add(seekProxy?.url ?: sourceUrl)
+        command.add(seekProxy?.url ?: activeSourceUrl)
         command.addAll(listOf("-map", "0:v:0", "-an", "-sn", "-dn"))
         command.addAll(listOf("-sws_flags", "fast_bilinear"))
         command.add("-vf")
@@ -449,7 +456,7 @@ class VideoPlayer(
                             val rates = String.format(Locale.US, "decoded=%.1f FPS, delivered=%.1f FPS",
                                 decodedFrames.get() / elapsed, framesDelivered / elapsed)
                             logger.warn("Video on screen '${screen.name}' is ${lagMs}ms behind audio; " +
-                                "presenting late frames while catching up ($rates)")
+                                "skipping stale queued frames ($rates)")
                         }
                     }
                     hasRenderedFrame = true
@@ -869,7 +876,7 @@ class VideoPlayer(
 
         internal fun proxiedInputOptions(): List<String> = listOf(
             // Buffer compressed packets independently of timestamp-paced frame delivery.
-            "-thread_queue_size", "256",
+            "-thread_queue_size", "1024",
             // Skip nearby MKV data by reading ahead rather than opening another HTTP range.
             "-short_seek_size", "1048576",
             "-reconnect", "1",
@@ -892,11 +899,9 @@ class VideoPlayer(
         internal fun videoFilter(fps: Int, width: Int, height: Int, preventUpscale: Boolean = false): String {
             val scale = if (preventUpscale) "scale='min(iw,$width)':'min(ih,$height)':force_original_aspect_ratio=decrease,"
                 else "scale=$width:$height:force_original_aspect_ratio=decrease,"
-            val base = "fps='if(gt(source_fps,0),min(source_fps,$fps),$fps)'," +
-                scale +
-                (if (preventUpscale) "pad=w='max(iw,ceil(ih*$width/$height))':h='max(ih,ceil(iw*$height/$width))':x=(ow-iw)/2:y=(oh-ih)/2:color=black"
-                else "pad=$width:$height:(ow-iw)/2:(oh-ih)/2:black")
-            return "$base,realtime"
+            val pad = if (preventUpscale) "pad=w='max(iw,ceil(ih*$width/$height))':h='max(ih,ceil(iw*$height/$width))':x=(ow-iw)/2:y=(oh-ih)/2:color=black"
+                else "pad=$width:$height:(ow-iw)/2:(oh-ih)/2:black"
+            return "fps='if(gt(source_fps,0),min(source_fps,$fps),$fps)',$scale$pad,realtime"
         }
 
         internal fun streamEndedEarly(durationMs: Long, positionMs: Long): Boolean =

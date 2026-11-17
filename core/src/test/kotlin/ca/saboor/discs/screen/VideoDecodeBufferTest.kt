@@ -6,8 +6,10 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 class VideoDecodeBufferTest {
-    @Test fun `two buffers overlap reading and presentation without building a deep queue`() = runBlocking {
-        val buffer = VideoDecodeBuffer(6, 24)
+    @Test fun `jitter buffer scales within budget and bounds capacity`() = runBlocking {
+        assertEquals(4, VideoDecodeBuffer(6, 24).capacity)
+        assertEquals(12, VideoDecodeBuffer(6).capacity)
+        val buffer = VideoDecodeBuffer(6, 12)
         assertEquals(2, buffer.capacity)
         var decoded = 0
         val producer = launch {

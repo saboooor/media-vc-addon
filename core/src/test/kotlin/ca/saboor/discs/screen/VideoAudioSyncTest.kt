@@ -15,7 +15,7 @@ class VideoAudioSyncTest {
         assertFalse(VideoAudioSync.stale(1500, 1000))
         assertFalse(VideoAudioSync.stale(1000, 1100))
     }
-    @Test fun `sustained lag retains normal refresh instead of switching to slideshow catch up`() {
+    @Test fun `stale frames are always skipped when newer frames are queued`() {
         val delivery = VideoFrameDelivery(refreshNanos = 1_000_000_000L / 24)
         var delivered = 0
         repeat(240) { frame ->
@@ -23,17 +23,16 @@ class VideoAudioSyncTest {
             val now = frame * 1_000_000_000L / 24
             if (!delivery.shouldDrop(videoMs, videoMs + 5_000, now, hasQueuedFrames = true)) delivered++
         }
-        assertEquals(240, delivered, "A steady 24 FPS decoder must not be throttled because timestamps are late")
+        assertEquals(0, delivered, "All stale frames must be skipped when a newer frame is queued")
     }
 
-    @Test fun `catch up skips obsolete burst frames only when a replacement is queued`() {
+    @Test fun `skips stale frames whenever a replacement is queued and presents otherwise`() {
         val delivery = VideoFrameDelivery()
-        assertFalse(delivery.shouldDrop(0, 5000, 0))
+        assertTrue(delivery.shouldDrop(0, 5000, 0, hasQueuedFrames = true))
         assertTrue(delivery.shouldDrop(40, 5040, 1_000_000, hasQueuedFrames = true))
-        assertTrue(delivery.shouldDrop(80, 5080, 2_000_000, hasQueuedFrames = true))
-        assertFalse(delivery.shouldDrop(120, 5120, 3_000_000, hasQueuedFrames = false))
-        assertFalse(delivery.shouldDrop(160, 5160, 43_000_000, hasQueuedFrames = true))
-        assertFalse(delivery.shouldDrop(5200, 5200, 44_000_000, hasQueuedFrames = true))
+        assertTrue(delivery.shouldDrop(160, 5160, 43_000_000, hasQueuedFrames = true))
+        assertFalse(delivery.shouldDrop(120, 5120, 44_000_000, hasQueuedFrames = false))
+        assertFalse(delivery.shouldDrop(5200, 5200, 45_000_000, hasQueuedFrames = true))
     }
 
     @Test fun `frame timing uses presentation timestamps including fractional and slow sources`() {

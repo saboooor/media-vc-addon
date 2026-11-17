@@ -16,8 +16,8 @@ internal class VideoDecodeBuffer(frameBytes: Int, budgetBytes: Int = 96 * 1024 *
 
     init {
         require(frameBytes > 0 && budgetBytes >= frameBytes * 2L) { "Decode buffer must fit two frames" }
-        // One frame can be presented while the other is read; do not build a decode-ahead queue.
-        capacity = 2
+        // Keep a modest jitter buffer within the memory budget without building an unbounded queue.
+        capacity = (budgetBytes / frameBytes).coerceIn(2, 12)
         free = Channel(capacity)
         frames = Channel(capacity)
         repeat(capacity) { free.trySend(ByteArray(frameBytes)).getOrThrow() }
